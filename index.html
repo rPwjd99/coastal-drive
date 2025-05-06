@@ -1,121 +1,73 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <title>바다따라 - 해안도로 감성 길찾기</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-  <!-- ✅ OpenLayers 스타일 + 스크립트 -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@latest/ol.css" />
-  <script src="https://cdn.jsdelivr.net/npm/ol@latest/ol.js"></script>
-
-  <style>
-    body { font-family: sans-serif; margin: 0; padding: 0; }
-    #inputs {
-      padding: 1rem;
-      background: #f0f0f0;
-    }
-    input {
-      margin: 0.2rem; padding: 0.5rem; width: 250px;
-    }
-    button {
-      padding: 0.5rem 1rem;
-    }
-    #map {
-      width: 100%;
-      height: 90vh;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <title>해안도로 경로</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v7.3.0/ol.css">
+    <script src="https://cdn.jsdelivr.net/npm/ol@v7.3.0/dist/ol.js"></script>
+    <style>
+        html, body {
+            margin: 0;
+            height: 100%;
+        }
+        #map {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
 </head>
 <body>
-  <div id="inputs">
-    <input type="text" id="start" placeholder="출발지 주소 (예: 세종시청)" />
-    <input type="text" id="end" placeholder="도착지 주소 (예: 속초시청)" />
-    <button onclick="searchRoute()">경로 검색</button>
-  </div>
-  <div id="map"></div>
+<div id="map"></div>
+<script>
+    const route = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    [126.978363, 37.567025],
+                    [128.591964316, 38.207012683],
+                    [129.119683222, 37.566731821]
+                ]
+            },
+            "properties": {}
+        }]
+    };
 
-  <script>
     const map = new ol.Map({
-      target: 'map',
-      layers: [
-        new ol.layer.Tile({
-          source: new ol.source.OSM()
+        target: 'map',
+        layers: [
+            new ol.layer.Tile({
+                source: new ol.source.OSM()
+            }),
+            new ol.layer.Vector({
+                source: new ol.source.Vector({
+                    features: new ol.format.GeoJSON().readFeatures(route, {
+                        featureProjection: 'EPSG:3857'
+                    })
+                }),
+                style: new ol.style.Style({
+                    stroke: new ol.style.Stroke({
+                        color: '#0077cc',
+                        width: 4
+                    })
+                })
+            })
+        ],
+        view: new ol.View({
+            center: ol.proj.fromLonLat([127.5, 36.5]),
+            zoom: 7
         })
-      ],
-      view: new ol.View({
-        center: ol.proj.fromLonLat([127.7669, 35.9078]), // 대한민국 중심
-        zoom: 7
-      })
     });
 
-    const routeLayer = new ol.layer.Vector({
-      source: new ol.source.Vector(),
-      style: new ol.style.Style({
-        stroke: new ol.style.Stroke({
-          color: 'blue',
-          width: 4
+    // 전체 경로에 맞게 보기 조정
+    const vectorSource = new ol.source.Vector({
+        features: new ol.format.GeoJSON().readFeatures(route, {
+            featureProjection: 'EPSG:3857'
         })
-      })
     });
-    map.addLayer(routeLayer);
-
-    async function geocode(address) {
-      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`;
-      const res = await fetch(url);
-      const data = await res.json();
-      if (data.length === 0) throw new Error("주소 검색 실패");
-      return [parseFloat(data[0].lon), parseFloat(data[0].lat)];
-    }
-
-    async function getRoute(startCoords, endCoords) {
-      const url = 'https://api.openrouteservice.org/v2/directions/driving-car/geojson';
-      const body = {
-        coordinates: [startCoords, endCoords]
-      };
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Authorization': '5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(body)
-      });
-      const data = await res.json();
-      return data;
-    }
-
-    async function searchRoute() {
-      try {
-        const startAddress = document.getElementById('start').value;
-        const endAddress = document.getElementById('end').value;
-
-        if (!startAddress || !endAddress) {
-          alert("출발지와 도착지를 모두 입력하세요.");
-          return;
-        }
-
-        const start = await geocode(startAddress);
-        const end = await geocode(endAddress);
-
-        const route = await getRoute(start, end);
-
-        const format = new ol.format.GeoJSON();
-        const routeFeature = format.readFeature(route, {
-          dataProjection: 'EPSG:4326',
-          featureProjection: 'EPSG:3857'
-        });
-
-        routeLayer.getSource().clear();
-        routeLayer.getSource().addFeature(routeFeature);
-
-        map.getView().fit(routeLayer.getSource().getExtent(), { padding: [50, 50, 50, 50] });
-
-      } catch (err) {
-        alert("경로를 찾을 수 없습니다. 주소를 다시 확인해 주세요.");
-        console.error(err);
-      }
-    }
-  </script>
+    map.getView().fit(vectorSource.getExtent(), { padding: [50, 50, 50, 50] });
+</script>
 </body>
 </html>
