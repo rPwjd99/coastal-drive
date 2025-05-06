@@ -13,35 +13,14 @@
     input { padding: 8px; width: 240px; }
     button { padding: 8px 16px; background: white; border: none; cursor: pointer; }
     #map { width: 100%; height: calc(100vh - 100px); }
-    .autocomplete-suggestions {
-      position: absolute;
-      background: white;
-      border: 1px solid #ccc;
-      z-index: 10;
-      max-height: 150px;
-      overflow-y: auto;
-    }
-    .autocomplete-suggestions div {
-      padding: 6px;
-      cursor: pointer;
-    }
-    .autocomplete-suggestions div:hover {
-      background-color: #efefef;
-    }
   </style>
 </head>
 <body>
   <div id="top-bar">
     <div><b>🚗 바다따라 - 해안도로 감성 길찾기</b></div>
     <div id="inputs">
-      <div style="position:relative;">
-        <input id="start" type="text" placeholder="출발지 검색">
-        <div id="suggest-start" class="autocomplete-suggestions"></div>
-      </div>
-      <div style="position:relative;">
-        <input id="end" type="text" placeholder="도착지 검색">
-        <div id="suggest-end" class="autocomplete-suggestions"></div>
-      </div>
+      <input id="start" type="text" placeholder="출발지 주소 또는 장소명">
+      <input id="end" type="text" placeholder="도착지 주소 또는 장소명">
       <button onclick="searchRoute()">경로 검색</button>
     </div>
   </div>
@@ -58,44 +37,31 @@
       if (routeLayer) map.removeLayer(routeLayer);
     }
 
-    async function autocomplete(inputId, suggestId) {
-      const input = document.getElementById(inputId);
-      const suggestBox = document.getElementById(suggestId);
-      input.addEventListener("input", async () => {
-        const text = input.value.trim();
-        if (text.length < 2) return suggestBox.innerHTML = "";
-        const key = "FA346133-805B-3BB4-B8C2-372973E3A4ED";
-        const url = `https://api.vworld.kr/req/search?service=search&request=autocomplete&query=${encodeURIComponent(text)}&key=${key}`;
-        const res = await fetch(url);
-        const json = await res.json();
-        const items = json.response.result.items;
-        suggestBox.innerHTML = items.map(i => `<div>${i.title}</div>`).join("");
-        suggestBox.querySelectorAll("div").forEach(div => {
-          div.onclick = () => {
-            input.value = div.innerText;
-            suggestBox.innerHTML = "";
-          };
-        });
-      });
-    }
-
-    autocomplete("start", "suggest-start");
-    autocomplete("end", "suggest-end");
-
     async function geocode(address) {
       const key = "FA346133-805B-3BB4-B8C2-372973E3A4ED";
-      let url = `https://api.vworld.kr/req/address?service=address&request=getcoord&format=json&type=road&address=${encodeURIComponent(address)}&key=${key}`;
-      let res = await fetch(url);
-      let json = await res.json();
-      let point = json.response.result?.point;
-      if (point) return [parseFloat(point.x), parseFloat(point.y)];
+      const url1 = `https://api.vworld.kr/req/address?service=address&request=getcoord&format=json&type=road&address=${encodeURIComponent(address)}&key=${key}`;
+      const res1 = await fetch(url1);
+      const json1 = await res1.json();
+      if (json1.response.result) {
+        const point = json1.response.result.point;
+        const coord = [parseFloat(point.x), parseFloat(point.y)];
+        console.log("주소검색 성공:", address, coord);
+        return coord;
+      }
 
-      // fallback: POI 검색
-      url = `https://api.vworld.kr/req/search?service=search&request=search&format=json&query=${encodeURIComponent(address)}&key=${key}`;
-      res = await fetch(url);
-      json = await res.json();
-      const item = json.response.result.items?.[0];
-      return item ? [parseFloat(item.point.x), parseFloat(item.point.y)] : null;
+      const url2 = `https://api.vworld.kr/req/search?service=search&request=search&format=json&query=${encodeURIComponent(address)}&key=${key}`;
+      const res2 = await fetch(url2);
+      const json2 = await res2.json();
+      const items = json2.response?.result?.items || [];
+      for (const item of items) {
+        if (item.point) {
+          const coord = [parseFloat(item.point.x), parseFloat(item.point.y)];
+          console.log("장소명 검색 성공:", address, coord);
+          return coord;
+        }
+      }
+      console.warn("검색 실패:", address);
+      return null;
     }
 
     async function fetchCoastline() {
@@ -131,7 +97,7 @@
         return Math.abs(lat - startLat) < 0.1 || Math.abs(lon - startLon) < 0.1;
       }).sort((a, b) => getDistance(start, a) - getDistance(start, b));
 
-      for (const radius of [0.03, 0.05]) { // 3km, 5km (약도 단위)
+      for (const radius of [0.03, 0.05]) {
         for (const wp of candidates) {
           if (getDistance(start, wp) < radius) {
             const route = await tryORS(start, wp, end);
@@ -148,7 +114,7 @@
       const endText = document.getElementById("end").value;
       const start = await geocode(startText);
       const end = await geocode(endText);
-      if (!start || !end) return alert("정확한 주소 또는 장소명을 입력하세요.");
+      if (!start || !end) return alert("출발지 또는 도착지 주소/장소명을 정확히 입력해 주세요.");
 
       const coast = await fetchCoastline();
       const result = await findValidWaypoint(start, end, coast);
