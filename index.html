@@ -3,28 +3,25 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>바다따라 - 해안도로 감성 드라이브</title>
+  <title>바다따라 - 해안도로 경유 추천</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v7.3.0/ol.css">
   <script src="https://cdn.jsdelivr.net/npm/ol@v7.3.0/dist/ol.js"></script>
   <style>
     body { margin: 0; font-family: sans-serif; }
-    #top-bar {
-      padding: 10px; background: #0077cc; color: white;
-      display: flex; flex-direction: column; gap: 6px;
-    }
-    #inputs { display: flex; gap: 10px; }
-    input { padding: 8px; width: 250px; }
+    #top-bar { padding: 10px; background: #0077cc; color: white; display: flex; flex-direction: column; gap: 8px; }
+    #inputs { display: flex; gap: 8px; }
+    input { padding: 8px; width: 240px; }
     button { padding: 8px 16px; background: white; border: none; cursor: pointer; }
     #map { width: 100%; height: calc(100vh - 100px); }
   </style>
 </head>
 <body>
   <div id="top-bar">
-    <div><b>🚘 해안도로 감성 드라이브 추천 서비스</b></div>
+    <div><b>🌊 바다따라 해안도로 경유 길찾기</b></div>
     <div id="inputs">
-      <input id="start" type="text" placeholder="출발지 주소" />
-      <input id="end" type="text" placeholder="도착지 주소" />
-      <button onclick="searchRoute()">경로 검색</button>
+      <input id="start" type="text" placeholder="출발지 주소">
+      <input id="end" type="text" placeholder="도착지 주소">
+      <button onclick="searchRoute()">해안도로 경유 경로 검색</button>
     </div>
   </div>
   <div id="map"></div>
@@ -32,15 +29,13 @@
     const map = new ol.Map({
       target: 'map',
       layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
-      view: new ol.View({
-        center: ol.proj.fromLonLat([127.5, 36.5]),
-        zoom: 7
-      })
+      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
     });
-    let routeLayer, markerLayer, attractionLayer;
+    let routeLayer, attractionLayer;
 
     function clearLayers() {
-      [routeLayer, markerLayer, attractionLayer].forEach(l => l && map.removeLayer(l));
+      if (routeLayer) map.removeLayer(routeLayer);
+      if (attractionLayer) map.removeLayer(attractionLayer);
     }
 
     async function geocode(address) {
@@ -48,11 +43,42 @@
       const url = `https://api.vworld.kr/req/address?service=address&request=getcoord&format=json&type=road&address=${encodeURIComponent(address)}&key=${key}`;
       const res = await fetch(url);
       const json = await res.json();
-      const {x, y} = json.response.result?.point ?? {};
+      const { x, y } = json.response.result?.point ?? {};
       return x && y ? [parseFloat(x), parseFloat(y)] : null;
     }
 
-    async function getRoute(startCoord, endCoord) {
+    async function fetchCoastline() {
+      const res = await fetch("https://rpwjd99.github.io/coastal-drive/해안선_국가기본도.geojson");
+      return await res.json();
+    }
+
+    function findDetourPoint(start, end, coastGeoJSON) {
+      const startLat = start[1], startLon = start[0], endLat = end[1], endLon = end[0];
+      const sameLatPoints = [], sameLonPoints = [];
+
+      coastGeoJSON.features.forEach(f => {
+        const [lon, lat] = f.geometry.coordinates;
+        if (Math.abs(lat - startLat) < 0.05 && (endLon > startLon ? lon > startLon : lon < startLon))
+          sameLatPoints.push([lon, lat]);
+        if (Math.abs(lon - startLon) < 0.05 && (endLat > startLat ? lat > startLat : lat < startLat))
+          sameLonPoints.push([lon, lat]);
+      });
+
+      function distance(a, b) {
+        return Math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2);
+      }
+
+      let nearestLat = sameLatPoints.sort((a,b)=>distance(start,a)-distance(start,b))[0];
+      let nearestLon = sameLonPoints.sort((a,b)=>distance(start,a)-distance(start,b))[0];
+
+      if (!nearestLat && !nearestLon) return null;
+      if (!nearestLat) return nearestLon;
+      if (!nearestLon) return nearestLat;
+
+      return distance(start, nearestLat) < distance(start, nearestLon) ? nearestLat : nearestLon;
+    }
+
+    async function getRoute(coords) {
       const apiKey = "5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953";
       const res = await fetch("https://api.openrouteservice.org/v2/directions/driving-car/geojson", {
         method: "POST",
@@ -60,14 +86,14 @@
           "Authorization": apiKey,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ coordinates: [startCoord, endCoord] })
+        body: JSON.stringify({ coordinates: coords })
       });
       return await res.json();
     }
 
     async function getAttractions(centerLon, centerLat) {
       const serviceKey = "e1tU33wjMx2nynKjH8yDBm/S4YNne6B8mpCOWtzMH9TSONF71XG/xAwPqyv1fANpgeOvbPY+Le+gM6cYCnWV8w==";
-      const url = `https://apis.data.go.kr/B551011/KorService1/locationBasedList1?MobileOS=ETC&MobileApp=TestApp&mapX=${centerLon}&mapY=${centerLat}&radius=7000&arrange=E&numOfRows=10&pageNo=1&_type=json&serviceKey=${encodeURIComponent(serviceKey)}`;
+      const url = `https://apis.data.go.kr/B551011/KorService1/locationBasedList1?MobileOS=ETC&MobileApp=SeaRouteApp&mapX=${centerLon}&mapY=${centerLat}&radius=8000&arrange=E&numOfRows=8&pageNo=1&_type=json&serviceKey=${encodeURIComponent(serviceKey)}`;
       const res = await fetch(url);
       const json = await res.json();
       return json.response.body.items.item ?? [];
@@ -79,37 +105,34 @@
       const endText = document.getElementById("end").value;
       const start = await geocode(startText);
       const end = await geocode(endText);
-      if (!start || !end) return alert("주소를 정확히 입력하세요");
+      if (!start || !end) return alert("주소를 정확히 입력해주세요.");
 
-      const routeGeoJSON = await getRoute(start, end);
-      const routeFeature = new ol.format.GeoJSON().readFeatures(routeGeoJSON, {
-        featureProjection: 'EPSG:3857'
-      });
+      const coast = await fetchCoastline();
+      const waypoint = findDetourPoint(start, end, coast);
+      if (!waypoint) return alert("경유할 해안 지점을 찾을 수 없습니다.");
+
+      const routeGeoJSON = await getRoute([start, waypoint, end]);
+      const features = new ol.format.GeoJSON().readFeatures(routeGeoJSON, { featureProjection: 'EPSG:3857' });
       routeLayer = new ol.layer.Vector({
-        source: new ol.source.Vector({ features: routeFeature }),
-        style: new ol.style.Style({
-          stroke: new ol.style.Stroke({ color: 'blue', width: 4 })
-        })
+        source: new ol.source.Vector({ features }),
+        style: new ol.style.Style({ stroke: new ol.style.Stroke({ color: 'blue', width: 4 }) })
       });
       map.addLayer(routeLayer);
-      const vectorSource = new ol.source.Vector({ features: routeFeature });
-      map.getView().fit(vectorSource.getExtent(), { padding: [50, 50, 50, 50] });
+      map.getView().fit(routeLayer.getSource().getExtent(), { padding: [50, 50, 50, 50] });
 
-      const [cx, cy] = [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2];
-      const attractions = await getAttractions(cx, cy);
-      const features = attractions.map(item => {
+      const [cx, cy] = [(start[0]+end[0])/2, (start[1]+end[1])/2];
+      const spots = await getAttractions(cx, cy);
+      const spotFeatures = spots.map(item => {
         const f = new ol.Feature({
           geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(item.mapx), parseFloat(item.mapy)]))
         });
         f.setStyle(new ol.style.Style({
           image: new ol.style.Icon({ src: "https://cdn-icons-png.flaticon.com/512/854/854878.png", scale: 0.05 })
         }));
-        f.set("info", `<b>${item.title}</b><br><img src="${item.firstimage || ''}" width="180px">`);
+        f.set("info", `<b>${item.title}</b><br><img src='${item.firstimage || ''}' width='180px'>`);
         return f;
       });
-      attractionLayer = new ol.layer.Vector({
-        source: new ol.source.Vector({ features })
-      });
+      attractionLayer = new ol.layer.Vector({ source: new ol.source.Vector({ features: spotFeatures }) });
       map.addLayer(attractionLayer);
 
       const overlay = new ol.Overlay({
@@ -119,7 +142,6 @@
         offset: [0, -30]
       });
       map.addOverlay(overlay);
-
       map.on("click", evt => {
         map.forEachFeatureAtPixel(evt.pixel, f => {
           const info = f.get("info");
