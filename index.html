@@ -1,73 +1,102 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-    <meta charset="UTF-8">
-    <title>해안도로 경로</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v7.3.0/ol.css">
-    <script src="https://cdn.jsdelivr.net/npm/ol@v7.3.0/dist/ol.js"></script>
-    <style>
-        html, body {
-            margin: 0;
-            height: 100%;
-        }
-        #map {
-            width: 100%;
-            height: 100%;
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>해안도로 가는 가장 가까운 길</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
+  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
+  <style>
+    body { font-family: sans-serif; margin: 0; padding: 0; }
+    #search-container {
+      padding: 1rem;
+      display: flex;
+      gap: 0.5rem;
+      background: #f0f0f0;
+    }
+    #map {
+      width: 100%;
+      height: 90vh;
+    }
+  </style>
 </head>
 <body>
-<div id="map"></div>
-<script>
-    const route = {
-        "type": "FeatureCollection",
-        "features": [{
-            "type": "Feature",
-            "geometry": {
-                "type": "LineString",
-                "coordinates": [
-                    [126.978363, 37.567025],
-                    [128.591964316, 38.207012683],
-                    [129.119683222, 37.566731821]
-                ]
-            },
-            "properties": {}
-        }]
-    };
+  <div id="search-container">
+    <input type="text" id="start" placeholder="출발지 주소 (예: 세종시청)" />
+    <input type="text" id="end" placeholder="목적지 주소 (예: 속초시청)" />
+    <button onclick="searchRoute()">건너지 검색</button>
+  </div>
+  <div id="map"></div>
 
+  <script>
     const map = new ol.Map({
-        target: 'map',
-        layers: [
-            new ol.layer.Tile({
-                source: new ol.source.OSM()
-            }),
-            new ol.layer.Vector({
-                source: new ol.source.Vector({
-                    features: new ol.format.GeoJSON().readFeatures(route, {
-                        featureProjection: 'EPSG:3857'
-                    })
-                }),
-                style: new ol.style.Style({
-                    stroke: new ol.style.Stroke({
-                        color: '#0077cc',
-                        width: 4
-                    })
-                })
-            })
-        ],
-        view: new ol.View({
-            center: ol.proj.fromLonLat([127.5, 36.5]),
-            zoom: 7
-        })
+      target: 'map',
+      layers: [
+        new ol.layer.Tile({ source: new ol.source.OSM() })
+      ],
+      view: new ol.View({
+        center: ol.proj.fromLonLat([127.5, 36.5]),
+        zoom: 7
+      })
     });
 
-    // 전체 경로에 맞게 보기 조정
-    const vectorSource = new ol.source.Vector({
-        features: new ol.format.GeoJSON().readFeatures(route, {
-            featureProjection: 'EPSG:3857'
-        })
+    const routeLayer = new ol.layer.Vector({
+      source: new ol.source.Vector(),
+      style: new ol.style.Style({
+        stroke: new ol.style.Stroke({ color: '#007bff', width: 4 })
+      })
     });
-    map.getView().fit(vectorSource.getExtent(), { padding: [50, 50, 50, 50] });
-</script>
+    map.addLayer(routeLayer);
+
+    async function geocode(query) {
+      const url = `https://proxy.cors.sh/https://api.vworld.kr/req/address?service=address&request=getcoord&format=json&type=road&address=${encodeURIComponent(query)}&key=FA346133-805B-3BB4-B8C2-372973E3A4ED`;
+      const res = await fetch(url, { headers: { 'x-cors-api-key': 'temp_123456' }});
+      const data = await res.json();
+      const point = data.response.result.point;
+      return [parseFloat(point.x), parseFloat(point.y)];
+    }
+
+    async function getRoute(start, waypoint, end) {
+      const url = 'https://api.openrouteservice.org/v2/directions/driving-car/geojson';
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': '5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ coordinates: [start, waypoint, end] })
+      });
+      return await res.json();
+    }
+
+    function drawRoute(geojson) {
+      const format = new ol.format.GeoJSON();
+      const feature = format.readFeature(geojson, {
+        featureProjection: 'EPSG:3857'
+      });
+      routeLayer.getSource().clear();
+      routeLayer.getSource().addFeature(feature);
+      map.getView().fit(feature.getGeometry(), { padding: [50, 50, 50, 50] });
+    }
+
+    async function searchRoute() {
+      const startText = document.getElementById('start').value;
+      const endText = document.getElementById('end').value;
+      if (!startText || !endText) return alert('주소를 입력해주세요.');
+      try {
+        const start = await geocode(startText);
+        const end = await geocode(endText);
+
+        // 가장 유사한 해안선 정의 공백지점
+        const waypoint = [129.4333, 36.4806];
+
+        const geojson = await getRoute(start, waypoint, end);
+        drawRoute(geojson);
+      } catch (e) {
+        console.error(e);
+        alert('건너지 계산 또는 주소 변환 중 오류가 발생했습니다.');
+      }
+    }
+  </script>
 </body>
 </html>
