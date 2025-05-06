@@ -84,11 +84,18 @@
 
     async function geocode(address) {
       const key = "FA346133-805B-3BB4-B8C2-372973E3A4ED";
-      const url = `https://api.vworld.kr/req/address?service=address&request=getcoord&format=json&type=road&address=${encodeURIComponent(address)}&key=${key}`;
-      const res = await fetch(url);
-      const json = await res.json();
-      const { x, y } = json.response.result?.point ?? {};
-      return x && y ? [parseFloat(x), parseFloat(y)] : null;
+      let url = `https://api.vworld.kr/req/address?service=address&request=getcoord&format=json&type=road&address=${encodeURIComponent(address)}&key=${key}`;
+      let res = await fetch(url);
+      let json = await res.json();
+      let point = json.response.result?.point;
+      if (point) return [parseFloat(point.x), parseFloat(point.y)];
+
+      // fallback: POI 검색
+      url = `https://api.vworld.kr/req/search?service=search&request=search&format=json&query=${encodeURIComponent(address)}&key=${key}`;
+      res = await fetch(url);
+      json = await res.json();
+      const item = json.response.result.items?.[0];
+      return item ? [parseFloat(item.point.x), parseFloat(item.point.y)] : null;
     }
 
     async function fetchCoastline() {
@@ -118,15 +125,19 @@
     }
 
     async function findValidWaypoint(start, end, coastGeoJSON) {
-      const startLat = start[1], startLon = start[0], endLat = end[1], endLon = end[0];
+      const startLat = start[1], startLon = start[0];
       const candidates = coastGeoJSON.features.map(f => f.geometry.coordinates).filter(coord => {
         const [lon, lat] = coord;
         return Math.abs(lat - startLat) < 0.1 || Math.abs(lon - startLon) < 0.1;
       }).sort((a, b) => getDistance(start, a) - getDistance(start, b));
 
-      for (const wp of candidates) {
-        const route = await tryORS(start, wp, end);
-        if (route) return { wp, route };
+      for (const radius of [0.03, 0.05]) { // 3km, 5km (약도 단위)
+        for (const wp of candidates) {
+          if (getDistance(start, wp) < radius) {
+            const route = await tryORS(start, wp, end);
+            if (route) return { wp, route };
+          }
+        }
       }
       return null;
     }
