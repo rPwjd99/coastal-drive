@@ -2,9 +2,9 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>바다따라 - 해안도로 감성 길찾기</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v7.3.0/ol.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v7.3.0/ol.css" />
   <script src="https://cdn.jsdelivr.net/npm/ol@v7.3.0/dist/ol.js"></script>
   <style>
     body { margin: 0; font-family: sans-serif; }
@@ -19,49 +19,33 @@
   <div id="top-bar">
     <div><b>🚗 바다따라 - 해안도로 감성 길찾기</b></div>
     <div id="inputs">
-      <input id="start" type="text" placeholder="출발지 주소 또는 장소명">
-      <input id="end" type="text" placeholder="도착지 주소 또는 장소명">
+      <input id="start" type="text" placeholder="출발지 주소 또는 장소명" />
+      <input id="end" type="text" placeholder="도착지 주소 또는 장소명" />
       <button onclick="searchRoute()">경로 검색</button>
     </div>
   </div>
   <div id="map"></div>
   <script>
     const map = new ol.Map({
-      target: 'map',
-      layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
-      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
+      target: "map",
+      layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
+      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 }),
     });
+
     let routeLayer;
 
     function clearLayers() {
       if (routeLayer) map.removeLayer(routeLayer);
     }
 
-    async function geocode(address) {
-      const key = "FA346133-805B-3BB4-B8C2-372973E3A4ED";
-      const url1 = `https://api.vworld.kr/req/address?service=address&request=getcoord&format=json&type=road&address=${encodeURIComponent(address)}&key=${key}`;
-      const res1 = await fetch(url1);
-      const json1 = await res1.json();
-      if (json1.response.result) {
-        const point = json1.response.result.point;
-        const coord = [parseFloat(point.x), parseFloat(point.y)];
-        console.log("주소검색 성공:", address, coord);
-        return coord;
-      }
-
-      const url2 = `https://api.vworld.kr/req/search?service=search&request=search&format=json&query=${encodeURIComponent(address)}&key=${key}`;
-      const res2 = await fetch(url2);
-      const json2 = await res2.json();
-      const items = json2.response?.result?.items || [];
-      for (const item of items) {
-        if (item.point) {
-          const coord = [parseFloat(item.point.x), parseFloat(item.point.y)];
-          console.log("장소명 검색 성공:", address, coord);
-          return coord;
-        }
-      }
-      console.warn("검색 실패:", address);
-      return null;
+    async function geocodeORS(text) {
+      const apiKey = "5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953";
+      const res = await fetch(
+        `https://api.openrouteservice.org/geocode/search?api_key=${apiKey}&text=${encodeURIComponent(text)}&boundary.country=KR`
+      );
+      const json = await res.json();
+      const coords = json.features?.[0]?.geometry?.coordinates;
+      return coords || null;
     }
 
     async function fetchCoastline() {
@@ -75,10 +59,10 @@
         const res = await fetch("https://api.openrouteservice.org/v2/directions/driving-car/geojson", {
           method: "POST",
           headers: {
-            "Authorization": apiKey,
-            "Content-Type": "application/json"
+            Authorization: apiKey,
+            "Content-Type": "application/json",
           },
-          body: JSON.stringify({ coordinates: [start, waypoint, end] })
+          body: JSON.stringify({ coordinates: [start, waypoint, end] }),
         });
         return res.ok ? await res.json() : null;
       } catch {
@@ -87,7 +71,7 @@
     }
 
     function getDistance(a, b) {
-      return Math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2);
+      return Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2);
     }
 
     async function findValidWaypoint(start, end, coastGeoJSON) {
@@ -112,21 +96,21 @@
       clearLayers();
       const startText = document.getElementById("start").value;
       const endText = document.getElementById("end").value;
-      const start = await geocode(startText);
-      const end = await geocode(endText);
-      if (!start || !end) return alert("출발지 또는 도착지 주소/장소명을 정확히 입력해 주세요.");
+      const start = await geocodeORS(startText);
+      const end = await geocodeORS(endText);
+      if (!start || !end) return alert("출발지 또는 도착지를 정확히 입력해 주세요.");
 
       const coast = await fetchCoastline();
       const result = await findValidWaypoint(start, end, coast);
       if (!result) return alert("도로 연결 가능한 해안 우회 경유지를 찾지 못했습니다.");
 
-      const features = new ol.format.GeoJSON().readFeatures(result.route, { featureProjection: 'EPSG:3857' });
+      const features = new ol.format.GeoJSON().readFeatures(result.route, { featureProjection: "EPSG:3857" });
       routeLayer = new ol.layer.Vector({
         source: new ol.source.Vector({ features }),
-        style: new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#0077cc', width: 4 }) })
+        style: new ol.style.Style({ stroke: new ol.style.Stroke({ color: "#0077cc", width: 4 }) }),
       });
       map.addLayer(routeLayer);
-      map.getView().fit(routeLayer.getSource().getExtent(), { padding: [50,50,50,50] });
+      map.getView().fit(routeLayer.getSource().getExtent(), { padding: [50, 50, 50, 50] });
     }
   </script>
 </body>
