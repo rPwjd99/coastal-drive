@@ -3,7 +3,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>바다따라 - 해안도로 경유 추천</title>
+  <title>바다따라 - 해안도로 도로경유 길찾기</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v7.3.0/ol.css">
   <script src="https://cdn.jsdelivr.net/npm/ol@v7.3.0/dist/ol.js"></script>
   <style>
@@ -17,11 +17,11 @@
 </head>
 <body>
   <div id="top-bar">
-    <div><b>🌊 바다따라 해안도로 경유 길찾기</b></div>
+    <div><b>🚗 바다따라 - 도로 기반 해안 우회 경로</b></div>
     <div id="inputs">
       <input id="start" type="text" placeholder="출발지 주소">
       <input id="end" type="text" placeholder="도착지 주소">
-      <button onclick="searchRoute()">해안도로 경유 경로 검색</button>
+      <button onclick="searchRoute()">경로 검색</button>
     </div>
   </div>
   <div id="map"></div>
@@ -54,28 +54,28 @@
 
     function findDetourPoint(start, end, coastGeoJSON) {
       const startLat = start[1], startLon = start[0], endLat = end[1], endLon = end[0];
-      const sameLatPoints = [], sameLonPoints = [];
+      const sameLat = [], sameLon = [];
 
       coastGeoJSON.features.forEach(f => {
         const [lon, lat] = f.geometry.coordinates;
         if (Math.abs(lat - startLat) < 0.05 && (endLon > startLon ? lon > startLon : lon < startLon))
-          sameLatPoints.push([lon, lat]);
+          sameLat.push([lon, lat]);
         if (Math.abs(lon - startLon) < 0.05 && (endLat > startLat ? lat > startLat : lat < startLat))
-          sameLonPoints.push([lon, lat]);
+          sameLon.push([lon, lat]);
       });
 
-      function distance(a, b) {
+      function dist(a, b) {
         return Math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2);
       }
 
-      let nearestLat = sameLatPoints.sort((a,b)=>distance(start,a)-distance(start,b))[0];
-      let nearestLon = sameLonPoints.sort((a,b)=>distance(start,a)-distance(start,b))[0];
+      let latClose = sameLat.sort((a,b)=>dist(start,a)-dist(start,b))[0];
+      let lonClose = sameLon.sort((a,b)=>dist(start,a)-dist(start,b))[0];
 
-      if (!nearestLat && !nearestLon) return null;
-      if (!nearestLat) return nearestLon;
-      if (!nearestLon) return nearestLat;
+      if (!latClose && !lonClose) return null;
+      if (!latClose) return lonClose;
+      if (!lonClose) return latClose;
 
-      return distance(start, nearestLat) < distance(start, nearestLon) ? nearestLat : nearestLon;
+      return dist(start, latClose) < dist(start, lonClose) ? latClose : lonClose;
     }
 
     async function getRoute(coords) {
@@ -91,67 +91,26 @@
       return await res.json();
     }
 
-    async function getAttractions(centerLon, centerLat) {
-      const serviceKey = "e1tU33wjMx2nynKjH8yDBm/S4YNne6B8mpCOWtzMH9TSONF71XG/xAwPqyv1fANpgeOvbPY+Le+gM6cYCnWV8w==";
-      const url = `https://apis.data.go.kr/B551011/KorService1/locationBasedList1?MobileOS=ETC&MobileApp=SeaRouteApp&mapX=${centerLon}&mapY=${centerLat}&radius=8000&arrange=E&numOfRows=8&pageNo=1&_type=json&serviceKey=${encodeURIComponent(serviceKey)}`;
-      const res = await fetch(url);
-      const json = await res.json();
-      return json.response.body.items.item ?? [];
-    }
-
     async function searchRoute() {
       clearLayers();
       const startText = document.getElementById("start").value;
       const endText = document.getElementById("end").value;
       const start = await geocode(startText);
       const end = await geocode(endText);
-      if (!start || !end) return alert("주소를 정확히 입력해주세요.");
+      if (!start || !end) return alert("정확한 주소를 입력해주세요.");
 
       const coast = await fetchCoastline();
       const waypoint = findDetourPoint(start, end, coast);
-      if (!waypoint) return alert("경유할 해안 지점을 찾을 수 없습니다.");
+      if (!waypoint) return alert("해안 우회 지점을 찾을 수 없습니다.");
 
       const routeGeoJSON = await getRoute([start, waypoint, end]);
       const features = new ol.format.GeoJSON().readFeatures(routeGeoJSON, { featureProjection: 'EPSG:3857' });
       routeLayer = new ol.layer.Vector({
         source: new ol.source.Vector({ features }),
-        style: new ol.style.Style({ stroke: new ol.style.Stroke({ color: 'blue', width: 4 }) })
+        style: new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#0077cc', width: 4 }) })
       });
       map.addLayer(routeLayer);
       map.getView().fit(routeLayer.getSource().getExtent(), { padding: [50, 50, 50, 50] });
-
-      const [cx, cy] = [(start[0]+end[0])/2, (start[1]+end[1])/2];
-      const spots = await getAttractions(cx, cy);
-      const spotFeatures = spots.map(item => {
-        const f = new ol.Feature({
-          geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(item.mapx), parseFloat(item.mapy)]))
-        });
-        f.setStyle(new ol.style.Style({
-          image: new ol.style.Icon({ src: "https://cdn-icons-png.flaticon.com/512/854/854878.png", scale: 0.05 })
-        }));
-        f.set("info", `<b>${item.title}</b><br><img src='${item.firstimage || ''}' width='180px'>`);
-        return f;
-      });
-      attractionLayer = new ol.layer.Vector({ source: new ol.source.Vector({ features: spotFeatures }) });
-      map.addLayer(attractionLayer);
-
-      const overlay = new ol.Overlay({
-        element: document.createElement("div"),
-        positioning: "bottom-center",
-        stopEvent: false,
-        offset: [0, -30]
-      });
-      map.addOverlay(overlay);
-      map.on("click", evt => {
-        map.forEachFeatureAtPixel(evt.pixel, f => {
-          const info = f.get("info");
-          if (info) {
-            const el = overlay.getElement();
-            el.innerHTML = `<div style='background:white;padding:10px;border:1px solid #ccc;'>${info}</div>`;
-            overlay.setPosition(evt.coordinate);
-          }
-        });
-      });
     }
   </script>
 </body>
