@@ -1,30 +1,41 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8">
-  <title>▶ 바다따라 - 해안도로 감성 길찾기</title>
+  <meta charset="UTF-8" />
+  <title>바다따라 - 해안도로 감성 길찾기</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@latest/ol.css">
+
+  <!-- ✅ OpenLayers 스타일 + 스크립트 -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@latest/ol.css" />
+  <script src="https://cdn.jsdelivr.net/npm/ol@latest/ol.js"></script>
+
   <style>
-    body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
-    #controls { padding: 10px; background: #f0f0f0; display: flex; gap: 10px; flex-wrap: wrap; }
-    #map { width: 100%; height: 90vh; }
-    input[type="text"] { width: 240px; padding: 6px; }
-    button { padding: 6px 12px; }
+    body { font-family: sans-serif; margin: 0; padding: 0; }
+    #inputs {
+      padding: 1rem;
+      background: #f0f0f0;
+    }
+    input {
+      margin: 0.2rem; padding: 0.5rem; width: 250px;
+    }
+    button {
+      padding: 0.5rem 1rem;
+    }
+    #map {
+      width: 100%;
+      height: 90vh;
+    }
   </style>
 </head>
 <body>
-  <div id="controls">
-    호출지: <input type="text" id="start" placeholder="예: 세종 한누리대로 2130">
-    도착지: <input type="text" id="end" placeholder="예: 속초시 중앙로 183">
-    <button onclick="searchRoute()">건항 검색</button>
+  <div id="inputs">
+    <input type="text" id="start" placeholder="출발지 주소 (예: 세종시청)" />
+    <input type="text" id="end" placeholder="도착지 주소 (예: 속초시청)" />
+    <button onclick="searchRoute()">경로 검색</button>
   </div>
   <div id="map"></div>
 
-  <script src="https://cdn.jsdelivr.net/npm/ol@latest/ol.js"></script>
   <script>
-    const apiKey = '5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953';
-
     const map = new ol.Map({
       target: 'map',
       layers: [
@@ -33,7 +44,7 @@
         })
       ],
       view: new ol.View({
-        center: ol.proj.fromLonLat([127.5, 36.5]),
+        center: ol.proj.fromLonLat([127.7669, 35.9078]), // 대한민국 중심
         zoom: 7
       })
     });
@@ -41,57 +52,68 @@
     const routeLayer = new ol.layer.Vector({
       source: new ol.source.Vector(),
       style: new ol.style.Style({
-        stroke: new ol.style.Stroke({ color: '#0077ff', width: 4 })
+        stroke: new ol.style.Stroke({
+          color: 'blue',
+          width: 4
+        })
       })
     });
     map.addLayer(routeLayer);
 
     async function geocode(address) {
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`);
-      const data = await response.json();
-      if (data.length > 0) return [parseFloat(data[0].lon), parseFloat(data[0].lat)];
-      else throw new Error('Geocoding failed');
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.length === 0) throw new Error("주소 검색 실패");
+      return [parseFloat(data[0].lon), parseFloat(data[0].lat)];
+    }
+
+    async function getRoute(startCoords, endCoords) {
+      const url = 'https://api.openrouteservice.org/v2/directions/driving-car/geojson';
+      const body = {
+        coordinates: [startCoords, endCoords]
+      };
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': '5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      return data;
     }
 
     async function searchRoute() {
-      const startAddr = document.getElementById('start').value;
-      const endAddr = document.getElementById('end').value;
-      if (!startAddr || !endAddr) return alert('출발지와 도착지를 입력해주세요.');
-
       try {
-        const startCoord = await geocode(startAddr);
-        const endCoord = await geocode(endAddr);
+        const startAddress = document.getElementById('start').value;
+        const endAddress = document.getElementById('end').value;
 
-        const body = {
-          coordinates: [startCoord, endCoord],
-          instructions: false,
-          format: 'geojson'
-        };
+        if (!startAddress || !endAddress) {
+          alert("출발지와 도착지를 모두 입력하세요.");
+          return;
+        }
 
-        const res = await fetch('https://api.openrouteservice.org/v2/directions/driving-car/geojson', {
-          method: 'POST',
-          headers: {
-            'Authorization': apiKey,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(body)
-        });
+        const start = await geocode(startAddress);
+        const end = await geocode(endAddress);
 
-        const geojson = await res.json();
+        const route = await getRoute(start, end);
 
         const format = new ol.format.GeoJSON();
-        const features = format.readFeatures(geojson, {
-          featureProjection: map.getView().getProjection()
+        const routeFeature = format.readFeature(route, {
+          dataProjection: 'EPSG:4326',
+          featureProjection: 'EPSG:3857'
         });
 
         routeLayer.getSource().clear();
-        routeLayer.getSource().addFeatures(features);
+        routeLayer.getSource().addFeature(routeFeature);
 
-        const extent = routeLayer.getSource().getExtent();
-        map.getView().fit(extent, { padding: [20, 20, 20, 20] });
+        map.getView().fit(routeLayer.getSource().getExtent(), { padding: [50, 50, 50, 50] });
+
       } catch (err) {
+        alert("경로를 찾을 수 없습니다. 주소를 다시 확인해 주세요.");
         console.error(err);
-        alert('경로 계산 또는 주소 변환 중 오류가 발생했습니다.');
       }
     }
   </script>
