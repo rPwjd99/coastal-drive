@@ -1,113 +1,41 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <title>▶ 바다따라 - 해안도로 경우 거래 건조 게이트 지도</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="utf-8" />
+  <title>해안도로 경유 경로 추천</title>
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-  <link href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
   <style>
-    body { font-family: sans-serif; margin: 0; padding: 0; }
-    #controls { padding: 10px; background: #f0f0f0; }
-    #map { width: 100%; height: 90vh; }
-    input { padding: 5px; width: 300px; }
-    button { padding: 6px 12px; margin-left: 10px; }
+    html, body, #map { margin: 0; padding: 0; width: 100%; height: 100%; }
   </style>
 </head>
 <body>
-  <div id="controls">
-    호칭지: <input type="text" id="start" placeholder="세종특별자치시 한누리대로 2130">
-    목적지: <input type="text" id="end" placeholder="강원 소천시 중앙로 183">
-    <button onclick="searchRoute()">경로 검색</button>
-  </div>
   <div id="map"></div>
-
   <script>
     const map = new ol.Map({
-      target: 'map',
-      layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
-      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
-    });
-
-    async function geocode(address) {
-      const query = `https://api.vworld.kr/req/address?service=address&request=getcoord&format=json&type=road&address=${encodeURIComponent(address)}&key=FA346133-805B-3BB4-B8C2-372973E3A4ED`;
-      const response = await fetch(query);
-      const data = await response.json();
-      if (data.response.status === 'OK') {
-        const { x, y } = data.response.result.point;
-        return [parseFloat(x), parseFloat(y)];
-      } else {
-        throw new Error('Geocode failed');
-      }
-    }
-
-    async function getCoastalWaypoint(start, end) {
-      const coastalGeojson = await fetch('해안선_국가기본도.geojson').then(res => res.json());
-      const candidates = coastalGeojson.features.map(f => f.geometry.coordinates).flat();
-
-      let minDist = Infinity;
-      let selected = null;
-
-      for (const pt of candidates) {
-        const dx = pt[0] - start[0];
-        const dy = pt[1] - start[1];
-        const dist = Math.sqrt(dx*dx + dy*dy);
-        if (dist < minDist) {
-          const tryRoute = await fetch('https://api.openrouteservice.org/v2/directions/driving-car/geojson', {
-            method: 'POST',
-            headers: {
-              'Authorization': '5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953',
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ coordinates: [start, pt, end] })
-          });
-          if (tryRoute.ok) {
-            minDist = dist;
-            selected = pt;
-          }
-        }
-      }
-      return selected;
-    }
-
-    async function searchRoute() {
-      try {
-        const startAddr = document.getElementById('start').value;
-        const endAddr = document.getElementById('end').value;
-
-        const startCoord = await geocode(startAddr);
-        const endCoord = await geocode(endAddr);
-        const waypoint = await getCoastalWaypoint(startCoord, endCoord);
-
-        const routeRes = await fetch('https://api.openrouteservice.org/v2/directions/driving-car/geojson', {
-          method: 'POST',
-          headers: {
-            'Authorization': '5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953',
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ coordinates: [startCoord, waypoint, endCoord] })
-        });
-
-        const routeGeojson = await routeRes.json();
-        const routeLayer = new ol.layer.Vector({
+      target: "map",
+      layers: [
+        new ol.layer.Tile({
+          source: new ol.source.OSM()
+        }),
+        new ol.layer.Vector({
           source: new ol.source.Vector({
-            features: new ol.format.GeoJSON().readFeatures(routeGeojson, {
-              featureProjection: 'EPSG:3857'
-            })
+            url: "/geojson/해안선.geojson",
+            format: new ol.format.GeoJSON()
           }),
           style: new ol.style.Style({
-            stroke: new ol.style.Stroke({ color: 'blue', width: 4 })
+            stroke: new ol.style.Stroke({
+              color: "blue",
+              width: 2
+            })
           })
-        });
-        map.getLayers().getArray().slice(1).forEach(l => map.removeLayer(l));
-        map.addLayer(routeLayer);
-
-        map.getView().fit(routeLayer.getSource().getExtent(), { padding: [50, 50, 50, 50] });
-      } catch (e) {
-        alert('경로 계산 또는 주소 변환 중 오류가 발생했습니다.');
-        console.error(e);
-      }
-    }
+        })
+      ],
+      view: new ol.View({
+        center: ol.proj.fromLonLat([127.5, 36.0]),
+        zoom: 7
+      })
+    });
   </script>
 </body>
 </html>
