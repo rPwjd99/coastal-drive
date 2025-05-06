@@ -3,19 +3,12 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>바다따라 - 해안도로 감성 경로</title>
+  <title>바다따라 - 해안도로 감성 길찾기</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v7.3.0/ol.css">
   <script src="https://cdn.jsdelivr.net/npm/ol@v7.3.0/dist/ol.js"></script>
   <style>
     body { margin: 0; font-family: sans-serif; }
-    #top-bar {
-      padding: 10px;
-      background: #0077cc;
-      color: white;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
+    #top-bar { padding: 10px; background: #0077cc; color: white; display: flex; flex-direction: column; gap: 8px; }
     #inputs { display: flex; gap: 8px; }
     input { padding: 8px; width: 240px; }
     button { padding: 8px 16px; background: white; border: none; cursor: pointer; }
@@ -39,7 +32,7 @@
 </head>
 <body>
   <div id="top-bar">
-    <div><b>🚗 바다따라 - 해안도로 감성 경로</b></div>
+    <div><b>🚗 바다따라 - 해안도로 감성 길찾기</b></div>
     <div id="inputs">
       <div style="position:relative;">
         <input id="start" type="text" placeholder="출발지 검색">
@@ -59,12 +52,10 @@
       layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
       view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
     });
-
-    let routeLayer, attractionLayer;
+    let routeLayer;
 
     function clearLayers() {
       if (routeLayer) map.removeLayer(routeLayer);
-      if (attractionLayer) map.removeLayer(attractionLayer);
     }
 
     async function autocomplete(inputId, suggestId) {
@@ -105,31 +96,39 @@
       return await res.json();
     }
 
-    function findDetourPoint(start, end, coastGeoJSON) {
+    async function tryORS(start, waypoint, end) {
+      const apiKey = "5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953";
+      try {
+        const res = await fetch("https://api.openrouteservice.org/v2/directions/driving-car/geojson", {
+          method: "POST",
+          headers: {
+            "Authorization": apiKey,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ coordinates: [start, waypoint, end] })
+        });
+        return res.ok ? await res.json() : null;
+      } catch {
+        return null;
+      }
+    }
+
+    function getDistance(a, b) {
+      return Math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2);
+    }
+
+    async function findValidWaypoint(start, end, coastGeoJSON) {
       const startLat = start[1], startLon = start[0], endLat = end[1], endLon = end[0];
       const candidates = coastGeoJSON.features.map(f => f.geometry.coordinates).filter(coord => {
         const [lon, lat] = coord;
         return Math.abs(lat - startLat) < 0.1 || Math.abs(lon - startLon) < 0.1;
-      });
-      candidates.sort((a,b) => {
-        const d1 = (a[0]-start[0])**2 + (a[1]-start[1])**2;
-        const d2 = (b[0]-start[0])**2 + (b[1]-start[1])**2;
-        return d1 - d2;
-      });
-      return candidates[0] || null;
-    }
+      }).sort((a, b) => getDistance(start, a) - getDistance(start, b));
 
-    async function getRoute(coords) {
-      const apiKey = "5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953";
-      const res = await fetch("https://api.openrouteservice.org/v2/directions/driving-car/geojson", {
-        method: "POST",
-        headers: {
-          "Authorization": apiKey,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ coordinates: coords })
-      });
-      return await res.json();
+      for (const wp of candidates) {
+        const route = await tryORS(start, wp, end);
+        if (route) return { wp, route };
+      }
+      return null;
     }
 
     async function searchRoute() {
@@ -141,11 +140,10 @@
       if (!start || !end) return alert("정확한 주소 또는 장소명을 입력하세요.");
 
       const coast = await fetchCoastline();
-      const waypoint = findDetourPoint(start, end, coast);
-      if (!waypoint) return alert("우회할 해안선을 찾지 못했습니다.");
+      const result = await findValidWaypoint(start, end, coast);
+      if (!result) return alert("도로 연결 가능한 해안 우회 경유지를 찾지 못했습니다.");
 
-      const routeGeoJSON = await getRoute([start, waypoint, end]);
-      const features = new ol.format.GeoJSON().readFeatures(routeGeoJSON, { featureProjection: 'EPSG:3857' });
+      const features = new ol.format.GeoJSON().readFeatures(result.route, { featureProjection: 'EPSG:3857' });
       routeLayer = new ol.layer.Vector({
         source: new ol.source.Vector({ features }),
         style: new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#0077cc', width: 4 }) })
