@@ -1,116 +1,98 @@
-
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <title>바다따라 - 해안도로 감성 길찾기</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v7.3.0/ol.css" />
-  <script src="https://cdn.jsdelivr.net/npm/ol@v7.3.0/dist/ol.js"></script>
+  <meta charset="UTF-8">
+  <title>▶ 바다따라 - 해안도로 감성 길찾기</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@latest/ol.css">
   <style>
-    body { margin: 0; font-family: sans-serif; }
-    #top-bar { padding: 10px; background: #0077cc; color: white; display: flex; flex-direction: column; gap: 8px; }
-    #inputs { display: flex; gap: 8px; }
-    input { padding: 8px; width: 240px; }
-    button { padding: 8px 16px; background: white; border: none; cursor: pointer; }
-    #map { width: 100%; height: calc(100vh - 100px); }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
+    #controls { padding: 10px; background: #f0f0f0; display: flex; gap: 10px; flex-wrap: wrap; }
+    #map { width: 100%; height: 90vh; }
+    input[type="text"] { width: 240px; padding: 6px; }
+    button { padding: 6px 12px; }
   </style>
 </head>
 <body>
-  <div id="top-bar">
-    <div><b>🚗 바다따라 - 해안도로 감성 길찾기</b></div>
-    <div id="inputs">
-      <input id="start" type="text" placeholder="출발지 주소 또는 장소명" />
-      <input id="end" type="text" placeholder="도착지 주소 또는 장소명" />
-      <button onclick="searchRoute()">경로 검색</button>
-    </div>
+  <div id="controls">
+    호출지: <input type="text" id="start" placeholder="예: 세종 한누리대로 2130">
+    도착지: <input type="text" id="end" placeholder="예: 속초시 중앙로 183">
+    <button onclick="searchRoute()">건항 검색</button>
   </div>
   <div id="map"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/ol@latest/ol.js"></script>
   <script>
+    const apiKey = '5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953';
+
     const map = new ol.Map({
-      target: "map",
-      layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
-      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 }),
+      target: 'map',
+      layers: [
+        new ol.layer.Tile({
+          source: new ol.source.OSM()
+        })
+      ],
+      view: new ol.View({
+        center: ol.proj.fromLonLat([127.5, 36.5]),
+        zoom: 7
+      })
     });
 
-    let routeLayer;
+    const routeLayer = new ol.layer.Vector({
+      source: new ol.source.Vector(),
+      style: new ol.style.Style({
+        stroke: new ol.style.Stroke({ color: '#0077ff', width: 4 })
+      })
+    });
+    map.addLayer(routeLayer);
 
-    function clearLayers() {
-      if (routeLayer) map.removeLayer(routeLayer);
-    }
-
-    async function geocodeORS(text) {
-      const apiKey = "5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953";
-      const res = await fetch(
-        `https://api.openrouteservice.org/geocode/search?api_key=${apiKey}&text=${encodeURIComponent(text)}&boundary.country=KR`
-      );
-      const json = await res.json();
-      const coords = json.features?.[0]?.geometry?.coordinates;
-      return coords || null;
-    }
-
-    async function fetchCoastline() {
-      const res = await fetch("https://rpwjd99.github.io/coastal-drive/해안선_국가기본도.geojson");
-      return await res.json();
-    }
-
-    async function tryORS(start, waypoint, end) {
-      const apiKey = "5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953";
-      try {
-        const res = await fetch("https://api.openrouteservice.org/v2/directions/driving-car/geojson", {
-          method: "POST",
-          headers: {
-            Authorization: apiKey,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ coordinates: [start, waypoint, end] }),
-        });
-        return res.ok ? await res.json() : null;
-      } catch {
-        return null;
-      }
-    }
-
-    function getDistance(a, b) {
-      return Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2);
-    }
-
-    async function findValidWaypoint(start, end, coastGeoJSON) {
-      const startLat = start[1], startLon = start[0];
-      const candidates = coastGeoJSON.features.map(f => f.geometry.coordinates).filter(coord => {
-        const [lon, lat] = coord;
-        return Math.abs(lat - startLat) < 0.1 || Math.abs(lon - startLon) < 0.1;
-      }).sort((a, b) => getDistance(start, a) - getDistance(start, b));
-
-      for (const radius of [0.03, 0.05]) {
-        for (const wp of candidates) {
-          if (getDistance(start, wp) < radius) {
-            const route = await tryORS(start, wp, end);
-            if (route) return { wp, route };
-          }
-        }
-      }
-      return null;
+    async function geocode(address) {
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`);
+      const data = await response.json();
+      if (data.length > 0) return [parseFloat(data[0].lon), parseFloat(data[0].lat)];
+      else throw new Error('Geocoding failed');
     }
 
     async function searchRoute() {
-      clearLayers();
-      const startText = document.getElementById("start").value;
-      const endText = document.getElementById("end").value;
-      const start = await geocodeORS(startText);
-      const end = await geocodeORS(endText);
-      if (!start || !end) return alert("출발지 또는 도착지를 정확히 입력해 주세요.");
+      const startAddr = document.getElementById('start').value;
+      const endAddr = document.getElementById('end').value;
+      if (!startAddr || !endAddr) return alert('출발지와 도착지를 입력해주세요.');
 
-      const coast = await fetchCoastline();
-      const result = await findValidWaypoint(start, end, coast);
-      if (!result) return alert("도로 연결 가능한 해안 우회 경유지를 찾지 못했습니다.");
+      try {
+        const startCoord = await geocode(startAddr);
+        const endCoord = await geocode(endAddr);
 
-      const features = new ol.format.GeoJSON().readFeatures(result.route, { featureProjection: "EPSG:3857" });
-      routeLayer = new ol.layer.Vector({
-        source: new ol.source.Vector({ features }),
-        style: new ol.style.Style({ stroke: new ol.style.Stroke({ color: "#0077cc", width: 4 }) }),
-      });
-      map.addLayer(routeLayer);
-      map.getView().fit(routeLayer.getSource().getExtent(), { padding: [50, 50, 50, 50] });
+        const body = {
+          coordinates: [startCoord, endCoord],
+          instructions: false,
+          format: 'geojson'
+        };
+
+        const res = await fetch('https://api.openrouteservice.org/v2/directions/driving-car/geojson', {
+          method: 'POST',
+          headers: {
+            'Authorization': apiKey,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(body)
+        });
+
+        const geojson = await res.json();
+
+        const format = new ol.format.GeoJSON();
+        const features = format.readFeatures(geojson, {
+          featureProjection: map.getView().getProjection()
+        });
+
+        routeLayer.getSource().clear();
+        routeLayer.getSource().addFeatures(features);
+
+        const extent = routeLayer.getSource().getExtent();
+        map.getView().fit(extent, { padding: [20, 20, 20, 20] });
+      } catch (err) {
+        console.error(err);
+        alert('경로 계산 또는 주소 변환 중 오류가 발생했습니다.');
+      }
     }
   </script>
 </body>
