@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>해안도로 경유 경로 추천</title>
+  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
+  <style>
+    html, body, #map { margin: 0; padding: 0; width: 100%; height: 100%; }
+    .search-box {
+      position: absolute;
+      top: 10px; left: 10px;
+      background: white;
+      padding: 10px;
+      border-radius: 8px;
+      z-index: 1000;
+    }
+    input, button {
+      margin: 5px 0;
+      width: 250px;
+    }
+  </style>
+</head>
+<body>
+  <div class="search-box">
+    <input type="text" id="start" placeholder="출발지 주소">
+    <input type="text" id="end" placeholder="도착지 주소">
+    <button onclick="calculateRoute()">경로 검색</button>
+  </div>
+  <div id="map"></div>
+  <script>
+    const map = new ol.Map({
+      target: 'map',
+      layers: [
+        new ol.layer.Tile({ source: new ol.source.OSM() })
+      ],
+      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.0]), zoom: 7 })
+    });
+
+    const routeLayer = new ol.layer.Vector({
+      source: new ol.source.Vector(),
+      style: new ol.style.Style({
+        stroke: new ol.style.Stroke({ color: 'red', width: 3 })
+      })
+    });
+    map.addLayer(routeLayer);
+
+    async function calculateRoute() {
+      const start = document.getElementById("start").value;
+      const end = document.getElementById("end").value;
+      if (!start || !end) return alert("출발지와 도착지를 입력하세요.");
+
+      const res = await fetch(`/api/route?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`);
+      const geojson = await res.json();
+      const format = new ol.format.GeoJSON();
+      const feature = format.readFeature(geojson, { featureProjection: 'EPSG:3857' });
+      routeLayer.getSource().clear();
+      routeLayer.getSource().addFeature(feature);
+      map.getView().fit(feature.getGeometry().getExtent(), { padding: [30,30,30,30] });
+    }
+  </script>
+</body>
+</html>
