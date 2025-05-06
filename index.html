@@ -14,10 +14,12 @@
       padding: 10px;
       border-radius: 8px;
       z-index: 1000;
+      box-shadow: 0 0 10px rgba(0,0,0,0.3);
     }
     input, button {
       margin: 5px 0;
-      width: 250px;
+      width: 260px;
+      padding: 5px;
     }
   </style>
 </head>
@@ -25,7 +27,7 @@
   <div class="search-box">
     <input type="text" id="start" placeholder="출발지 주소">
     <input type="text" id="end" placeholder="도착지 주소">
-    <button onclick="calculateRoute()">경로 검색</button>
+    <button onclick="calculateRoute()">해안도로 경로 검색</button>
   </div>
   <div id="map"></div>
   <script>
@@ -45,6 +47,18 @@
     });
     map.addLayer(routeLayer);
 
+    const poiLayer = new ol.layer.Vector({
+      source: new ol.source.Vector(),
+      style: new ol.style.Style({
+        image: new ol.style.Circle({
+          radius: 6,
+          fill: new ol.style.Fill({ color: 'blue' }),
+          stroke: new ol.style.Stroke({ color: '#fff', width: 2 })
+        })
+      })
+    });
+    map.addLayer(poiLayer);
+
     async function calculateRoute() {
       const start = document.getElementById("start").value;
       const end = document.getElementById("end").value;
@@ -52,11 +66,28 @@
 
       const res = await fetch(`/api/route?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`);
       const geojson = await res.json();
+
       const format = new ol.format.GeoJSON();
-      const feature = format.readFeature(geojson, { featureProjection: 'EPSG:3857' });
+      const features = format.readFeatures(geojson, { featureProjection: 'EPSG:3857' });
       routeLayer.getSource().clear();
-      routeLayer.getSource().addFeature(feature);
-      map.getView().fit(feature.getGeometry().getExtent(), { padding: [30,30,30,30] });
+      routeLayer.getSource().addFeatures(features);
+      if (features.length > 0) {
+        map.getView().fit(routeLayer.getSource().getExtent(), { padding: [30, 30, 30, 30] });
+      }
+
+      // 관광지 마커 표시
+      const lastCoord = features[0].getGeometry().getCoordinates().slice(-1)[0];
+      const coord4326 = ol.proj.toLonLat(lastCoord);
+      const tour = await fetch(`/api/tourspot?lon=${coord4326[0]}&lat=${coord4326[1]}`);
+      const pois = await tour.json();
+      poiLayer.getSource().clear();
+      pois.forEach(p => {
+        const feature = new ol.Feature({
+          geometry: new ol.geom.Point(ol.proj.fromLonLat([p.mapx, p.mapy])),
+          name: p.title
+        });
+        poiLayer.getSource().addFeature(feature);
+      });
     }
   </script>
 </body>
