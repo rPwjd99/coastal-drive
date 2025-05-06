@@ -3,24 +3,52 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>바다따라 - 해안도로 도로경유 길찾기</title>
+  <title>바다따라 - 해안도로 감성 경로</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v7.3.0/ol.css">
   <script src="https://cdn.jsdelivr.net/npm/ol@v7.3.0/dist/ol.js"></script>
   <style>
     body { margin: 0; font-family: sans-serif; }
-    #top-bar { padding: 10px; background: #0077cc; color: white; display: flex; flex-direction: column; gap: 8px; }
+    #top-bar {
+      padding: 10px;
+      background: #0077cc;
+      color: white;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
     #inputs { display: flex; gap: 8px; }
     input { padding: 8px; width: 240px; }
     button { padding: 8px 16px; background: white; border: none; cursor: pointer; }
     #map { width: 100%; height: calc(100vh - 100px); }
+    .autocomplete-suggestions {
+      position: absolute;
+      background: white;
+      border: 1px solid #ccc;
+      z-index: 10;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+    .autocomplete-suggestions div {
+      padding: 6px;
+      cursor: pointer;
+    }
+    .autocomplete-suggestions div:hover {
+      background-color: #efefef;
+    }
   </style>
 </head>
 <body>
   <div id="top-bar">
-    <div><b>🚗 바다따라 - 도로 기반 해안 우회 경로</b></div>
+    <div><b>🚗 바다따라 - 해안도로 감성 경로</b></div>
     <div id="inputs">
-      <input id="start" type="text" placeholder="출발지 주소">
-      <input id="end" type="text" placeholder="도착지 주소">
+      <div style="position:relative;">
+        <input id="start" type="text" placeholder="출발지 검색">
+        <div id="suggest-start" class="autocomplete-suggestions"></div>
+      </div>
+      <div style="position:relative;">
+        <input id="end" type="text" placeholder="도착지 검색">
+        <div id="suggest-end" class="autocomplete-suggestions"></div>
+      </div>
       <button onclick="searchRoute()">경로 검색</button>
     </div>
   </div>
@@ -31,12 +59,37 @@
       layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
       view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
     });
+
     let routeLayer, attractionLayer;
 
     function clearLayers() {
       if (routeLayer) map.removeLayer(routeLayer);
       if (attractionLayer) map.removeLayer(attractionLayer);
     }
+
+    async function autocomplete(inputId, suggestId) {
+      const input = document.getElementById(inputId);
+      const suggestBox = document.getElementById(suggestId);
+      input.addEventListener("input", async () => {
+        const text = input.value.trim();
+        if (text.length < 2) return suggestBox.innerHTML = "";
+        const key = "FA346133-805B-3BB4-B8C2-372973E3A4ED";
+        const url = `https://api.vworld.kr/req/search?service=search&request=autocomplete&query=${encodeURIComponent(text)}&key=${key}`;
+        const res = await fetch(url);
+        const json = await res.json();
+        const items = json.response.result.items;
+        suggestBox.innerHTML = items.map(i => `<div>${i.title}</div>`).join("");
+        suggestBox.querySelectorAll("div").forEach(div => {
+          div.onclick = () => {
+            input.value = div.innerText;
+            suggestBox.innerHTML = "";
+          };
+        });
+      });
+    }
+
+    autocomplete("start", "suggest-start");
+    autocomplete("end", "suggest-end");
 
     async function geocode(address) {
       const key = "FA346133-805B-3BB4-B8C2-372973E3A4ED";
@@ -54,28 +107,16 @@
 
     function findDetourPoint(start, end, coastGeoJSON) {
       const startLat = start[1], startLon = start[0], endLat = end[1], endLon = end[0];
-      const sameLat = [], sameLon = [];
-
-      coastGeoJSON.features.forEach(f => {
-        const [lon, lat] = f.geometry.coordinates;
-        if (Math.abs(lat - startLat) < 0.05 && (endLon > startLon ? lon > startLon : lon < startLon))
-          sameLat.push([lon, lat]);
-        if (Math.abs(lon - startLon) < 0.05 && (endLat > startLat ? lat > startLat : lat < startLat))
-          sameLon.push([lon, lat]);
+      const candidates = coastGeoJSON.features.map(f => f.geometry.coordinates).filter(coord => {
+        const [lon, lat] = coord;
+        return Math.abs(lat - startLat) < 0.1 || Math.abs(lon - startLon) < 0.1;
       });
-
-      function dist(a, b) {
-        return Math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2);
-      }
-
-      let latClose = sameLat.sort((a,b)=>dist(start,a)-dist(start,b))[0];
-      let lonClose = sameLon.sort((a,b)=>dist(start,a)-dist(start,b))[0];
-
-      if (!latClose && !lonClose) return null;
-      if (!latClose) return lonClose;
-      if (!lonClose) return latClose;
-
-      return dist(start, latClose) < dist(start, lonClose) ? latClose : lonClose;
+      candidates.sort((a,b) => {
+        const d1 = (a[0]-start[0])**2 + (a[1]-start[1])**2;
+        const d2 = (b[0]-start[0])**2 + (b[1]-start[1])**2;
+        return d1 - d2;
+      });
+      return candidates[0] || null;
     }
 
     async function getRoute(coords) {
@@ -97,11 +138,11 @@
       const endText = document.getElementById("end").value;
       const start = await geocode(startText);
       const end = await geocode(endText);
-      if (!start || !end) return alert("정확한 주소를 입력해주세요.");
+      if (!start || !end) return alert("정확한 주소 또는 장소명을 입력하세요.");
 
       const coast = await fetchCoastline();
       const waypoint = findDetourPoint(start, end, coast);
-      if (!waypoint) return alert("해안 우회 지점을 찾을 수 없습니다.");
+      if (!waypoint) return alert("우회할 해안선을 찾지 못했습니다.");
 
       const routeGeoJSON = await getRoute([start, waypoint, end]);
       const features = new ol.format.GeoJSON().readFeatures(routeGeoJSON, { featureProjection: 'EPSG:3857' });
@@ -110,7 +151,7 @@
         style: new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#0077cc', width: 4 }) })
       });
       map.addLayer(routeLayer);
-      map.getView().fit(routeLayer.getSource().getExtent(), { padding: [50, 50, 50, 50] });
+      map.getView().fit(routeLayer.getSource().getExtent(), { padding: [50,50,50,50] });
     }
   </script>
 </body>
