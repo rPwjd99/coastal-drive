@@ -1,123 +1,136 @@
+
 <!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>해안도로 경로 + 관광지</title>
+  <title>바다따라 - 해안도로 감성 드라이브</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v7.3.0/ol.css">
   <script src="https://cdn.jsdelivr.net/npm/ol@v7.3.0/dist/ol.js"></script>
   <style>
-    html, body { margin: 0; padding: 0; height: 100%; }
-    #map { width: 100%; height: 100%; }
+    body { margin: 0; font-family: sans-serif; }
+    #top-bar {
+      padding: 10px; background: #0077cc; color: white;
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    #inputs { display: flex; gap: 10px; }
+    input { padding: 8px; width: 250px; }
+    button { padding: 8px 16px; background: white; border: none; cursor: pointer; }
+    #map { width: 100%; height: calc(100vh - 100px); }
   </style>
 </head>
 <body>
-<div id="map"></div>
-<script>
-  // GeoJSON 데이터 (내장)
-  const route = {
-    "type": "FeatureCollection",
-    "features": [
-      {
-        "type": "Feature",
-        "geometry": {
-          "type": "LineString",
-          "coordinates": [
-            [127.2891, 36.4806],
-            [129.4333, 36.4806],
-            [129.1050, 37.5244]
-          ]
-        },
-        "properties": {}
-      }
-    ]
-  };
+  <div id="top-bar">
+    <div><b>🚘 해안도로 감성 드라이브 추천 서비스</b></div>
+    <div id="inputs">
+      <input id="start" type="text" placeholder="출발지 주소" />
+      <input id="end" type="text" placeholder="도착지 주소" />
+      <button onclick="searchRoute()">경로 검색</button>
+    </div>
+  </div>
+  <div id="map"></div>
+  <script>
+    const map = new ol.Map({
+      target: 'map',
+      layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
+      view: new ol.View({
+        center: ol.proj.fromLonLat([127.5, 36.5]),
+        zoom: 7
+      })
+    });
+    let routeLayer, markerLayer, attractionLayer;
 
-  // 관광지 마커
-  const attractions = [
-    {
-      name: "설악산 국립공원",
-      image: "https://korean.visitkorea.or.kr/resources/images/main/main_2021/bg_main_01.jpg",
-      lon: 128.4656,
-      lat: 38.1646
-    },
-    {
-      name: "속초해수욕장",
-      image: "https://korean.visitkorea.or.kr/resources/images/main/main_2021/bg_main_03.jpg",
-      lon: 128.5925,
-      lat: 38.1810
+    function clearLayers() {
+      [routeLayer, markerLayer, attractionLayer].forEach(l => l && map.removeLayer(l));
     }
-  ];
 
-  const map = new ol.Map({
-    target: 'map',
-    layers: [
-      new ol.layer.Tile({ source: new ol.source.OSM() }),
-      new ol.layer.Vector({
-        source: new ol.source.Vector({
-          features: new ol.format.GeoJSON().readFeatures(route, {
-            featureProjection: 'EPSG:3857'
-          })
-        }),
+    async function geocode(address) {
+      const key = "FA346133-805B-3BB4-B8C2-372973E3A4ED";
+      const url = `https://api.vworld.kr/req/address?service=address&request=getcoord&format=json&type=road&address=${encodeURIComponent(address)}&key=${key}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      const {x, y} = json.response.result?.point ?? {};
+      return x && y ? [parseFloat(x), parseFloat(y)] : null;
+    }
+
+    async function getRoute(startCoord, endCoord) {
+      const apiKey = "5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953";
+      const res = await fetch("https://api.openrouteservice.org/v2/directions/driving-car/geojson", {
+        method: "POST",
+        headers: {
+          "Authorization": apiKey,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ coordinates: [startCoord, endCoord] })
+      });
+      return await res.json();
+    }
+
+    async function getAttractions(centerLon, centerLat) {
+      const serviceKey = "e1tU33wjMx2nynKjH8yDBm/S4YNne6B8mpCOWtzMH9TSONF71XG/xAwPqyv1fANpgeOvbPY+Le+gM6cYCnWV8w==";
+      const url = `https://apis.data.go.kr/B551011/KorService1/locationBasedList1?MobileOS=ETC&MobileApp=TestApp&mapX=${centerLon}&mapY=${centerLat}&radius=7000&arrange=E&numOfRows=10&pageNo=1&_type=json&serviceKey=${encodeURIComponent(serviceKey)}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      return json.response.body.items.item ?? [];
+    }
+
+    async function searchRoute() {
+      clearLayers();
+      const startText = document.getElementById("start").value;
+      const endText = document.getElementById("end").value;
+      const start = await geocode(startText);
+      const end = await geocode(endText);
+      if (!start || !end) return alert("주소를 정확히 입력하세요");
+
+      const routeGeoJSON = await getRoute(start, end);
+      const routeFeature = new ol.format.GeoJSON().readFeatures(routeGeoJSON, {
+        featureProjection: 'EPSG:3857'
+      });
+      routeLayer = new ol.layer.Vector({
+        source: new ol.source.Vector({ features: routeFeature }),
         style: new ol.style.Style({
-          stroke: new ol.style.Stroke({
-            color: '#0077cc',
-            width: 4
-          })
+          stroke: new ol.style.Stroke({ color: 'blue', width: 4 })
         })
-      })
-    ],
-    view: new ol.View({
-      center: ol.proj.fromLonLat([127.5, 36.5]),
-      zoom: 7
-    })
-  });
+      });
+      map.addLayer(routeLayer);
+      const vectorSource = new ol.source.Vector({ features: routeFeature });
+      map.getView().fit(vectorSource.getExtent(), { padding: [50, 50, 50, 50] });
 
-  // 경로 줌 맞춤
-  const extent = new ol.source.Vector({
-    features: new ol.format.GeoJSON().readFeatures(route, {
-      featureProjection: 'EPSG:3857'
-    })
-  }).getExtent();
-  map.getView().fit(extent, { padding: [50, 50, 50, 50] });
+      const [cx, cy] = [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2];
+      const attractions = await getAttractions(cx, cy);
+      const features = attractions.map(item => {
+        const f = new ol.Feature({
+          geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(item.mapx), parseFloat(item.mapy)]))
+        });
+        f.setStyle(new ol.style.Style({
+          image: new ol.style.Icon({ src: "https://cdn-icons-png.flaticon.com/512/854/854878.png", scale: 0.05 })
+        }));
+        f.set("info", `<b>${item.title}</b><br><img src="${item.firstimage || ''}" width="180px">`);
+        return f;
+      });
+      attractionLayer = new ol.layer.Vector({
+        source: new ol.source.Vector({ features })
+      });
+      map.addLayer(attractionLayer);
 
-  // 관광지 마커
-  attractions.forEach(attr => {
-    const feature = new ol.Feature({
-      geometry: new ol.geom.Point(ol.proj.fromLonLat([attr.lon, attr.lat]))
-    });
-    feature.setStyle(new ol.style.Style({
-      image: new ol.style.Icon({
-        src: "https://cdn-icons-png.flaticon.com/512/854/854878.png",
-        scale: 0.05
-      })
-    }));
-    feature.set("info", `<b>${attr.name}</b><br><img src='${attr.image}' width='200px'>`);
+      const overlay = new ol.Overlay({
+        element: document.createElement("div"),
+        positioning: "bottom-center",
+        stopEvent: false,
+        offset: [0, -30]
+      });
+      map.addOverlay(overlay);
 
-    const vectorLayer = new ol.layer.Vector({
-      source: new ol.source.Vector({ features: [feature] })
-    });
-    map.addLayer(vectorLayer);
-  });
-
-  // 팝업
-  const overlay = new ol.Overlay({
-    element: document.createElement("div"),
-    positioning: "bottom-center",
-    stopEvent: false,
-    offset: [0, -30]
-  });
-  map.addOverlay(overlay);
-
-  map.on("click", evt => {
-    map.forEachFeatureAtPixel(evt.pixel, feature => {
-      const info = feature.get("info");
-      if (info) {
-        const el = overlay.getElement();
-        el.innerHTML = `<div style='background:white;padding:10px;border:1px solid #ccc;'>${info}</div>`;
-        overlay.setPosition(evt.coordinate);
-      }
-    });
-  });
-</script>
+      map.on("click", evt => {
+        map.forEachFeatureAtPixel(evt.pixel, f => {
+          const info = f.get("info");
+          if (info) {
+            const el = overlay.getElement();
+            el.innerHTML = `<div style='background:white;padding:10px;border:1px solid #ccc;'>${info}</div>`;
+            overlay.setPosition(evt.coordinate);
+          }
+        });
+      });
+    }
+  </script>
 </body>
 </html>
