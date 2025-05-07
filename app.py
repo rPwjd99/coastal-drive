@@ -1,79 +1,51 @@
+# app.py
 from flask import Flask, request, jsonify, render_template
-from flask_cors import CORS
 import requests
-import urllib.parse
+import os
 
-def correct_address(address):
-    # 예외 주소 사전
-    correction_map = {
-        "한누리대로 2130": "세종특별자치시 한누리대로 2130",
-        "세종시청": "세종특별자치시 보람동 한누리대로 2130",
-        "보람동 218": "세종특별자치시 보람동 218",
-        "속초시청": "강원도 속초시 중앙동 중앙로 183",
-        "중앙동 469-6": "강원도 속초시 중앙동 469-6"
-    }
+app = Flask(__name__)
 
-    if address in correction_map:
-        return correction_map[address]
-
-    # 세종시 자동 보정
-    if "세종" in address and "세종특별자치시" not in address:
-        return "세종특별자치시 " + address
-    # 속초시 자동 보정
-    if "속초" in address and "강원도" not in address:
-        return "강원도 " + address
-
-    return address
+GOOGLE_API_KEY = "AIzaSyC9MSD-WhkqK_Og5YdVYfux21xiRjy2q1M"
 
 def geocode_address(address):
-    base_url = "https://naveropenapi.apigw.ntruss.com/map-geocode/v2/geocode"
-    headers = {
-        "X-NCP-APIGW-API-KEY-ID": "vsdzf1f4n5",
-        "X-NCP-APIGW-API-KEY": "0gzctO51PUTVv0gUZU025JYNHPTmVzLS9sGbfYBM"
+    url = "https://maps.googleapis.com/maps/api/geocode/json"
+    params = {"address": address, "key": GOOGLE_API_KEY}
+    response = requests.get(url, params=params)
+    data = response.json()
+    if data.get("status") == "OK":
+        loc = data["results"][0]["geometry"]["location"]
+        return loc["lat"], loc["lng"]
+    return None, None
+
+def get_route(start_coords, end_coords):
+    url = "https://maps.googleapis.com/maps/api/directions/json"
+    params = {
+        "origin": f"{start_coords[0]},{start_coords[1]}",
+        "destination": f"{end_coords[0]},{end_coords[1]}",
+        "key": GOOGLE_API_KEY,
+        "mode": "driving"
     }
+    response = requests.get(url, params=params)
+    return response.json()
 
-    def request_geocode(addr):
-        query = urllib.parse.quote(addr)
-        url = f"{base_url}?query={query}"
-        response = requests.get(url, headers=headers)
-        try:
-            result = response.json()
-            if result.get("addresses"):
-                lat = float(result["addresses"][0]["y"])
-                lon = float(result["addresses"][0]["x"])
-                return lat, lon, addr
-        except Exception as e:
-            print(f"API 응답 오류: {e}")
-        return None
+@app.route("/")
+def index():
+    return render_template("index.html")
 
-    # 1차 시도
-    result = request_geocode(address)
-    if result:
-        return result
+@app.route("/api/route", methods=["POST"])
+def route():
+    data = request.json
+    start = data.get("start")
+    end = data.get("end")
 
-    # 2차: 자동 보정 주소로 재시도
-    corrected = correct_address(address)
-    if corrected != address:
-        result = request_geocode(corrected)
-        if result:
-            return result
+    start_lat, start_lng = geocode_address(start)
+    end_lat, end_lng = geocode_address(end)
 
-    # 3차: 실패 응답
-    return None
+    if not all([start_lat, start_lng, end_lat, end_lng]):
+        return jsonify({"error": "주소를 확인할 수 없습니다."}), 400
 
-# 예시 테스트
+    route_data = get_route((start_lat, start_lng), (end_lat, end_lng))
+    return jsonify(route_data)
+
 if __name__ == "__main__":
-    test_addresses = [
-        "한누리대로 2130",
-        "세종시청",
-        "보람동 218",
-        "속초시청",
-        "중앙동 469-6"
-    ]
-    for addr in test_addresses:
-        print(f"\n[테스트 주소] {addr}")
-        result = geocode_address(addr)
-        if result:
-            print(f"  ↳ 성공: 위도={result[0]}, 경도={result[1]}, 주소={result[2]}")
-        else:
-            print("  ↳ 실패: 주소를 찾을 수 없습니다.")
+    app.run(host="0.0.0.0", port=5000, debug=True)
