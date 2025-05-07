@@ -1,133 +1,39 @@
+<!-- templates/index.html -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <title>바다따라: 해안도로 경유 루트</title>
-  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
-  <style>
-    #map {
-      width: 100%;
-      height: 80vh;
-    }
-    body {
-      font-family: Arial, sans-serif;
-      margin: 10px;
-    }
-    #inputs {
-      margin-bottom: 10px;
-    }
-    input {
-      width: 300px;
-      padding: 5px;
-      margin-right: 10px;
-    }
-    button {
-      padding: 5px 10px;
-    }
-  </style>
-</head>
-<body>
-  <h2>🏝 바다따라: 해안도로 경유 루트 찾기</h2>
-  <div id="inputs">
-    <input type="text" id="start" placeholder="출발지 주소 예: 세종특별자치시 도움5로 20" />
-    <input type="text" id="end" placeholder="도착지 주소 예: 강원도 속초시 중앙로 183" />
-    <button onclick="searchRoute()">해안도로 검색</button>
-  </div>
-  <div id="map"></div>
-
+  <meta charset="UTF-8">
+  <title>Coastal Drive - 주소 검색 테스트</title>
   <script>
-    let map = new ol.Map({
-      target: 'map',
-      layers: [
-        new ol.layer.Tile({
-          source: new ol.source.OSM(),
-        })
-      ],
-      view: new ol.View({
-        center: ol.proj.fromLonLat([127.7669, 35.9078]),
-        zoom: 7
-      })
-    });
+    async function searchAddress() {
+      const addrInput = document.getElementById("address");
+      const resultDiv = document.getElementById("result");
+      resultDiv.innerHTML = "<p>검색 중...</p>";
 
-    function searchRoute() {
-      const start = document.getElementById("start").value;
-      const end = document.getElementById("end").value;
+      const address = addrInput.value;
+      const res = await fetch(`/api/geocode?address=${encodeURIComponent(address)}`);
+      const data = await res.json();
 
-      fetch("/api/route", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ start, end })
-      })
-      .then(response => response.json())
-      .then(data => {
-        if (data.error) {
-          alert("🚫 서버 오류 또는 주소 해석 실패: " + data.error);
-          return;
-        }
-
-        const routeLayer = new ol.layer.Vector({
-          source: new ol.source.Vector({
-            features: new ol.format.GeoJSON().readFeatures(data.route, {
-              featureProjection: "EPSG:3857"
-            })
-          }),
-          style: new ol.style.Style({
-            stroke: new ol.style.Stroke({
-              color: "#0000FF",
-              width: 4
-            })
-          })
-        });
-
-        map.getLayers().getArray().slice(1).forEach(layer => map.removeLayer(layer));
-        map.addLayer(routeLayer);
-
-        const extent = routeLayer.getSource().getExtent();
-        map.getView().fit(extent, { padding: [50, 50, 50, 50] });
-
-        if (data.tourspots && data.tourspots.length > 0) {
-          const tourLayer = new ol.layer.Vector({
-            source: new ol.source.Vector(),
-            style: new ol.style.Style({
-              image: new ol.style.Circle({
-                radius: 6,
-                fill: new ol.style.Fill({ color: 'red' }),
-                stroke: new ol.style.Stroke({ color: 'white', width: 1 })
-              })
-            })
-          });
-
-          data.tourspots.forEach(spot => {
-            const feature = new ol.Feature({
-              geometry: new ol.geom.Point(ol.proj.fromLonLat([spot.mapx, spot.mapy])),
-              name: spot.title,
-              address: spot.addr1,
-              image: spot.firstimage
-            });
-            tourLayer.getSource().addFeature(feature);
-          });
-
-          map.addLayer(tourLayer);
-
-          map.on('singleclick', function (evt) {
-            map.forEachFeatureAtPixel(evt.pixel, function (feature) {
-              const name = feature.get('name');
-              const addr = feature.get('address');
-              const img = feature.get('image');
-              if (name) {
-                alert(`📍 관광지: ${name}\n주소: ${addr}\n${img ? '사진 있음' : ''}`);
-              }
-            });
-          });
-        }
-      })
-      .catch(err => {
-        alert("요청 실패: " + err);
-      });
+      if (data.status === "success") {
+        resultDiv.innerHTML = `
+          <p><strong>도로명 주소:</strong> ${data.roadAddress}</p>
+          <p><strong>지번 주소:</strong> ${data.jibunAddress}</p>
+          <p><strong>좌표:</strong> 위도 ${data.lat}, 경도 ${data.lon}</p>
+        `;
+      } else if (data.status === "retry") {
+        resultDiv.innerHTML = `
+          <p>검색 실패. 혹시 <strong>'${data.suggested}'</strong> 를 원하셨나요?</p>
+        `;
+      } else {
+        resultDiv.innerHTML = `<p>검색 실패: ${data.message}</p>`;
+      }
     }
   </script>
+</head>
+<body>
+  <h2>주소 검색 테스트</h2>
+  <input type="text" id="address" value="세종특별자치시 한누리대로 2130" size="50">
+  <button onclick="searchAddress()">주소 검색</button>
+  <div id="result"></div>
 </body>
 </html>
