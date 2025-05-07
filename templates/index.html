@@ -1,39 +1,42 @@
-<!-- templates/index.html -->
 <!DOCTYPE html>
-<html lang="ko">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <title>Coastal Drive - 주소 검색 테스트</title>
-  <script>
-    async function searchAddress() {
-      const addrInput = document.getElementById("address");
-      const resultDiv = document.getElementById("result");
-      resultDiv.innerHTML = "<p>검색 중...</p>";
-
-      const address = addrInput.value;
-      const res = await fetch(`/api/geocode?address=${encodeURIComponent(address)}`);
-      const data = await res.json();
-
-      if (data.status === "success") {
-        resultDiv.innerHTML = `
-          <p><strong>도로명 주소:</strong> ${data.roadAddress}</p>
-          <p><strong>지번 주소:</strong> ${data.jibunAddress}</p>
-          <p><strong>좌표:</strong> 위도 ${data.lat}, 경도 ${data.lon}</p>
-        `;
-      } else if (data.status === "retry") {
-        resultDiv.innerHTML = `
-          <p>검색 실패. 혹시 <strong>'${data.suggested}'</strong> 를 원하셨나요?</p>
-        `;
-      } else {
-        resultDiv.innerHTML = `<p>검색 실패: ${data.message}</p>`;
-      }
-    }
-  </script>
+    <meta charset="utf-8">
+    <title>Coastal Drive</title>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
 </head>
 <body>
-  <h2>주소 검색 테스트</h2>
-  <input type="text" id="address" value="세종특별자치시 한누리대로 2130" size="50">
-  <button onclick="searchAddress()">주소 검색</button>
-  <div id="result"></div>
+    <h2>출발지와 도착지 주소를 입력하세요</h2>
+    <input id="start" type="text" placeholder="출발지 예: 세종특별자치시 한누리대로 2130">
+    <input id="end" type="text" placeholder="도착지 예: 강원도 속초시 중앙로 183">
+    <button onclick="search()">주소 확인</button>
+
+    <div id="result"></div>
+
+    <script>
+        async function search() {
+            const start = document.getElementById("start").value;
+            const end = document.getElementById("end").value;
+
+            try {
+                const res1 = await axios.post('/geocode', { address: start });
+                const res2 = await axios.post('/geocode', { address: end });
+
+                if (res1.data.success && res2.data.success) {
+                    document.getElementById("result").innerHTML = 
+                        `<p><b>출발지:</b> ${res1.data.corrected} (${res1.data.lat}, ${res1.data.lon})</p>
+                         <p><b>도착지:</b> ${res2.data.corrected} (${res2.data.lat}, ${res2.data.lon})</p>`;
+                    // 이후 경로 계산 API 호출 등 추가
+                } else {
+                    document.getElementById("result").innerHTML = `
+                        <p style="color:red;">주소 해석 실패:
+                        ${!res1.data.success ? '출발지 ' : ''}${!res2.data.success ? '도착지 ' : ''}</p>`;
+                }
+
+            } catch (err) {
+                document.getElementById("result").innerHTML = `<p style="color:red;">서버 오류 발생</p>`;
+            }
+        }
+    </script>
 </body>
 </html>
