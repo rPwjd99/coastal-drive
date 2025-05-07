@@ -1,71 +1,136 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
+import os
 import requests
+import geopandas as gpd
+from shapely.geometry import Point
 import json
 
 app = Flask(__name__)
 CORS(app)
 
-# NAVER API 키
-NAVER_CLIENT_ID = "vsdzf1f4n5"
-NAVER_CLIENT_SECRET = "0gzctO51PUTVv0gUZU025JYNHPTmVzLS9sGbfYBM"
+# API 키는 Render 환경변수로 설정
+VWORLD_KEY = os.environ.get("VWORLD_KEY")
+ORS_KEY = os.environ.get("ORS_KEY")
+TOURAPI_KEY = os.environ.get("TOURAPI_KEY")
 
-# OpenRouteService API 키
-ORS_API_KEY = "5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953"
+# 해안선 데이터 로드
+COASTLINE_PATH = "해안선.geojson"
+coastline = gpd.read_file(COASTLINE_PATH)
 
-def geocode_naver(address):
-    url = "https://naveropenapi.apigw.ntruss.com/map-geocode/v2/geocode"
-    headers = {
-        "X-NCP-APIGW-API-KEY-ID": NAVER_CLIENT_ID,
-        "X-NCP-APIGW-API-KEY": NAVER_CLIENT_SECRET
+# 주소 → 좌표 변환 (도로명 주소만 지원)
+def geocode(address):
+    url = f"https://api.vworld.kr/req/address"
+    params = {
+        "service": "address",
+        "request": "getcoord",
+        "format": "json",
+        "type": "road",
+        "address": address,
+        "key": VWORLD_KEY
     }
-    params = {"query": address}
+    response = requests.get(url, params=params)
+    data = response.json()
+    try:
+        point = data['response']['result']['point']
+        return float(point['y']), float(point['x'])  # lat, lon
+    except:
+        return None
 
-    res = requests.get(url, headers=headers, params=params)
-    if res.status_code == 200:
-        data = res.json()
-        if data["addresses"]:
-            x = float(data["addresses"][0]["x"])  # 경도
-            y = float(data["addresses"][0]["y"])  # 위도
-            return [x, y]
-    return None
+# 좌표 간 거리 계산
+def haversine(lat1, lon1, lat2, lon2):
+    from math import radians, cos, sin, asin, sqrt
+    R = 6371
+    dlat = radians(lat2 - lat1)
+    dlon = radians(lon2 - lon1)
+    a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
+    return R * 2 * asin(sqrt(a))
 
-def get_route(start, end):
-    url = "https://api.openrouteservice.org/v2/directions/driving-car/geojson"
-    headers = {
-        "Authorization": ORS_API_KEY,
-        "Content-Type": "application/json"
+# 해안선 중 중간 지점 찾기 (위도/경도 기반)
+def find_midpoint(start, end):
+    lat1, lon1 = start
+    lat2, lon2 = end
+    mid_lat = (lat1 + lat2) / 2
+    mid_lon = (lon1 + lon2) / 2
+    return mid_lat, mid_lon
+
+# 해안과 가장 가까운 점 반환
+def nearest_coast_point(mid_lat, mid_lon):
+    coast_pts = coastline.geometry.centroid
+    coast_coords = [(pt.y, pt.x) for pt in coast_pts]
+    distances = [haversine(mid_lat, mid_lon, y, x) for y, x in coast_coords]
+    return coast_coords[distances.index(min(distances))]
+
+# 경로 계산
+def get_route(coords):
+    headers = {"Authorization": ORS_KEY}
+    body = {
+        "coordinates": coords,
+        "format": "geojson"
     }
-    payload = {
-        "coordinates": [start, end]
+    response = requests.post(
+        "https://api.openrouteservice.org/v2/directions/driving-car/geojson",
+        headers=headers, json=body
+    )
+    return response.json()
+
+# 관광지 조회
+def get_tourspots(lat, lon):
+    url = "https://apis.data.go.kr/B551011/KorService1/locationBasedList1"
+    params = {
+        "MobileOS": "ETC",
+        "MobileApp": "CoastalDriveApp",
+        "serviceKey": TOURAPI_KEY,
+        "mapX": lon,
+        "mapY": lat,
+        "radius": 5000,
+        "listYN": "Y",
+        "arrange": "A",
+        "numOfRows": 10,
+        "pageNo": 1,
+        "_type": "json"
     }
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 200:
-        return response.json()
-    return None
+    response = requests.get(url, params=params)
+    items = response.json().get("response", {}).get("body", {}).get("items", {}).get("item", [])
+    results = []
+    for item in items:
+        results.append({
+            "title": item.get("title"),
+            "addr": item.get("addr1"),
+            "image": item.get("firstimage", ""),
+            "lat": item.get("mapy"),
+            "lon": item.get("mapx")
+        })
+    return results
 
 @app.route('/')
-def home():
+def index():
     return render_template('index.html')
 
 @app.route('/api/route', methods=['POST'])
 def route():
     data = request.get_json()
-    origin = data.get("origin")
-    destination = data.get("destination")
+    start_addr = data.get("start")
+    end_addr = data.get("end")
+    
+    start = geocode(start_addr)
+    end = geocode(end_addr)
+    
+    if not start or not end:
+        return jsonify({"error": "주소 해석 실패"}), 400
 
-    start_coord = geocode_naver(origin)
-    end_coord = geocode_naver(destination)
+    mid_lat, mid_lon = find_midpoint(start, end)
+    coast = nearest_coast_point(mid_lat, mid_lon)
 
-    if not start_coord or not end_coord:
-        return jsonify({"error": "주소 변환 실패"}), 400
+    coords = [[start[1], start[0]], [coast[1], coast[0]], [end[1], end[0]]]
+    route_geojson = get_route(coords)
+    tourspots = get_tourspots(end[0], end[1])
 
-    route_data = get_route(start_coord, end_coord)
-
-    if route_data:
-        return jsonify(route_data)
-    else:
-        return jsonify({"error": "경로 계산 실패"}), 500
+    return jsonify({
+        "route": route_geojson,
+        "spots": tourspots
+    })
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=True)
