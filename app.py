@@ -2,7 +2,7 @@ from flask import Flask, render_template, request, jsonify
 import requests
 import os
 import json
-from shapely.geometry import shape, Point
+from shapely.geometry import Point
 import geopandas as gpd
 
 app = Flask(__name__)
@@ -11,7 +11,6 @@ VWORLD_API_KEY = os.environ.get("VWORLD_API_KEY")
 ORS_API_KEY = os.environ.get("ORS_API_KEY")
 TOURAPI_KEY = os.environ.get("TOURAPI_KEY")
 
-# Load coastline GeoJSON (EPSG:4326 assumed)
 coast_gdf = gpd.read_file("static/해안선.geojson")
 
 @app.route("/")
@@ -20,43 +19,14 @@ def index():
 
 
 def geocode(address):
-    url = f"https://api.vworld.kr/req/address?service=address&request=getcoord&format=json&type=road&address={address}&key={VWORLD_API_KEY}"
-    res = requests.get(url)
-    data = res.json()
+    url = f"https://api.vworld.kr/req/address?service=address&request=getcoord&format=json&type=both&address={address}&key={VWORLD_API_KEY}"
     try:
-        x = float(data['response']['result']['point']['x'])
-        y = float(data['response']['result']['point']['y'])
-        return [x, y]  # [lon, lat]
+        res = requests.get(url)
+        data = res.json()
+        point = data['response']['result'][0]['point']
+        return [float(point['x']), float(point['y'])]
     except:
         return None
-
-
-def find_nearest_coast_point(start, end):
-    start_pt = Point(start)
-    end_pt = Point(end)
-    mid_lat = (start[1] + end[1]) / 2
-    mid_lon = (start[0] + end[0]) / 2
-
-    coast_coords = []
-    for geom in coast_gdf.geometry:
-        if geom.geom_type == 'MultiLineString':
-            for line in geom:
-                coast_coords.extend(list(line.coords))
-        elif geom.geom_type == 'LineString':
-            coast_coords.extend(list(geom.coords))
-
-    candidates = []
-    for lon, lat in coast_coords:
-        lat_dist = abs(lat - start[1])
-        lon_dist = abs(lon - start[0])
-        total_dist = start_pt.distance(Point(lon, lat)) + Point(lon, lat).distance(end_pt)
-        candidates.append(((lon, lat), total_dist, lat_dist, lon_dist))
-
-    candidates.sort(key=lambda x: x[1])
-    for (lon, lat), _, _, _ in candidates:
-        if test_route([start, [lon, lat], end]):
-            return [lon, lat]
-    return None
 
 
 def test_route(coords):
@@ -68,6 +38,29 @@ def test_route(coords):
         return res.status_code == 200
     except:
         return False
+
+
+def find_nearest_coast_point(start, end):
+    start_pt = Point(start)
+    end_pt = Point(end)
+    coast_coords = []
+    for geom in coast_gdf.geometry:
+        if geom.geom_type == 'MultiLineString':
+            for line in geom:
+                coast_coords.extend(list(line.coords))
+        elif geom.geom_type == 'LineString':
+            coast_coords.extend(list(geom.coords))
+
+    candidates = []
+    for lon, lat in coast_coords:
+        total_dist = start_pt.distance(Point(lon, lat)) + Point(lon, lat).distance(end_pt)
+        candidates.append(((lon, lat), total_dist))
+
+    candidates.sort(key=lambda x: x[1])
+    for (lon, lat), _ in candidates:
+        if test_route([start, [lon, lat], end]):
+            return [lon, lat]
+    return None
 
 
 def get_route(coords):
@@ -84,8 +77,9 @@ def route():
     end_addr = request.args.get("end")
     start_coord = geocode(start_addr)
     end_coord = geocode(end_addr)
+
     if not start_coord or not end_coord:
-        return jsonify({"error": "주소 변환 실패"}), 400
+        return jsonify({"error": "주소 변환 실패", "start": start_addr, "end": end_addr}), 400
 
     waypoint = find_nearest_coast_point(start_coord, end_coord)
     coords = [start_coord, waypoint, end_coord] if waypoint else [start_coord, end_coord]
