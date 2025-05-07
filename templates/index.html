@@ -1,94 +1,131 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <title>바다따라: 해안도로 감성 드라이브</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="UTF-8">
+  <title>바다따라 - 해안도로 경로 추천</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
+  <link href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" rel="stylesheet" />
   <style>
-    body { margin: 0; font-family: sans-serif; }
-    #map { width: 100vw; height: 90vh; }
+    body {
+      font-family: sans-serif;
+      margin: 0;
+      padding: 0;
+    }
     #controls {
       padding: 10px;
-      background: white;
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-      justify-content: center;
-      align-items: center;
+      background: #f2f2f2;
     }
-    input { padding: 8px; width: 200px; }
-    button { padding: 8px 12px; font-weight: bold; }
+    #map {
+      height: 90vh;
+      width: 100%;
+    }
+    input {
+      width: 200px;
+      padding: 5px;
+      margin-right: 10px;
+    }
+    button {
+      padding: 6px 12px;
+    }
   </style>
 </head>
 <body>
   <div id="controls">
-    <input id="start" placeholder="출발지 주소 입력" />
-    <input id="end" placeholder="도착지 주소 입력" />
-    <button onclick="searchRoute()">해안도로 검색</button>
+    <input id="start" placeholder="출발지 주소" />
+    <input id="end" placeholder="도착지 주소" />
+    <button onclick="searchRoute()">해안도로 경로 검색</button>
   </div>
   <div id="map"></div>
 
   <script>
     const map = new ol.Map({
       target: 'map',
-      layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
-      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.3]), zoom: 7 })
+      layers: [
+        new ol.layer.Tile({
+          source: new ol.source.OSM()
+        })
+      ],
+      view: new ol.View({
+        center: ol.proj.fromLonLat([127.5, 36.2]),
+        zoom: 7
+      })
     });
 
-    let routeLayer = null;
-    let markerLayer = null;
+    const routeLayer = new ol.layer.Vector({
+      source: new ol.source.Vector(),
+      style: new ol.style.Style({
+        stroke: new ol.style.Stroke({ color: '#0077cc', width: 4 })
+      })
+    });
+    map.addLayer(routeLayer);
 
-    function drawRoute(geojson) {
-      if (routeLayer) map.removeLayer(routeLayer);
-      const format = new ol.format.GeoJSON();
-      const feature = format.readFeature(geojson, { featureProjection: 'EPSG:3857' });
-      routeLayer = new ol.layer.Vector({
-        source: new ol.source.Vector({ features: [feature] }),
-        style: new ol.style.Style({ stroke: new ol.style.Stroke({ color: 'blue', width: 4 }) })
-      });
-      map.addLayer(routeLayer);
-      map.getView().fit(feature.getGeometry(), { padding: [20, 20, 20, 20] });
-    }
+    const markerLayer = new ol.layer.Vector({
+      source: new ol.source.Vector()
+    });
+    map.addLayer(markerLayer);
 
-    function addTourSpots(spots) {
-      if (markerLayer) map.removeLayer(markerLayer);
-      const features = spots.map(spot => {
-        const coord = ol.proj.fromLonLat([parseFloat(spot.mapx), parseFloat(spot.mapy)]);
-        const feature = new ol.Feature(new ol.geom.Point(coord));
-        feature.setStyle(new ol.style.Style({
-          image: new ol.style.Circle({ radius: 6, fill: new ol.style.Fill({ color: 'red' }) }),
-        }));
-        feature.set('name', spot.title);
-        return feature;
+    function addMarker(coord, text) {
+      const feature = new ol.Feature({
+        geometry: new ol.geom.Point(ol.proj.fromLonLat(coord)),
+        name: text
       });
-      markerLayer = new ol.layer.Vector({
-        source: new ol.source.Vector({ features }),
-      });
-      map.addLayer(markerLayer);
+      feature.setStyle(new ol.style.Style({
+        image: new ol.style.Circle({
+          radius: 6,
+          fill: new ol.style.Fill({ color: '#FF0000' }),
+          stroke: new ol.style.Stroke({ color: '#fff', width: 2 })
+        }),
+        text: new ol.style.Text({
+          text: text,
+          offsetY: -15,
+          fill: new ol.style.Fill({ color: '#000' }),
+          stroke: new ol.style.Stroke({ color: '#fff', width: 2 })
+        })
+      }));
+      markerLayer.getSource().addFeature(feature);
     }
 
     async function searchRoute() {
-      const start = document.getElementById('start').value;
-      const end = document.getElementById('end').value;
-      if (!start || !end) {
-        alert('출발지와 도착지를 입력하세요.');
+      const startAddr = document.getElementById('start').value;
+      const endAddr = document.getElementById('end').value;
+
+      if (!startAddr || !endAddr) {
+        alert("출발지와 목적지를 모두 입력하세요.");
         return;
       }
 
-      try {
-        const res = await fetch(`/api/route?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`);
-        const data = await res.json();
-        if (data.error) throw new Error(data.error);
-        drawRoute(data.route);
-
-        const spotRes = await fetch(`/api/tourspot?end=${encodeURIComponent(end)}`);
-        const spotData = await spotRes.json();
-        if (spotData.length) addTourSpots(spotData);
-      } catch (err) {
-        alert(`에러 발생: ${err.message}`);
+      const response = await fetch(`/api/route?start=${encodeURIComponent(startAddr)}&end=${encodeURIComponent(endAddr)}`);
+      if (!response.ok) {
+        alert("경로를 계산할 수 없습니다.");
+        return;
       }
+      const geojson = await response.json();
+
+      const format = new ol.format.GeoJSON();
+      const features = format.readFeatures(geojson, {
+        featureProjection: 'EPSG:3857'
+      });
+      routeLayer.getSource().clear();
+      routeLayer.getSource().addFeatures(features);
+
+      // 중심 위치 이동
+      const extent = routeLayer.getSource().getExtent();
+      map.getView().fit(extent, { padding: [50, 50, 50, 50], maxZoom: 12 });
+
+      // 관광지 검색
+      const endCoord = geojson.features[geojson.features.length - 1].geometry.coordinates.slice(-1)[0];
+      const lon = endCoord[0];
+      const lat = endCoord[1];
+
+      fetch(`/api/tourspot?lat=${lat}&lon=${lon}`)
+        .then(res => res.json())
+        .then(data => {
+          markerLayer.getSource().clear();
+          data.forEach(item => {
+            addMarker([item.mapx, item.mapy], item.title);
+          });
+        });
     }
   </script>
 </body>
