@@ -1,91 +1,108 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8">
-  <title>바다따라: 해안도로 경유 길찾기</title>
-  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
-  <style>
-    body { font-family: sans-serif; margin: 0; padding: 0; }
-    #controls {
-      padding: 10px;
-      display: flex;
-      gap: 10px;
-      background: #f0f0f0;
-    }
-    input { padding: 8px; width: 250px; }
-    button { padding: 8px 15px; }
-    #map { width: 100%; height: calc(100vh - 60px); }
-  </style>
+    <meta charset="UTF-8">
+    <title>Coastal Drive Planner</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+
+        #map {
+            width: 100%;
+            height: 80vh;
+        }
+
+        #controls {
+            padding: 20px;
+            background: #f0f0f0;
+        }
+
+        input {
+            padding: 8px;
+            width: 300px;
+            margin-right: 10px;
+        }
+
+        button {
+            padding: 8px 16px;
+        }
+    </style>
 </head>
 <body>
-  <div id="controls">
-    <input id="start" placeholder="출발지 (주소 또는 장소명)">
-    <input id="end" placeholder="도착지 (주소 또는 장소명)">
-    <button onclick="findRoute()">경로 검색</button>
-  </div>
-  <div id="map"></div>
+    <div id="controls">
+        <input id="origin" type="text" placeholder="출발지 주소 (예: 세종특별자치시청)">
+        <input id="destination" type="text" placeholder="도착지 주소 (예: 속초시청)">
+        <button onclick="getRoute()">경로 탐색</button>
+    </div>
+    <div id="map"></div>
 
-  <script>
-    const map = new ol.Map({
-      target: 'map',
-      layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
-      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.3]), zoom: 8 })
-    });
-
-    const vectorLayer = new ol.layer.Vector({ source: new ol.source.Vector() });
-    map.addLayer(vectorLayer);
-
-    function findRoute() {
-      const start = document.getElementById('start').value;
-      const end = document.getElementById('end').value;
-      if (!start || !end) return alert("출발지와 도착지를 모두 입력하세요.");
-
-      fetch('/api/route', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ start, end })
-      })
-      .then(res => res.json())
-      .then(data => {
-        vectorLayer.getSource().clear();
-
-        const route = new ol.format.GeoJSON().readFeature(data, {
-          featureProjection: 'EPSG:3857'
+    <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
+    <script>
+        const map = new ol.Map({
+            target: 'map',
+            layers: [
+                new ol.layer.Tile({
+                    source: new ol.source.OSM()
+                })
+            ],
+            view: new ol.View({
+                center: ol.proj.fromLonLat([127.7669, 35.9078]),
+                zoom: 7
+            })
         });
-        route.setStyle(new ol.style.Style({
-          stroke: new ol.style.Stroke({ color: '#0077ff', width: 4 })
-        }));
-        vectorLayer.getSource().addFeature(route);
 
-        const coords = data.features[0].geometry.coordinates;
-        const last = coords[coords.length - 1];
-        const lon = last[0], lat = last[1];
+        let routeLayer;
 
-        fetch('/api/tourspot', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ lon, lat })
-        })
-        .then(res => res.json())
-        .then(spots => {
-          spots.forEach(spot => {
-            const feature = new ol.Feature({
-              geometry: new ol.geom.Point(ol.proj.fromLonLat([spot.lon, spot.lat])),
-              name: spot.title
+        function getRoute() {
+            const origin = document.getElementById('origin').value;
+            const destination = document.getElementById('destination').value;
+
+            fetch('/api/route', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ origin, destination })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+
+                if (routeLayer) {
+                    map.removeLayer(routeLayer);
+                }
+
+                const routeGeoJSON = new ol.format.GeoJSON().readFeatures(data, {
+                    featureProjection: 'EPSG:3857'
+                });
+
+                routeLayer = new ol.layer.Vector({
+                    source: new ol.source.Vector({
+                        features: routeGeoJSON
+                    }),
+                    style: new ol.style.Style({
+                        stroke: new ol.style.Stroke({
+                            color: '#007BFF',
+                            width: 4
+                        })
+                    })
+                });
+
+                map.addLayer(routeLayer);
+
+                const extent = routeLayer.getSource().getExtent();
+                map.getView().fit(extent, { padding: [50, 50, 50, 50] });
+            })
+            .catch(error => {
+                console.error('오류 발생:', error);
+                alert('경로 요청 중 오류가 발생했습니다.');
             });
-            feature.setStyle(new ol.style.Style({
-              image: new ol.style.Icon({
-                src: 'https://maps.google.com/mapfiles/ms/icons/red-dot.png',
-                scale: 1
-              })
-            }));
-            vectorLayer.getSource().addFeature(feature);
-          });
-        });
-      })
-      .catch(() => alert("경로 또는 관광지 검색에 실패했습니다."));
-    }
-  </script>
+        }
+    </script>
 </body>
 </html>
