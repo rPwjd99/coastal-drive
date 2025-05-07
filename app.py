@@ -11,7 +11,6 @@ CORS(app)
 VWORLD_KEY = "FA346133-805B-3BB4-B8C2-372973E3A4ED"
 ORS_KEY = "5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953"
 TOURAPI_KEY = "e1tU33wjMx2nynKjH8yDBm/S4YNne6B8mpCOWtzMH9TSONF71XG/xAwPqyv1fANpgeOvbPY+Le+gM6cYCnWV8w=="
-
 COAST_FILE = "해안선_국가기본도.geojson"
 
 def geocode(address):
@@ -47,8 +46,13 @@ def route(coords):
     url = "https://api.openrouteservice.org/v2/directions/driving-car/geojson"
     headers = {"Authorization": ORS_KEY, "Content-Type": "application/json"}
     body = {"coordinates": coords}
-    res = requests.post(url, json=body, headers=headers)
-    return res.json()
+    try:
+        res = requests.post(url, json=body, headers=headers)
+        res.raise_for_status()
+        return res.json()
+    except requests.exceptions.RequestException as e:
+        print("ORS 경로 요청 실패:", e)
+        return {"error": "경로 요청 실패: OpenRouteService 오류"}
 
 @app.route("/api/route")
 def api_route():
@@ -58,9 +62,16 @@ def api_route():
     e = geocode(end)
     if not s or not e:
         return jsonify({"error": "좌표를 찾을 수 없습니다. 주소를 확인하세요."})
-    c = find_coast(s, e)
-    geojson = route([s, c, e])
-    return jsonify(geojson)
+    try:
+        c = find_coast(s, e)
+        geojson = route([s, c, e])
+        if "error" in geojson:
+            print("우회 실패. 최단경로로 재시도")
+            geojson = route([s, e])
+        return jsonify(geojson)
+    except Exception as e:
+        print("경로 계산 실패:", e)
+        return jsonify({"error": "경로 계산 중 오류가 발생했습니다."})
 
 @app.route("/api/tourspot")
 def api_tour():
@@ -70,7 +81,7 @@ def api_tour():
     params = {
         "serviceKey": TOURAPI_KEY,
         "mapX": lon, "mapY": lat, "radius": 5000,
-        "MobileOS": "ETC", "MobileApp": "test", "_type": "json"
+        "MobileOS": "ETC", "MobileApp": "SeaRoute", "_type": "json"
     }
     res = requests.get(url, params=params).json()
     try:
