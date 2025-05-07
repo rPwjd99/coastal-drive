@@ -18,13 +18,55 @@ def index():
     return render_template("index.html")
 
 
+def normalize_address(address):
+    table = {
+        "서울시": "서울특별시",
+        "부산시": "부산광역시",
+        "대구시": "대구광역시",
+        "세종시": "세종특별자치시",
+        "광주시": "광주광역시",
+        "대전시": "대전광역시",
+        "울산시": "울산광역시"
+    }
+    for short, full in table.items():
+        address = address.replace(short, full)
+    return address
+
+
 def geocode(address):
-    url = f"https://api.vworld.kr/req/address?service=address&request=getcoord&format=json&type=both&address={address}&key={VWORLD_API_KEY}"
+    address = normalize_address(address)
+
+    # 1차 시도: 도로명 주소 (type=road)
+    url_road = f"https://api.vworld.kr/req/address?service=address&request=getcoord&format=json&type=road&address={address}&key={VWORLD_API_KEY}"
+    res = requests.get(url_road)
+    data = res.json()
+    result = data['response'].get('result', [])
+    if result:
+        point = result[0]['point']
+        return [float(point['x']), float(point['y'])]
+
+    # 2차 시도: 지번 주소 (type=parcel)
+    url_parcel = f"https://api.vworld.kr/req/address?service=address&request=getcoord&format=json&type=parcel&address={address}&key={VWORLD_API_KEY}"
+    res = requests.get(url_parcel)
+    data = res.json()
+    result = data['response'].get('result', [])
+    if result:
+        point = result[0]['point']
+        return [float(point['x']), float(point['y'])]
+
+    # 3차 시도: POI 검색
+    return search_poi(address)
+
+
+def search_poi(query):
+    url = f"https://api.vworld.kr/req/search?service=search&request=search&format=json&key={VWORLD_API_KEY}&query={query}"
     try:
         res = requests.get(url)
         data = res.json()
-        point = data['response']['result'][0]['point']
-        return [float(point['x']), float(point['y'])]
+        items = data['response']['result']['items']
+        if items:
+            point = items[0]['point']
+            return [float(point['x']), float(point['y'])]
     except:
         return None
 
