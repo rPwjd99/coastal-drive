@@ -1,131 +1,99 @@
-import json
-import math
-import random
-import requests
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
-from shapely.geometry import shape, Point
+import requests
+import json
 import geopandas as gpd
+from shapely.geometry import Point
+import math
 
 app = Flask(__name__)
 CORS(app)
 
-# API KEY 직접 삽입
+# --- API KEYS ---
 VWORLD_API_KEY = "9E77283D-954A-3077-B7C8-9BD5ADB33255"
 ORS_API_KEY = "5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953"
 TOURAPI_KEY = "e1tU33wjMx2nynKjH8yDBm/S4YNne6B8mpCOWtzMH9TSONF71XG/xAwPqyv1fANpgeOvbPY+Le+gM6cYCnWV8w=="
 
-# 해안선 GeoJSON 로드
+# --- Load Coastline ---
 coastline = gpd.read_file("해안선_국가기본도.geojson")
+coastline = coastline.to_crs(epsg=4326)
+coast_coords = coastline.geometry.apply(lambda g: list(g.coords) if hasattr(g, "coords") else []).explode().tolist()
 
-def geocode(address):
-    url = f"https://api.vworld.kr/req/address?service=address&request=getcoord&format=json&type=both&address={address}&key={VWORLD_API_KEY}"
-    response = requests.get(url)
-    try:
-        coords = response.json()['response']['result']['point']
-        return float(coords['y']), float(coords['x'])  # lat, lon
-    except:
-        return None
-
+# --- Utilities ---
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371
-    d_lat, d_lon = math.radians(lat2-lat1), math.radians(lon2-lon1)
-    a = math.sin(d_lat/2)**2 + math.cos(math.radians(lat1))*math.cos(math.radians(lat2))*math.sin(d_lon/2)**2
-    return R * 2 * math.asin(math.sqrt(a))
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
-def find_similar_coast_point(lat, lon, mode="lat", buffer_km=5):
-    if mode == "lat":
-        candidates = coastline[abs(coastline.geometry.y - lat) < 0.05]
-    else:
-        candidates = coastline[abs(coastline.geometry.x - lon) < 0.05]
-    if candidates.empty:
+def geocode_vworld(address):
+    url = f"https://api.vworld.kr/req/address?service=address&request=getcoord&format=json&type=both&address={address}&key={VWORLD_API_KEY}"
+    r = requests.get(url)
+    res = r.json()
+    try:
+        point = res['response']['result'][0]['point']
+        return float(point['y']), float(point['x'])
+    except:
         return None
 
-    # 거리 기반 최적 후보 선택
-    candidates["dist"] = candidates.geometry.apply(lambda p: haversine(lat, lon, p.y, p.x))
-    best = candidates.sort_values("dist").iloc[0].geometry
-    return best.y, best.x  # lat, lon
+def get_nearest_coast(lat, lon, mode='lat'):
+    sorted_points = sorted(coast_coords, key=lambda p: abs(p[1] - lat) if mode == 'lat' else abs(p[0] - lon))
+    return sorted_points[0][1], sorted_points[0][0]  # lat, lon
 
-def route_by_ors(coords):
+def is_route_possible(coords):
+    url = "https://api.openrouteservice.org/v2/directions/driving-car"
     headers = {"Authorization": ORS_API_KEY, "Content-Type": "application/json"}
-    body = {
-        "coordinates": coords,
-        "format": "geojson"
-    }
-    try:
-        r = requests.post("https://api.openrouteservice.org/v2/directions/driving-car/geojson", json=body, headers=headers)
-        if r.status_code == 200:
-            return r.json()
-        return None
-    except:
-        return None
-
-def search_tourspots(lat, lon):
-    url = f"http://apis.data.go.kr/B551011/KorService1/locationBasedList1"
-    params = {
-        "MobileOS": "ETC",
-        "MobileApp": "AppTest",
-        "mapX": lon,
-        "mapY": lat,
-        "radius": 5000,
-        "arrange": "A",
-        "numOfRows": 10,
-        "pageNo": 1,
-        "serviceKey": TOURAPI_KEY,
-        "_type": "json"
-    }
-    r = requests.get(url, params=params)
-    try:
-        items = r.json()["response"]["body"]["items"]["item"]
-        return [{
-            "title": i["title"],
-            "addr": i.get("addr1", ""),
-            "mapx": float(i["mapx"]),
-            "mapy": float(i["mapy"]),
-            "image": i.get("firstimage", "")
-        } for i in items]
-    except:
-        return []
+    body = {"coordinates": coords}
+    r = requests.post(url, json=body, headers=headers)
+    return r.status_code == 200, r.json() if r.status_code == 200 else None
 
 @app.route("/")
 def root():
-    return send_file("index.html")
+    return render_template("index.html")
 
 @app.route("/api/route", methods=["POST"])
-def get_route():
+def route():
     data = request.json
-    start_addr = data["start"]
-    end_addr = data["end"]
-
-    start = geocode(start_addr)
-    end = geocode(end_addr)
+    start_addr, end_addr = data['start'], data['end']
+    start = geocode_vworld(start_addr)
+    end = geocode_vworld(end_addr)
     if not start or not end:
-        return jsonify({"error": "주소 좌표 변환 실패"}), 400
+        return jsonify({"error": "주소 변환 실패"}), 400
 
-    # 위도 기반, 경도 기반 해안점 비교
-    lat_coast = find_similar_coast_point(*start, mode="lat")
-    lon_coast = find_similar_coast_point(*start, mode="lon")
+    lat_way, lon_way = get_nearest_coast(start[0], start[1], 'lat')
+    lat_dist = haversine(start[0], start[1], lat_way, lon_way)
+    lon_way2, lat_way2 = get_nearest_coast(start[0], start[1], 'lon')
+    lon_dist = haversine(start[0], start[1], lat_way2, lon_way2)
 
-    d_lat = haversine(*start, *lat_coast) if lat_coast else float('inf')
-    d_lon = haversine(*start, *lon_coast) if lon_coast else float('inf')
-    coast = lat_coast if d_lat < d_lon else lon_coast
+    waypoint = (lat_way, lon_way) if lat_dist < lon_dist else (lat_way2, lon_way2)
 
-    # 해안점 유효성 테스트
-    base_route = route_by_ors([[start[1], start[0]], [coast[1], coast[0]], [end[1], end[0]]])
-    if base_route:
-        tour = search_tourspots(*end)
-        return jsonify({"route": base_route, "tourspots": tour})
+    coords = [[start[1], start[0]], [waypoint[1], waypoint[0]], [end[1], end[0]]]
+    success, route_data = is_route_possible(coords)
+    if not success:
+        return jsonify({"error": "경로 계산 실패"}), 500
 
-    # 실패 시 해안점 주변 5km 버퍼 내 무작위 후보
-    for _ in range(5):
-        jitter = lambda: random.uniform(-0.05, 0.05)
-        trial = (coast[0] + jitter(), coast[1] + jitter())
-        retry_route = route_by_ors([[start[1], start[0]], [trial[1], trial[0]], [end[1], end[0]]])
-        if retry_route:
-            tour = search_tourspots(*end)
-            return jsonify({"route": retry_route, "tourspots": tour})
+    return jsonify({"route": route_data})
 
-    return jsonify({"error": "경로 생성 실패"}), 500
+@app.route("/api/tourspot", methods=["POST"])
+def tourspot():
+    data = request.json
+    lat, lon = data['lat'], data['lon']
+    url = f"https://apis.data.go.kr/B551011/KorService1/locationBasedList1?MobileOS=ETC&MobileApp=test&serviceKey={TOURAPI_KEY}&mapX={lon}&mapY={lat}&radius=5000&_type=json"
+    r = requests.get(url)
+    items = []
+    try:
+        res = r.json()
+        for item in res['response']['body']['items']['item']:
+            items.append({
+                "title": item.get("title"),
+                "addr": item.get("addr1"),
+                "image": item.get("firstimage")
+            })
+    except:
+        pass
+    return jsonify(items)
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     app.run(debug=True)
