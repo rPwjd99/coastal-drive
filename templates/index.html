@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>바다따라: 해안도로 가운 실주 경로 추천</title>
+  <title>바다따라: 해안도로 경로 추천</title>
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
   <style>
@@ -10,13 +10,21 @@
     #map { width: 100%; height: 90%; }
     #controls { padding: 10px; background: #fff; text-align: center; }
     input { padding: 6px; width: 300px; margin-right: 10px; }
-    button { padding: 6px 10px; }
+    ul.suggestions { position: absolute; list-style: none; background: #fff; width: 300px; margin-top: 0; padding: 0; border: 1px solid #ccc; max-height: 150px; overflow-y: auto; }
+    ul.suggestions li { padding: 6px; cursor: pointer; }
+    ul.suggestions li:hover { background: #eee; }
   </style>
 </head>
 <body>
   <div id="controls">
-    <input id="start" placeholder="출발지 (예: 세종시청)" />
-    <input id="end" placeholder="목적지 (예: 속초시청)" />
+    <div style="position: relative; display: inline-block;">
+      <input id="start" placeholder="출발지" oninput="autocomplete(this, 'start')">
+      <ul id="start-suggestions" class="suggestions"></ul>
+    </div>
+    <div style="position: relative; display: inline-block;">
+      <input id="end" placeholder="도착지" oninput="autocomplete(this, 'end')">
+      <ul id="end-suggestions" class="suggestions"></ul>
+    </div>
     <button onclick="getRoute()">경로 추천</button>
   </div>
   <div id="map"></div>
@@ -27,8 +35,31 @@
       layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
       view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
     });
-
     let vectorLayer;
+
+    function showSuggestions(list, id) {
+      const ul = document.getElementById(`${id}-suggestions`);
+      ul.innerHTML = '';
+      list.forEach(addr => {
+        const li = document.createElement('li');
+        li.textContent = addr;
+        li.onclick = () => {
+          document.getElementById(id).value = addr;
+          ul.innerHTML = '';
+        };
+        ul.appendChild(li);
+      });
+    }
+
+    async function autocomplete(inputElem, id) {
+      const query = inputElem.value;
+      if (query.length < 2) return;
+      const res = await fetch(`/api/search?query=${encodeURIComponent(query)}`);
+      const data = await res.json();
+      if (!data.response) return;
+      const results = data.response.result.items.map(item => item.title);
+      showSuggestions(results, id);
+    }
 
     async function getRoute() {
       const start = document.getElementById('start').value;
@@ -40,7 +71,6 @@
       if (data.error) return alert(data.error);
 
       if (vectorLayer) map.removeLayer(vectorLayer);
-
       const format = new ol.format.GeoJSON();
       const features = format.readFeatures(data, {
         dataProjection: 'EPSG:4326',
@@ -53,7 +83,6 @@
       map.addLayer(vectorLayer);
       map.getView().fit(vectorLayer.getSource().getExtent(), { padding: [20,20,20,20] });
 
-      // 관광지 마커 추가
       const spotRes = await fetch(`/api/tourspot?lat=${features.at(-1).getGeometry().getLastCoordinate()[1]}&lon=${features.at(-1).getGeometry().getLastCoordinate()[0]}`);
       const spotData = await spotRes.json();
       for (const spot of spotData) {
@@ -62,9 +91,7 @@
           image: new ol.style.Circle({ radius: 6, fill: new ol.style.Fill({ color: 'red' }) }),
           text: new ol.style.Text({ text: spot.title, offsetY: -15, scale: 1.2, fill: new ol.style.Fill({ color: '#000' }) })
         }));
-        const layer = new ol.layer.Vector({
-          source: new ol.source.Vector({ features: [marker] })
-        });
+        const layer = new ol.layer.Vector({ source: new ol.source.Vector({ features: [marker] }) });
         map.addLayer(layer);
       }
     }
