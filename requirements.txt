@@ -6,3 +6,4 @@ geopandas
 pyproj
 pandas
 pyogrio
+python-dotenv
