@@ -1,51 +1,44 @@
 # app.py
-from flask import Flask, request, jsonify, render_template
-import requests
 import os
+import requests
+from flask import Flask, render_template, request, jsonify
+from flask_cors import CORS
+import urllib.parse
 
 app = Flask(__name__)
+CORS(app)
 
-GOOGLE_API_KEY = "AIzaSyC9MSD-WhkqK_Og5YdVYfux21xiRjy2q1M"
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")  # Render 환경에서 환경변수로 설정
 
-def geocode_address(address):
-    url = "https://maps.googleapis.com/maps/api/geocode/json"
-    params = {"address": address, "key": GOOGLE_API_KEY}
-    response = requests.get(url, params=params)
+
+def geocode_google(address):
+    encoded_address = urllib.parse.quote(address)
+    url = f"https://maps.googleapis.com/maps/api/geocode/json?address={encoded_address}&key={GOOGLE_API_KEY}"
+    response = requests.get(url)
+    if response.status_code != 200:
+        return None, f"HTTP error {response.status_code}"
     data = response.json()
-    if data.get("status") == "OK":
-        loc = data["results"][0]["geometry"]["location"]
-        return loc["lat"], loc["lng"]
-    return None, None
+    if data.get("status") == "OK" and data["results"]:
+        location = data["results"][0]["geometry"]["location"]
+        return (location["lat"], location["lng"]), None
+    return None, data.get("status", "Unknown error")
 
-def get_route(start_coords, end_coords):
-    url = "https://maps.googleapis.com/maps/api/directions/json"
-    params = {
-        "origin": f"{start_coords[0]},{start_coords[1]}",
-        "destination": f"{end_coords[0]},{end_coords[1]}",
-        "key": GOOGLE_API_KEY,
-        "mode": "driving"
-    }
-    response = requests.get(url, params=params)
-    return response.json()
 
 @app.route("/")
 def index():
     return render_template("index.html")
 
-@app.route("/api/route", methods=["POST"])
-def route():
+
+@app.route("/geocode", methods=["POST"])
+def geocode():
     data = request.json
-    start = data.get("start")
-    end = data.get("end")
+    address = data.get("address")
+    result, error = geocode_google(address)
+    if result:
+        return jsonify({"status": "success", "location": result})
+    else:
+        return jsonify({"status": "fail", "error": error})
 
-    start_lat, start_lng = geocode_address(start)
-    end_lat, end_lng = geocode_address(end)
-
-    if not all([start_lat, start_lng, end_lat, end_lng]):
-        return jsonify({"error": "주소를 확인할 수 없습니다."}), 400
-
-    route_data = get_route((start_lat, start_lng), (end_lat, end_lng))
-    return jsonify(route_data)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
