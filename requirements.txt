@@ -1,4 +1,8 @@
 flask
+flask-cors
 requests
 shapely
 geopandas
+pyproj
+pandas
+pyogrio
