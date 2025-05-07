@@ -19,8 +19,8 @@ def geocode(address):
         "service": "address", "request": "getcoord", "format": "json",
         "type": "both", "address": address, "key": VWORLD_KEY
     }
-    res = requests.get(url, params=params).json()
     try:
+        res = requests.get(url, params=params).json()
         pt = res['response']['result']['point']
         return [float(pt['x']), float(pt['y'])]
     except:
@@ -83,12 +83,26 @@ def api_tour():
         "mapX": lon, "mapY": lat, "radius": 5000,
         "MobileOS": "ETC", "MobileApp": "SeaRoute", "_type": "json"
     }
-    res = requests.get(url, params=params).json()
     try:
+        res = requests.get(url, params=params).json()
         items = res['response']['body']['items']['item']
         return jsonify([{"title": i['title'], "mapx": i['mapx'], "mapy": i['mapy']} for i in items])
     except:
         return jsonify([])
+
+@app.route("/api/search")
+def api_search():
+    query = request.args.get("query")
+    url = "https://api.vworld.kr/req/search"
+    params = {
+        "service": "search", "request": "autocomplete", "version": "2.0",
+        "query": query, "key": VWORLD_KEY
+    }
+    try:
+        res = requests.get(url, params=params)
+        return jsonify(res.json())
+    except:
+        return jsonify({"error": "검색 실패"})
 
 @app.route("/")
 def root():
