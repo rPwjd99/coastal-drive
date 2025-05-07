@@ -1,114 +1,100 @@
+
+import os
+import json
+import requests
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-import requests
-import json
-import os
-from shapely.geometry import shape, Point
+from dotenv import load_dotenv
 import geopandas as gpd
+from shapely.geometry import Point
+from shapely.ops import nearest_points
+
+load_dotenv()
+
+VWORLD_API_KEY = os.getenv("VWORLD_API_KEY")
+ORS_API_KEY = os.getenv("ORS_API_KEY")
 
 app = Flask(__name__)
 CORS(app)
 
-VWORLD_API_KEY = "FA346133-805B-3BB4-B8C2-372973E3A4ED"
-ORS_API_KEY = "5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953"
-TOURAPI_KEY = "e1tU33wjMx2nynKjH8yDBm/S4YNne6B8mpCOWtzMH9TSONF71XG/xAwPqyv1fANpgeOvbPY+Le+gM6cYCnWV8w=="
+coast_gdf = gpd.read_file("coastline.geojson").to_crs(epsg=4326)
+
+def geocode_vworld(address):
+    url = f"https://api.vworld.kr/req/address?service=address&request=getcoord&format=json&type=both&key={VWORLD_API_KEY}&address={address}"
+    resp = requests.get(url)
+    items = resp.json().get("response", {}).get("result", [])
+    if not items:
+        return None
+    point = items[0].get("point", {})
+    return float(point["y"]), float(point["x"])  # lat, lon
+
+def get_nearest_coast_point(lat, lon, method="lat"):
+    origin = Point(lon, lat)
+    if method == "lat":
+        subset = coast_gdf[(coast_gdf.geometry.y >= lat - 0.1) & (coast_gdf.geometry.y <= lat + 0.1)]
+    else:
+        subset = coast_gdf[(coast_gdf.geometry.x >= lon - 0.1) & (coast_gdf.geometry.x <= lon + 0.1)]
+
+    if subset.empty:
+        return None
+
+    nearest_geom = nearest_points(origin, subset.unary_union)[1]
+    return nearest_geom.y, nearest_geom.x  # lat, lon
+
+def test_ors_route(points):
+    url = "https://api.openrouteservice.org/v2/directions/driving-car/geojson"
+    headers = {"Authorization": ORS_API_KEY, "Content-Type": "application/json"}
+    data = {"coordinates": points}
+    try:
+        res = requests.post(url, json=data, headers=headers)
+        if res.status_code == 200:
+            return res.json()
+    except Exception:
+        pass
+    return None
+
+def find_buffered_coast(lat, lon):
+    point = Point(lon, lat)
+    buffer = point.buffer(0.05)  # ~5km in EPSG:4326
+    candidates = coast_gdf[coast_gdf.geometry.within(buffer)]
+    if candidates.empty:
+        return None
+    return candidates.geometry.iloc[0].y, candidates.geometry.iloc[0].x
 
 @app.route("/")
 def root():
     return send_file("index.html")
 
-@app.route("/api/search")
-def search():
-    query = request.args.get("query")
-    if not query:
-        return jsonify({"error": "쿼리를 입력하세요."}), 400
-
-    url = f"https://api.vworld.kr/req/search?key={VWORLD_API_KEY}&service=search&request=search&version=2.0&format=json&query={query}&type=road"
-    try:
-        res = requests.get(url, timeout=5)
-        data = res.json()
-        results = data.get("response", {}).get("result", {}).get("items", [])
-        if not results:
-            return jsonify([])
-
-        coords = [
-            {
-                "title": item["title"],
-                "x": float(item["point"]["x"]),
-                "y": float(item["point"]["y"])
-            }
-            for item in results if "point" in item
-        ]
-        return jsonify(coords)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 @app.route("/api/route")
 def route():
-    start = request.args.get("start")
-    end = request.args.get("end")
+    start_addr = request.args.get("start")
+    end_addr = request.args.get("end")
+
+    start = geocode_vworld(start_addr)
+    end = geocode_vworld(end_addr)
     if not start or not end:
-        return jsonify({"error": "출발지와 도착지를 입력하세요."}), 400
+        return jsonify({"error": "Invalid address"}), 400
 
-    def geocode(address):
-        url = f"https://api.vworld.kr/req/address?service=address&request=getcoord&format=json&type=road&address={address}&key={VWORLD_API_KEY}"
-        res = requests.get(url, timeout=5).json()
-        try:
-            point = res["response"]["result"]["point"]
-            return float(point["x"]), float(point["y"])
-        except:
-            return None
+    coast_lat = get_nearest_coast_point(start[0], start[1], method="lat")
+    coast_lon = get_nearest_coast_point(start[0], start[1], method="lon")
 
-    start_coord = geocode(start)
-    end_coord = geocode(end)
-    if not start_coord or not end_coord:
-        return jsonify({"error": "좌표를 찾을 수 없습니다. 주소를 확인하세요."}), 400
+    if not coast_lat or not coast_lon:
+        return jsonify({"error": "No nearby coast found"}), 404
 
-    start_x, start_y = start_coord
-    end_x, end_y = end_coord
+    dist_lat = ((start[0]-coast_lat[0])**2 + (start[1]-coast_lat[1])**2)**0.5
+    dist_lon = ((start[0]-coast_lon[0])**2 + (start[1]-coast_lon[1])**2)**0.5
+    coast = coast_lat if dist_lat < dist_lon else coast_lon
 
-    # 임시: start와 end 위경도만 경유 없이 경로 계산 (추후 해안 우회 로직 삽입 가능)
-    url = "https://api.openrouteservice.org/v2/directions/driving-car/geojson"
-    headers = {"Authorization": ORS_API_KEY, "Content-Type": "application/json"}
-    body = {
-        "coordinates": [[start_x, start_y], [end_x, end_y]]
-    }
+    points = [[start[1], start[0]], [coast[1], coast[0]], [end[1], end[0]]]
+    route_json = test_ors_route(points)
 
-    try:
-        res = requests.post(url, headers=headers, json=body, timeout=10)
-        if res.status_code != 200:
-            return jsonify({"error": "OpenRouteService 요청 실패"}), 500
-        return jsonify({"route": res.json()})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    if not route_json:
+        buffered = find_buffered_coast(coast[0], coast[1])
+        if buffered:
+            points = [[start[1], start[0]], [buffered[1], buffered[0]], [end[1], end[0]]]
+            route_json = test_ors_route(points)
 
-@app.route("/api/tourspot")
-def tourspot():
-    end = request.args.get("end")
-    if not end:
-        return jsonify([])
+    if not route_json:
+        return jsonify({"error": "Failed to find route"}), 500
 
-    # 목적지 좌표 얻기
-    try:
-        geo_url = f"https://api.vworld.kr/req/address?service=address&request=getcoord&format=json&type=road&address={end}&key={VWORLD_API_KEY}"
-        geo_res = requests.get(geo_url, timeout=5).json()
-        point = geo_res["response"]["result"]["point"]
-        lon, lat = float(point["x"]), float(point["y"])
-    except:
-        return jsonify([])
-
-    tour_url = (
-        f"http://apis.data.go.kr/B551011/KorService1/locationBasedList1"
-        f"?serviceKey={TOURAPI_KEY}&numOfRows=10&pageNo=1&MobileOS=ETC&MobileApp=SeaRouteApp&_type=json"
-        f"&mapX={lon}&mapY={lat}&radius=5000"
-    )
-    try:
-        tour_res = requests.get(tour_url, timeout=5).json()
-        items = tour_res.get("response", {}).get("body", {}).get("items", {}).get("item", [])
-        return jsonify(items)
-    except:
-        return jsonify([])
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    return jsonify(route_json)
