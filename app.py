@@ -1,54 +1,51 @@
+# app.py
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 import requests
-import geopandas as gpd
-import shapely.geometry
-import os
+import json
 from urllib.parse import quote
 
 app = Flask(__name__)
 CORS(app)
 
-# 네이버 API 키 (주의: 보안 필요 시 .env 사용 권장)
 NAVER_CLIENT_ID = "vsdzf1f4n5"
 NAVER_CLIENT_SECRET = "0gzctO51PUTVv0gUZU025JYNHPTmVzLS9sGbfYBM"
-
-# 해안선 GeoJSON 로드 (파일 존재 여부 확인)
-coastline_path = "해안선_국가기본도.geojson"
-if not os.path.exists(coastline_path):
-    raise FileNotFoundError(f"해안선 GeoJSON 파일이 존재하지 않습니다: {coastline_path}")
-coastline = gpd.read_file(coastline_path)
 
 @app.route("/")
 def home():
     return render_template("index.html")
 
-@app.route("/api/geocode")
+@app.route("/api/geocode", methods=["GET"])
 def geocode():
-    address = request.args.get("address")
-    if not address:
-        return jsonify({"error": "주소가 제공되지 않았습니다."}), 400
+    raw_address = request.args.get("address")
+    address = quote(raw_address.strip())
 
-    encoded = quote(address)
-    url = f"https://naveropenapi.apigw.ntruss.com/map-geocode/v2/geocode?query={encoded}"
+    url = f"https://naveropenapi.apigw.ntruss.com/map-geocode/v2/geocode?query={address}"
     headers = {
         "X-NCP-APIGW-API-KEY-ID": NAVER_CLIENT_ID,
-        "X-NCP-APIGW-API-KEY": NAVER_CLIENT_SECRET
+        "X-NCP-APIGW-API-KEY": NAVER_CLIENT_SECRET,
     }
+    try:
+        response = requests.get(url, headers=headers)
+        data = response.json()
 
-    response = requests.get(url, headers=headers)
-    if response.status_code != 200:
-        return jsonify({"error": "네이버 API 호출 실패", "status": response.status_code}), 500
+        if "addresses" not in data or len(data["addresses"]) == 0:
+            # 자동 보정 로직 예시 (공백 제거, 도로명 추정 등)
+            corrected = raw_address.replace("시청", "청사").replace("  ", " ").strip()
+            if corrected != raw_address:
+                return jsonify({"status": "retry", "suggested": corrected})
+            return jsonify({"status": "fail", "message": "Geocode API returned no results."})
 
-    data = response.json()
-    if "addresses" not in data or len(data["addresses"]) == 0:
-        return jsonify({"error": "주소를 찾을 수 없습니다."}), 404
-
-    addr = data["addresses"][0]
-    return jsonify({"lat": float(addr["y"]), "lon": float(addr["x"])})
-
-# TODO: 추가로 경로 탐색(OpenRouteService), 해안선 우회 경로 계산 등 API 추가 가능
+        addr = data["addresses"][0]
+        return jsonify({
+            "status": "success",
+            "lat": float(addr["y"]),
+            "lon": float(addr["x"]),
+            "roadAddress": addr.get("roadAddress", ""),
+            "jibunAddress": addr.get("jibunAddress", "")
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(debug=True, host="0.0.0.0", port=port)
+    app.run(debug=True, host="0.0.0.0", port=5000)
