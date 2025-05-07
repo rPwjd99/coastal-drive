@@ -9,26 +9,17 @@
     html, body, #map { margin: 0; padding: 0; width: 100%; height: 100%; }
     .search-box {
       position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
+      top: 10px; left: 10px;
       background: white;
       padding: 10px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      border-radius: 8px;
       z-index: 1000;
-      display: flex;
-      gap: 10px;
-      align-items: center;
-      justify-content: center;
+      box-shadow: 0 0 10px rgba(0,0,0,0.3);
     }
-    .search-box input {
-      width: 300px;
-      padding: 6px;
-      font-size: 14px;
-    }
-    .search-box button {
-      padding: 6px 12px;
-      font-size: 14px;
+    input, button {
+      margin: 5px 0;
+      width: 260px;
+      padding: 5px;
     }
   </style>
 </head>
@@ -39,7 +30,6 @@
     <button onclick="calculateRoute()">해안도로 경로 검색</button>
   </div>
   <div id="map"></div>
-
   <script>
     const map = new ol.Map({
       target: 'map',
@@ -72,49 +62,37 @@
     async function calculateRoute() {
       const start = document.getElementById("start").value;
       const end = document.getElementById("end").value;
-      if (!start || !end) {
-        alert("출발지와 도착지를 모두 입력하세요.");
+      if (!start || !end) return alert("출발지와 도착지를 입력하세요.");
+
+      const res = await fetch(`/api/route?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`);
+      const geojson = await res.json();
+
+      if (geojson.error) {
+        alert("경로 요청 실패: " + geojson.error);
         return;
       }
 
-      try {
-        const res = await fetch(`/api/route?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`);
-        if (!res.ok) {
-          const err = await res.json();
-          alert(`경로 요청 실패: ${err.error}\n[출발지] ${err.start}\n[도착지] ${err.end}`);
-          return;
-        }
-
-        const geojson = await res.json();
-        const format = new ol.format.GeoJSON();
-        const features = format.readFeatures(geojson, { featureProjection: 'EPSG:3857' });
-
-        if (!features || features.length === 0) {
-          alert("경로를 찾을 수 없습니다.");
-          return;
-        }
-
-        routeLayer.getSource().clear();
-        routeLayer.getSource().addFeatures(features);
+      const format = new ol.format.GeoJSON();
+      const features = format.readFeatures(geojson, { featureProjection: 'EPSG:3857' });
+      routeLayer.getSource().clear();
+      routeLayer.getSource().addFeatures(features);
+      if (features.length > 0) {
         map.getView().fit(routeLayer.getSource().getExtent(), { padding: [30, 30, 30, 30] });
-
-        const lastCoord = features[0].getGeometry().getCoordinates().slice(-1)[0];
-        const coord4326 = ol.proj.toLonLat(lastCoord);
-        const tour = await fetch(`/api/tourspot?lon=${coord4326[0]}&lat=${coord4326[1]}`);
-        const pois = await tour.json();
-        poiLayer.getSource().clear();
-        pois.forEach(p => {
-          const feature = new ol.Feature({
-            geometry: new ol.geom.Point(ol.proj.fromLonLat([p.mapx, p.mapy])),
-            name: p.title
-          });
-          poiLayer.getSource().addFeature(feature);
-        });
-
-      } catch (err) {
-        alert("예외 발생: " + err.message);
-        console.error(err);
       }
+
+      // 관광지 마커
+      const lastCoord = features[0].getGeometry().getCoordinates().slice(-1)[0];
+      const coord4326 = ol.proj.toLonLat(lastCoord);
+      const tour = await fetch(`/api/tourspot?lon=${coord4326[0]}&lat=${coord4326[1]}`);
+      const pois = await tour.json();
+      poiLayer.getSource().clear();
+      pois.forEach(p => {
+        const feature = new ol.Feature({
+          geometry: new ol.geom.Point(ol.proj.fromLonLat([p.mapx, p.mapy])),
+          name: p.title
+        });
+        poiLayer.getSource().addFeature(feature);
+      });
     }
   </script>
 </body>
