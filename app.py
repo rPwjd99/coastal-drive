@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 import requests
 import geopandas as gpd
 from shapely.geometry import Point
@@ -20,11 +20,12 @@ def geocode(address):
         "type": "both", "address": address, "key": VWORLD_KEY
     }
     try:
+        print("지오코딩 요청:", address)
         res = requests.get(url, params=params).json()
         pt = res['response']['result']['point']
         return [float(pt['x']), float(pt['y'])]
-    except:
-        print("Geocode fail:", address)
+    except Exception as e:
+        print("지오코딩 실패:", e)
         return None
 
 def haversine(p1, p2):
@@ -58,6 +59,7 @@ def route(coords):
 def api_route():
     start = request.args.get("start")
     end = request.args.get("end")
+    print("📌 경로 요청:", start, "→", end)
     s = geocode(start)
     e = geocode(end)
     if not s or not e:
@@ -106,7 +108,7 @@ def api_search():
 
 @app.route("/")
 def root():
-    return "SeaRoute Flask API Active"
+    return send_file("index.html")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
