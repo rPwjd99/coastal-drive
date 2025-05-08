@@ -1,126 +1,117 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>해안도로 감성 드라이브 경로 검색</title>
-  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-  <link href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" rel="stylesheet" />
-  <style>
-    body { font-family: sans-serif; margin: 0; padding: 0; }
-    .controls {
-      padding: 1rem;
-      background: #f0f0f0;
-      display: flex;
-      flex-direction: column;
-      gap: 0.5rem;
-    }
-    input, button {
-      padding: 0.5rem;
-      font-size: 1rem;
-    }
-    #map {
-      width: 100%;
-      height: 80vh;
-    }
-    .error {
-      color: red;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <title>해안도로 감성 드라이브 경로 검색</title>
+    <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" rel="stylesheet" />
+    <style>
+        body { font-family: Arial; margin: 0; }
+        .controls {
+            padding: 1rem;
+            background: #f9f9f9;
+            border-bottom: 1px solid #ccc;
+        }
+        input { width: 400px; margin: 0.5rem 0; padding: 0.5rem; }
+        button { padding: 0.5rem 1rem; margin-left: 1rem; }
+        #map { width: 100%; height: 90vh; }
+        .status { margin-top: 0.5rem; color: #d00; }
+    </style>
 </head>
 <body>
-  <div class="controls">
-    <label>
-      출발지 주소 (예: 세종시청 또는 한누리대로 2130):
-      <input id="start" placeholder="출발지 주소 입력" />
-    </label>
-    <label>
-      도착지 주소 (예: 속초시청 또는 중앙로 183):
-      <input id="end" placeholder="도착지 주소 입력" />
-    </label>
+<div class="controls">
+    <div>
+        <label>출발지 주소 (예: 세종시청 또는 한누리대로 2130):</label><br>
+        <input id="start" placeholder="출발지 주소를 입력하세요">
+        <span id="startStatus" class="status"></span>
+    </div>
+    <div>
+        <label>도착지 주소 (예: 속초시청 또는 중앙로 183):</label><br>
+        <input id="end" placeholder="도착지 주소를 입력하세요">
+        <span id="endStatus" class="status"></span>
+    </div>
     <button onclick="searchRoute()">해안도로 경로 검색</button>
-    <div id="error" class="error"></div>
-  </div>
-  <div id="map"></div>
+</div>
+<div id="map"></div>
 
-  <script>
-    let map = new ol.Map({
-      target: 'map',
-      layers: [
-        new ol.layer.Tile({
-          source: new ol.source.OSM()
+<script>
+    const map = new ol.Map({
+        target: 'map',
+        layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
+        view: new ol.View({
+            center: ol.proj.fromLonLat([127.5, 36.5]),
+            zoom: 7
         })
-      ],
-      view: new ol.View({
-        center: ol.proj.fromLonLat([127.5, 36.5]),
-        zoom: 7
-      })
     });
 
-    let routeLayer = new ol.layer.Vector({ source: new ol.source.Vector() });
-    let markerLayer = new ol.layer.Vector({ source: new ol.source.Vector() });
-    map.addLayer(routeLayer);
-    map.addLayer(markerLayer);
+    let routeLayer;
+    let startCoord, endCoord;
+
+    function updateStatus(id, message, success = false) {
+        const el = document.getElementById(id + "Status");
+        el.textContent = message;
+        el.style.color = success ? "green" : "red";
+    }
+
+    async function geocodeAddress(address, type) {
+        const res = await fetch("/geocode", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ address })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            updateStatus(type, `✅ 위치: ${data.lat.toFixed(5)}, ${data.lon.toFixed(5)}`, true);
+            return data;
+        } else {
+            updateStatus(type, "❌ 주소를 찾을 수 없습니다");
+            return null;
+        }
+    }
 
     async function searchRoute() {
-      const start = document.getElementById('start').value;
-      const end = document.getElementById('end').value;
-      const errorDiv = document.getElementById('error');
-      errorDiv.textContent = '';
+        const startText = document.getElementById("start").value;
+        const endText = document.getElementById("end").value;
 
-      if (!start || !end) {
-        errorDiv.textContent = '출발지와 도착지 주소를 모두 입력해주세요.';
-        return;
-      }
+        const start = await geocodeAddress(startText, "start");
+        const end = await geocodeAddress(endText, "end");
+        if (!start || !end) return;
 
-      const res = await fetch('/route', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ start, end })
-      });
+        startCoord = [start.lon, start.lat];
+        endCoord = [end.lon, end.lat];
 
-      const data = await res.json();
-
-      if (!res.ok || data.error) {
-        errorDiv.textContent = `❌ ${data.error || '경로 검색 실패'}`;
-        return;
-      }
-
-      drawGeoJSON(data.route);
-      drawTourSpots(data.tourspots);
-    }
-
-    function drawGeoJSON(geojson) {
-      routeLayer.getSource().clear();
-      const format = new ol.format.GeoJSON();
-      const features = format.readFeatures(geojson, {
-        featureProjection: 'EPSG:3857'
-      });
-      routeLayer.getSource().addFeatures(features);
-    }
-
-    function drawTourSpots(spots) {
-      markerLayer.getSource().clear();
-      spots.forEach(spot => {
-        const feature = new ol.Feature({
-          geometry: new ol.geom.Point(ol.proj.fromLonLat([spot.mapx, spot.mapy])),
-          name: spot.title
+        const res = await fetch("/route", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ start, end })
         });
-        feature.setStyle(new ol.style.Style({
-          image: new ol.style.Icon({
-            src: 'https://maps.google.com/mapfiles/kml/paddle/red-circle.png',
-            scale: 1
-          }),
-          text: new ol.style.Text({
-            text: spot.title,
-            offsetY: -25,
-            fill: new ol.style.Fill({ color: '#000' }),
-            stroke: new ol.style.Stroke({ color: '#fff', width: 2 })
-          })
-        }));
-        markerLayer.getSource().addFeature(feature);
-      });
+        const data = await res.json();
+        if (!res.ok || !data || !data.features) {
+            alert("경로를 계산할 수 없습니다.");
+            return;
+        }
+
+        if (routeLayer) map.removeLayer(routeLayer);
+
+        const format = new ol.format.GeoJSON();
+        const routeFeature = format.readFeature(data, {
+            dataProjection: 'EPSG:4326',
+            featureProjection: 'EPSG:3857'
+        });
+
+        routeLayer = new ol.layer.Vector({
+            source: new ol.source.Vector({ features: [routeFeature] }),
+            style: new ol.style.Style({
+                stroke: new ol.style.Stroke({
+                    color: 'blue',
+                    width: 4
+                })
+            })
+        });
+
+        map.addLayer(routeLayer);
+        map.getView().fit(routeLayer.getSource().getExtent(), { padding: [50, 50, 50, 50] });
     }
-  </script>
+</script>
 </body>
 </html>
