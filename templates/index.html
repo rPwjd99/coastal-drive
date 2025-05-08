@@ -1,31 +1,43 @@
-<!-- templates/index.html -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>주소 좌표 변환기</title>
+  <title>해안도로 감성 드라이브 코스 추천</title>
   <script>
-    async function searchAddress() {
-      const address = document.getElementById("address").value;
-      const response = await fetch("/geocode", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address })
+    async function searchAddress(type) {
+      const input = document.getElementById(type + '-input').value;
+      const res = await fetch('/geocode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address: input })
       });
-      const data = await response.json();
-      const result = document.getElementById("result");
-      if (data.status === "success") {
-        result.innerText = `✅ 좌표: 위도 ${data.location[0]}, 경도 ${data.location[1]}`;
+      const data = await res.json();
+      const resultDiv = document.getElementById(type + '-result');
+      if (data.lat && data.lng) {
+        resultDiv.innerText = `✅ 위치: ${data.lat}, ${data.lng}`;
       } else {
-        result.innerText = `❌ 검색 실패: ${data.error}`;
+        resultDiv.innerText = `❌ 검색 실패: ${data.error}`;
       }
     }
   </script>
 </head>
 <body>
-  <h1>주소 검색</h1>
-  <input type="text" id="address" placeholder="예: 세종특별자치시 한누리대로 2130" />
-  <button onclick="searchAddress()">주소 검색</button>
-  <p id="result"></p>
+  <h1>해안도로 감성 드라이브 경로 검색</h1>
+
+  <div>
+    <label>출발지 주소 (예: 세종시청 또는 한누리대로 2130):</label><br/>
+    <input id="start-input" style="width:300px;" />
+    <button onclick="searchAddress('start')">주소 검색</button>
+    <div id="start-result" style="margin:10px 0;"></div>
+  </div>
+
+  <div>
+    <label>도착지 주소 (예: 속초시청 또는 중앙로 183):</label><br/>
+    <input id="end-input" style="width:300px;" />
+    <button onclick="searchAddress('end')">주소 검색</button>
+    <div id="end-result" style="margin:10px 0;"></div>
+  </div>
+
+  <p>※ 주소가 잘못된 경우 예: "세종시청" → "세종특별자치시 한누리대로 2130" 으로 자동 보정됩니다.</p>
 </body>
 </html>
