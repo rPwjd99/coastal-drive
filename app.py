@@ -1,75 +1,96 @@
-import os
-import requests
-from flask import Flask, request, jsonify, render_template
-from flask_cors import CORS
-import geopandas as gpd
-import math
-from shapely.geometry import Point
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>해안도로 감성 드라이브</title>
+  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
+  <style>
+    body { font-family: sans-serif; margin: 0; padding: 0; }
+    #map { width: 100%; height: 80vh; }
+    .controls { padding: 1rem; background: #f0f0f0; }
+    .controls input { width: 300px; margin-right: 0.5rem; }
+  </style>
+</head>
+<body>
+  <div class="controls">
+    <h2>해안도로 감성 드라이브 경로 검색</h2>
+    <div>
+      출발지: <input id="start" placeholder="예: 세종시청">
+      <button onclick="search('start')">주소 검색</button>
+      <span id="startResult"></span>
+    </div>
+    <div style="margin-top: 0.5rem;">
+      목적지: <input id="end" placeholder="예: 속초시청">
+      <button onclick="search('end')">주소 검색</button>
+      <span id="endResult"></span>
+    </div>
+    <div style="margin-top: 1rem;">
+      <button onclick="searchRoute()">해안도로 경로 검색</button>
+    </div>
+  </div>
+  <div id="map"></div>
 
-app = Flask(__name__)
-CORS(app)
+  <script>
+    let map = new ol.Map({
+      target: 'map',
+      layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
+      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 8 })
+    });
 
-# 해안선 로드
-coastline = gpd.read_file("coastal_route_result.geojson").to_crs(epsg=4326)
-coast_points = []
-for geom in coastline.explode(index_parts=False).geometry:
-    if geom.geom_type == "LineString":
-        coast_points.extend(geom.coords)
-    elif geom.geom_type == "MultiLineString":
-        for line in geom:
-            coast_points.extend(line.coords)
+    let startCoord = null;
+    let endCoord = null;
 
-def haversine(coord1, coord2):
-    R = 6371
-    lat1, lon1 = map(math.radians, coord1)
-    lat2, lon2 = map(math.radians, coord2)
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    a = math.sin(dlat/2)**2 + math.cos(lat1)*math.cos(lat2)*math.sin(dlon/2)**2
-    return R * 2 * math.asin(math.sqrt(a))
-
-def find_waypoint(start):
-    lat_cands = [pt for pt in coast_points if abs(pt[1] - start[0]) < 0.1 and pt[0] > start[1]]
-    lon_cands = [pt for pt in coast_points if abs(pt[0] - start[1]) < 0.1 and pt[1] > start[0]]
-
-    lat_pt = min(lat_cands, key=lambda pt: haversine(start, (pt[1], pt[0]))) if lat_cands else None
-    lon_pt = min(lon_cands, key=lambda pt: haversine(start, (pt[1], pt[0]))) if lon_cands else None
-
-    if lat_pt and lon_pt:
-        d_lat = haversine(start, (lat_pt[1], lat_pt[0]))
-        d_lon = haversine(start, (lon_pt[1], lon_pt[0]))
-        return lat_pt if d_lat <= d_lon else lon_pt
-    return lat_pt or lon_pt
-
-@app.route("/")
-def home():
-    return render_template("index.html")
-
-@app.route("/route", methods=["POST"])
-def route():
-    data = request.get_json()
-    start = data["start"]  # [lat, lon]
-    end = data["end"]      # [lat, lon]
-
-    waypoint = find_waypoint(tuple(start))
-    if not waypoint:
-        return jsonify({"error": "경유지 해안 좌표를 찾을 수 없습니다."}), 400
-
-    coords = [[start[1], start[0]], [waypoint[0], waypoint[1]], [end[1], end[0]]]
-    headers = {
-        "Authorization": os.getenv("ORS_API_KEY"),
-        "Content-Type": "application/json"
+    function search(type) {
+      const input = document.getElementById(type).value;
+      fetch('/geocode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address: input })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.lat && data.lng) {
+          if (type === 'start') startCoord = [data.lng, data.lat];
+          else endCoord = [data.lng, data.lat];
+          document.getElementById(type + 'Result').textContent = `✅ 위치: ${data.lat}, ${data.lng}`;
+        } else {
+          document.getElementById(type + 'Result').textContent = '❌ 검색 실패';
+        }
+      });
     }
-    payload = {"coordinates": coords, "format": "geojson"}
 
-    response = requests.post(
-        "https://api.openrouteservice.org/v2/directions/driving-car/geojson",
-        headers=headers, json=payload
-    )
+    function searchRoute() {
+      if (!startCoord || !endCoord) return alert('출발지와 도착지를 모두 검색해 주세요');
+      fetch('/route', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start: startCoord, end: endCoord })
+      })
+      .then(res => res.json())
+      .then(geojson => drawRoute(geojson))
+      .catch(err => alert('❌ 경로 요청 실패'));
+    }
 
-    if response.status_code == 200:
-        return jsonify(response.json())
-    return jsonify({"error": response.text}), 500
+    function drawRoute(geojson) {
+      const format = new ol.format.GeoJSON();
+      const features = format.readFeatures(geojson, {
+        featureProjection: 'EPSG:3857'
+      });
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), debug=True)
+      const layer = new ol.layer.Vector({
+        source: new ol.source.Vector({ features }),
+        style: new ol.style.Style({
+          stroke: new ol.style.Stroke({ color: 'blue', width: 4 })
+        })
+      });
+
+      map.getLayers().getArray().slice(1).forEach(l => map.removeLayer(l));
+      map.addLayer(layer);
+
+      const extent = layer.getSource().getExtent();
+      map.getView().fit(extent, { padding: [30, 30, 30, 30] });
+    }
+  </script>
+</body>
+</html>
