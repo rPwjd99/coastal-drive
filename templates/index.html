@@ -1,43 +1,63 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <title>해안도로 감성 드라이브 코스 추천</title>
+  <meta charset="UTF-8">
+  <title>해안도로 감성 드라이브</title>
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+</head>
+<body>
+  <h2>해안도로 감성 드라이브 경로 검색</h2>
+  <div>
+    <label>출발지 주소 (예: 세종시청 또는 한누리대로 2130):</label><br>
+    <input type="text" id="departure" size="50">
+    <button onclick="searchAddress('departure')">주소 검색</button>
+    <div id="departure-result"></div>
+  </div>
+  <br>
+  <div>
+    <label>도착지 주소 (예: 속초시청 또는 중앙로 183):</label><br>
+    <input type="text" id="destination" size="50">
+    <button onclick="searchAddress('destination')">주소 검색</button>
+    <div id="destination-result"></div>
+  </div>
+  <br>
+  <button onclick="searchRoute()">해안도로 경로 검색</button>
+  <pre id="route-output"></pre>
+
   <script>
+    let coords = {
+      departure: null,
+      destination: null
+    };
+
     async function searchAddress(type) {
-      const input = document.getElementById(type + '-input').value;
-      const res = await fetch('/geocode', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address: input })
-      });
-      const data = await res.json();
-      const resultDiv = document.getElementById(type + '-result');
-      if (data.lat && data.lng) {
-        resultDiv.innerText = `✅ 위치: ${data.lat}, ${data.lng}`;
-      } else {
-        resultDiv.innerText = `❌ 검색 실패: ${data.error}`;
+      const value = document.getElementById(type).value;
+      const resultDiv = document.getElementById(`${type}-result`);
+      try {
+        const res = await axios.post('/geocode', { address: value });
+        if (res.data.coords) {
+          coords[type] = res.data.coords;
+          resultDiv.innerText = `✅ 위치: ${res.data.coords[0]}, ${res.data.coords[1]}`;
+        } else {
+          resultDiv.innerText = `❌ 검색 실패: ${res.data.error}`;
+        }
+      } catch (e) {
+        resultDiv.innerText = `❌ 오류 발생: ${e.message}`;
+      }
+    }
+
+    async function searchRoute() {
+      const output = document.getElementById("route-output");
+      try {
+        const res = await axios.post('/route', {
+          departure: document.getElementById("departure").value,
+          destination: document.getElementById("destination").value
+        });
+        output.innerText = JSON.stringify(res.data, null, 2);
+      } catch (e) {
+        output.innerText = `❌ 경로 요청 실패: ${e.message}`;
       }
     }
   </script>
-</head>
-<body>
-  <h1>해안도로 감성 드라이브 경로 검색</h1>
-
-  <div>
-    <label>출발지 주소 (예: 세종시청 또는 한누리대로 2130):</label><br/>
-    <input id="start-input" style="width:300px;" />
-    <button onclick="searchAddress('start')">주소 검색</button>
-    <div id="start-result" style="margin:10px 0;"></div>
-  </div>
-
-  <div>
-    <label>도착지 주소 (예: 속초시청 또는 중앙로 183):</label><br/>
-    <input id="end-input" style="width:300px;" />
-    <button onclick="searchAddress('end')">주소 검색</button>
-    <div id="end-result" style="margin:10px 0;"></div>
-  </div>
-
-  <p>※ 주소가 잘못된 경우 예: "세종시청" → "세종특별자치시 한누리대로 2130" 으로 자동 보정됩니다.</p>
 </body>
 </html>
