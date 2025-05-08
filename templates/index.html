@@ -4,123 +4,122 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>해안도로 감성 드라이브 경로 검색</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
+  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" rel="stylesheet" />
   <style>
-    body {
-      font-family: sans-serif;
-      margin: 0;
-      padding: 0;
-    }
+    body { font-family: sans-serif; margin: 0; padding: 0; }
     .controls {
       padding: 1rem;
       background: #f0f0f0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
     }
-    input {
-      width: 90%;
-      margin: 0.5rem 0;
+    input, button {
       padding: 0.5rem;
       font-size: 1rem;
-    }
-    button {
-      padding: 0.5rem 1rem;
-      font-size: 1rem;
-      cursor: pointer;
     }
     #map {
       width: 100%;
       height: 80vh;
     }
-    .status {
+    .error {
       color: red;
-      margin-top: 0.5rem;
     }
   </style>
 </head>
 <body>
   <div class="controls">
-    <h2>해안도로 감성 드라이브 경로 검색</h2>
-    <div>
-      출발지 주소 (예: 세종시청 또는 한누리대로 2130):<br />
-      <input id="start" placeholder="예: 세종시청 또는 한누리대로 2130" />
-      <div id="startStatus" class="status"></div>
-    </div>
-    <div>
-      도착지 주소 (예: 속초시청 또는 중앙로 183):<br />
-      <input id="end" placeholder="예: 속초시청 또는 중앙로 183" />
-      <div id="endStatus" class="status"></div>
-    </div>
+    <label>
+      출발지 주소 (예: 세종시청 또는 한누리대로 2130):
+      <input id="start" placeholder="출발지 주소 입력" />
+    </label>
+    <label>
+      도착지 주소 (예: 속초시청 또는 중앙로 183):
+      <input id="end" placeholder="도착지 주소 입력" />
+    </label>
     <button onclick="searchRoute()">해안도로 경로 검색</button>
-    <div id="routeStatus" class="status"></div>
+    <div id="error" class="error"></div>
   </div>
   <div id="map"></div>
 
-  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
   <script>
-    let startCoord = null;
-    let endCoord = null;
-
-    const map = new ol.Map({
-      target: "map",
-      layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
-      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
-    });
-
-    const routeLayer = new ol.layer.Vector({
-      source: new ol.source.Vector(),
-      style: new ol.style.Style({
-        stroke: new ol.style.Stroke({ color: '#007AFF', width: 4 })
+    let map = new ol.Map({
+      target: 'map',
+      layers: [
+        new ol.layer.Tile({
+          source: new ol.source.OSM()
+        })
+      ],
+      view: new ol.View({
+        center: ol.proj.fromLonLat([127.5, 36.5]),
+        zoom: 7
       })
     });
-    map.addLayer(routeLayer);
 
-    async function geocode(address, statusEl) {
-      statusEl.textContent = "⏳ 주소 검색 중...";
-      const res = await fetch("/geocode", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        statusEl.textContent = `✅ 위치: ${data.lat}, ${data.lng}`;
-        return data;
-      } else {
-        statusEl.textContent = `❌ 검색 실패: ${data.error}`;
-        return null;
-      }
-    }
+    let routeLayer = new ol.layer.Vector({ source: new ol.source.Vector() });
+    let markerLayer = new ol.layer.Vector({ source: new ol.source.Vector() });
+    map.addLayer(routeLayer);
+    map.addLayer(markerLayer);
 
     async function searchRoute() {
-      routeLayer.getSource().clear();
-      document.getElementById("routeStatus").textContent = "";
+      const start = document.getElementById('start').value;
+      const end = document.getElementById('end').value;
+      const errorDiv = document.getElementById('error');
+      errorDiv.textContent = '';
 
-      const startAddr = document.getElementById("start").value.trim();
-      const endAddr = document.getElementById("end").value.trim();
-      if (!startAddr || !endAddr) {
-        alert("출발지와 도착지 주소를 입력하세요.");
+      if (!start || !end) {
+        errorDiv.textContent = '출발지와 도착지 주소를 모두 입력해주세요.';
         return;
       }
 
-      const start = await geocode(startAddr, document.getElementById("startStatus"));
-      const end = await geocode(endAddr, document.getElementById("endStatus"));
-      if (!start || !end) return;
-
-      const res = await fetch("/route", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      const res = await fetch('/route', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ start, end })
       });
-      const result = await res.json();
-      if (res.ok && result.route) {
-        const coords = result.route.features[0].geometry.coordinates;
-        const route = new ol.geom.LineString(coords).transform("EPSG:4326", "EPSG:3857");
-        const feature = new ol.Feature({ geometry: route });
-        routeLayer.getSource().addFeature(feature);
-        map.getView().fit(route, { padding: [50, 50, 50, 50] });
-        document.getElementById("routeStatus").textContent = "✅ 경로 표시 완료";
-      } else {
-        document.getElementById("routeStatus").textContent = "❌ " + (result.error || "경로 요청 실패");
+
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        errorDiv.textContent = `❌ ${data.error || '경로 검색 실패'}`;
+        return;
       }
+
+      drawGeoJSON(data.route);
+      drawTourSpots(data.tourspots);
+    }
+
+    function drawGeoJSON(geojson) {
+      routeLayer.getSource().clear();
+      const format = new ol.format.GeoJSON();
+      const features = format.readFeatures(geojson, {
+        featureProjection: 'EPSG:3857'
+      });
+      routeLayer.getSource().addFeatures(features);
+    }
+
+    function drawTourSpots(spots) {
+      markerLayer.getSource().clear();
+      spots.forEach(spot => {
+        const feature = new ol.Feature({
+          geometry: new ol.geom.Point(ol.proj.fromLonLat([spot.mapx, spot.mapy])),
+          name: spot.title
+        });
+        feature.setStyle(new ol.style.Style({
+          image: new ol.style.Icon({
+            src: 'https://maps.google.com/mapfiles/kml/paddle/red-circle.png',
+            scale: 1
+          }),
+          text: new ol.style.Text({
+            text: spot.title,
+            offsetY: -25,
+            fill: new ol.style.Fill({ color: '#000' }),
+            stroke: new ol.style.Stroke({ color: '#fff', width: 2 })
+          })
+        }));
+        markerLayer.getSource().addFeature(feature);
+      });
     }
   </script>
 </body>
