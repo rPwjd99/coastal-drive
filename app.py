@@ -1,46 +1,75 @@
+# app.py
 import os
-import json
 import requests
-from flask import Flask, render_template, request, jsonify
+import urllib.parse
+from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
-from urllib.parse import quote
+import geopandas as gpd
+from shapely.geometry import Point
 
 app = Flask(__name__)
 CORS(app)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 ORS_API_KEY = os.getenv("ORS_API_KEY")
-TOURAPI_KEY = os.getenv("TOURAPI_KEY")
+
+# 해안선 GeoJSON 불러오기
+coastline_gdf = gpd.read_file("coastal_route_result.geojson").to_crs(epsg=4326)
 
 
-def correct_address(addr):
-    if "세종시청" in addr or ("한누리대로" in addr and "세종" in addr):
-        return "세종특별자치시 한누리대로 2130"
-    if "보람동" in addr:
-        return "세종특별자치시 보람동 218"
-    if "속초시청" in addr:
-        return "강원도 속초시 중앙로 183"
-    if "중앙로" in addr and "속초" in addr:
-        return "강원도 속초시 중앙로 183"
-    if "중앙동" in addr:
-        return "강원도 속초시 중앙동 469-6"
-    return addr
+def correct_address(address):
+    if "세종" in address and "한누리대로" in address and "세종특별자치시" not in address:
+        return "세종특별자치시 " + address
+    return address
 
 
-def get_coordinates_from_google(address):
+def geocode_address(address):
     address = correct_address(address)
-    url = f"https://maps.googleapis.com/maps/api/geocode/json?address={quote(address)}&key={GOOGLE_API_KEY}"
-    try:
-        response = requests.get(url)
-        data = response.json()
-        if data["status"] == "OK":
-            location = data["results"][0]["geometry"]["location"]
-            return location["lat"], location["lng"]
-        else:
-            print(f"Google Maps API 실패: {data['status']}")
-    except Exception as e:
-        print("Google API 요청 예외:", e)
-    return None, None
+    encoded_address = urllib.parse.quote(address)
+    url = f"https://maps.googleapis.com/maps/api/geocode/json?address={encoded_address}&key={GOOGLE_API_KEY}"
+    response = requests.get(url)
+    if response.status_code != 200:
+        return None
+    data = response.json()
+    if data['status'] == "OK":
+        loc = data['results'][0]['geometry']['location']
+        return loc['lat'], loc['lng']
+    return None
+
+
+def find_detour_point(departure, destination):
+    dep_lat, dep_lon = departure
+    dest_lat, dest_lon = destination
+
+    coastline_gdf['lat_diff'] = (coastline_gdf.geometry.y - dep_lat).abs()
+    coastline_gdf['lon_diff'] = (coastline_gdf.geometry.x - dep_lon).abs()
+
+    by_lat = coastline_gdf.sort_values('lat_diff').iloc[0]
+    by_lon = coastline_gdf.sort_values('lon_diff').iloc[0]
+
+    dest_point = Point(dest_lon, dest_lat)
+    dist_lat = dest_point.distance(Point(by_lat.geometry.x, by_lat.geometry.y))
+    dist_lon = dest_point.distance(Point(by_lon.geometry.x, by_lon.geometry.y))
+
+    if dist_lat <= dist_lon:
+        selected = by_lat
+    else:
+        selected = by_lon
+
+    return (selected.geometry.y, selected.geometry.x)
+
+
+def get_route(coords):
+    headers = {
+        'Authorization': ORS_API_KEY,
+        'Content-Type': 'application/json'
+    }
+    url = 'https://api.openrouteservice.org/v2/directions/driving-car/geojson'
+    body = {
+        "coordinates": coords
+    }
+    response = requests.post(url, json=body, headers=headers)
+    return response.json() if response.status_code == 200 else None
 
 
 @app.route("/")
@@ -52,37 +81,30 @@ def index():
 def geocode():
     data = request.get_json()
     address = data.get("address")
-    lat, lng = get_coordinates_from_google(address)
-    if lat is not None:
-        return jsonify({"lat": lat, "lng": lng})
-    else:
-        return jsonify({"error": "주소를 찾을 수 없습니다."})
+    coords = geocode_address(address)
+    return jsonify({"coords": coords}) if coords else jsonify({"error": "Geocode API returned no results."})
 
 
-@app.route("/tourspots", methods=["POST"])
-def tourspots():
+@app.route("/route", methods=["POST"])
+def route():
     data = request.get_json()
-    lat, lng = data.get("lat"), data.get("lng")
-    url = (
-        f"https://apis.data.go.kr/B551011/KorService1/locationBasedList1?ServiceKey={TOURAPI_KEY}"
-        f"&numOfRows=10&pageNo=1&MobileOS=ETC&MobileApp=test&_type=json"
-        f"&mapX={lng}&mapY={lat}&radius=5000"
-    )
-    try:
-        response = requests.get(url)
-        data = response.json()
-        items = data.get("response", {}).get("body", {}).get("items", {}).get("item", [])
-        results = []
-        for item in items:
-            results.append({
-                "title": item.get("title"),
-                "addr": item.get("addr1"),
-                "mapx": item.get("mapx"),
-                "mapy": item.get("mapy")
-            })
-        return jsonify({"spots": results})
-    except Exception as e:
-        return jsonify({"error": "관광지 정보를 가져오지 못했습니다.", "detail": str(e)})
+    dep_addr = data.get("departure")
+    dest_addr = data.get("destination")
+
+    dep_coords = geocode_address(dep_addr)
+    dest_coords = geocode_address(dest_addr)
+
+    if not dep_coords or not dest_coords:
+        return jsonify({"error": "Invalid address."})
+
+    detour = find_detour_point(dep_coords, dest_coords)
+    route_geojson = get_route([
+        [dep_coords[1], dep_coords[0]],
+        [detour[1], detour[0]],
+        [dest_coords[1], dest_coords[0]]
+    ])
+
+    return jsonify(route_geojson) if route_geojson else jsonify({"error": "Routing failed."})
 
 
 if __name__ == "__main__":
