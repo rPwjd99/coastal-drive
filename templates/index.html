@@ -1,97 +1,94 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-    <meta charset="UTF-8">
-    <title>해안도로 감성 드라이브 경로 검색</title>
-    <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-    <link href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" rel="stylesheet">
-    <style>
-        body { font-family: sans-serif; margin: 0; padding: 0; }
-        .controls {
-            padding: 1rem;
-            background: #f0f0f0;
-        }
-        #map {
-            width: 100%;
-            height: 600px;
-        }
-        .error {
-            color: red;
-            margin-top: 0.5rem;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <title>해안도로 감성 드라이브 경로 검색</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
+  <style>
+    body { font-family: sans-serif; margin: 0; }
+    #map { width: 100%; height: 80vh; }
+    .controls {
+      padding: 1rem;
+      background: #f0f0f0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    input, button {
+      padding: 0.5rem;
+      font-size: 1rem;
+    }
+  </style>
 </head>
 <body>
-    <div class="controls">
-        <h2>해안도로 감성 드라이브 경로 검색</h2>
-        <div>
-            <label>출발지 주소 (예: 세종시청 또는 한누리대로 2130):</label><br>
-            <input type="text" id="start" size="50" value="세종특별자치시 한누리대로 2130">
-        </div>
-        <div style="margin-top: 0.5rem;">
-            <label>도착지 주소 (예: 속초시청 또는 중앙로 183):</label><br>
-            <input type="text" id="end" size="50" value="강원도 속초시 중앙로 183">
-        </div>
-        <button onclick="searchRoute()" style="margin-top: 1rem;">해안도로 경로 검색</button>
-        <div id="error" class="error"></div>
-    </div>
-    <div id="map"></div>
+  <div class="controls">
+    <label>출발지 주소 (예: 세종시청):</label>
+    <input type="text" id="start" placeholder="세종특별자치시 한누리대로 2130">
+    <label>도착지 주소 (예: 속초시청):</label>
+    <input type="text" id="end" placeholder="강원도 속초시 중앙로 183">
+    <button onclick="searchRoute()">해안도로 경로 검색</button>
+  </div>
+  <div id="map"></div>
 
-    <script>
-        const map = new ol.Map({
-            target: 'map',
-            layers: [
-                new ol.layer.Tile({ source: new ol.source.OSM() })
-            ],
-            view: new ol.View({
-                center: ol.proj.fromLonLat([127.5, 36.5]),
-                zoom: 7
-            })
+  <script>
+    const map = new ol.Map({
+      target: 'map',
+      layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
+      view: new ol.View({
+        center: ol.proj.fromLonLat([127.5, 36.5]),
+        zoom: 7
+      })
+    });
+
+    let vectorLayer;
+    function searchRoute() {
+      const start = document.getElementById('start').value;
+      const end = document.getElementById('end').value;
+
+      fetch('/api/route', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start, end })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (vectorLayer) map.removeLayer(vectorLayer);
+
+        const route = new ol.format.GeoJSON().readFeature(data.route, {
+          featureProjection: 'EPSG:3857'
         });
+        vectorLayer = new ol.layer.Vector({
+          source: new ol.source.Vector({ features: [route] }),
+          style: new ol.style.Style({
+            stroke: new ol.style.Stroke({ color: 'blue', width: 3 })
+          })
+        });
+        map.addLayer(vectorLayer);
 
-        let routeLayer;
-
-        function searchRoute() {
-            const start = document.getElementById("start").value;
-            const end = document.getElementById("end").value;
-            document.getElementById("error").textContent = "";
-
-            fetch("/route", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ start, end })
-            })
-            .then(res => res.json())
-            .then(data => {
-                if (data.error) {
-                    document.getElementById("error").textContent = "❌ " + data.error;
-                    console.error(data.detail);
-                    return;
-                }
-
-                const format = new ol.format.GeoJSON();
-                const route = format.readFeature(data.route, {
-                    featureProjection: "EPSG:3857"
-                });
-
-                if (routeLayer) map.removeLayer(routeLayer);
-                routeLayer = new ol.layer.Vector({
-                    source: new ol.source.Vector({ features: [route] }),
-                    style: new ol.style.Style({
-                        stroke: new ol.style.Stroke({ color: 'blue', width: 4 })
-                    })
-                });
-                map.addLayer(routeLayer);
-
-                const coordinates = route.getGeometry().getCoordinates();
-                const extent = route.getGeometry().getExtent();
-                map.getView().fit(extent, { padding: [50, 50, 50, 50] });
-            })
-            .catch(err => {
-                document.getElementById("error").textContent = "❌ 서버 오류 또는 네트워크 오류";
-                console.error(err);
+        if (data.tourspots && Array.isArray(data.tourspots)) {
+          data.tourspots.forEach(spot => {
+            const coord = ol.proj.fromLonLat([spot.mapx, spot.mapy]);
+            const marker = new ol.Feature(new ol.geom.Point(coord));
+            marker.setStyle(new ol.style.Style({
+              image: new ol.style.Icon({
+                src: 'https://cdn-icons-png.flaticon.com/512/684/684908.png',
+                scale: 0.05
+              })
+            }));
+            const vector = new ol.layer.Vector({
+              source: new ol.source.Vector({ features: [marker] })
             });
+            map.addLayer(vector);
+
+            marker.set('desc', `<b>${spot.title}</b><br>${spot.addr1}<br><img src="${spot.firstimage || ''}" width="150">`);
+            marker.on('click', () => alert(marker.get('desc')));
+          });
         }
-    </script>
+      })
+      .catch(err => alert('❌ 서버 오류 또는 네트워크 오류'));
+    }
+  </script>
 </body>
 </html>
