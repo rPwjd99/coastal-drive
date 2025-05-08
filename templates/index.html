@@ -3,111 +3,94 @@
 <head>
     <meta charset="UTF-8">
     <title>해안도로 감성 드라이브 경로 검색</title>
-    <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
     <style>
-        body { font-family: sans-serif; padding: 1em; }
-        #map { width: 100%; height: 500px; margin-top: 20px; }
-        input { width: 80%; padding: 8px; margin: 6px 0; }
-        button { padding: 8px 16px; margin: 6px 0; }
-        .result { margin-top: 10px; }
+        body { font-family: sans-serif; padding: 1rem; }
+        .controls { margin-bottom: 1rem; background: #f0f0f0; padding: 1rem; border-radius: 8px; }
+        #map { width: 100%; height: 600px; }
+        input, button { padding: 0.5rem; margin: 0.2rem 0; width: 100%; }
     </style>
 </head>
 <body>
     <h2>해안도로 감성 드라이브 경로 검색</h2>
 
-    <label>출발지 주소 (예: 세종시청 또는 한누리대로 2130):</label><br>
-    <input type="text" id="start" placeholder="출발지 주소를 입력하세요"><br>
-    <button onclick="geocode('start')">출발지 주소 검색</button>
-    <div id="startResult" class="result"></div>
-
-    <label>도착지 주소 (예: 속초시청 또는 중앙로 183):</label><br>
-    <input type="text" id="end" placeholder="도착지 주소를 입력하세요"><br>
-    <button onclick="geocode('end')">도착지 주소 검색</button>
-    <div id="endResult" class="result"></div>
-
-    <button onclick="searchRoute()">🚗 해안도로 경로 검색</button>
-    <div id="status" class="result"></div>
+    <div class="controls">
+        <label>출발지 주소 (예: 세종시청 또는 한누리대로 2130):</label>
+        <input type="text" id="start" placeholder="세종특별자치시 한누리대로 2130">
+        <label>도착지 주소 (예: 속초시청 또는 중앙로 183):</label>
+        <input type="text" id="end" placeholder="강원도 속초시 중앙로 183">
+        <button onclick="searchRoute()">해안도로 경로 검색</button>
+        <p id="status"></p>
+    </div>
 
     <div id="map"></div>
 
-    <script>
-        let startCoord = null;
-        let endCoord = null;
+    <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
 
-        const map = new ol.Map({
+    <script>
+        let map = new ol.Map({
             target: 'map',
-            layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
-            view: new ol.View({
-                center: ol.proj.fromLonLat([127.5, 36.5]),
-                zoom: 7
-            })
+            layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
+            view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
         });
 
-        const vectorSource = new ol.source.Vector();
-        const vectorLayer = new ol.layer.Vector({ source: vectorSource });
-        map.addLayer(vectorLayer);
-
-        function geocode(type) {
-            const addr = document.getElementById(type).value;
-            fetch('/geocode', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ address: addr })
-            })
-            .then(res => res.json())
-            .then(data => {
-                if (data.lat && data.lon) {
-                    document.getElementById(type + 'Result').innerText = `✅ 위치: ${data.lat}, ${data.lon}`;
-                    if (type === 'start') startCoord = [data.lon, data.lat];
-                    if (type === 'end') endCoord = [data.lon, data.lat];
-                } else {
-                    document.getElementById(type + 'Result').innerText = `❌ 검색 실패: ${data.error}`;
-                }
+        async function geocode(address) {
+            const res = await fetch("/geocode", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ address })
             });
+            if (!res.ok) throw new Error("주소를 찾을 수 없습니다.");
+            return await res.json();
         }
 
-        function searchRoute() {
-            if (!startCoord || !endCoord) {
-                document.getElementById("status").innerText = "❗ 출발지와 도착지를 모두 입력하세요.";
-                return;
-            }
+        async function searchRoute() {
+            const startAddr = document.getElementById("start").value;
+            const endAddr = document.getElementById("end").value;
+            const status = document.getElementById("status");
 
-            fetch('/route', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ start: startCoord, end: endCoord })
-            })
-            .then(res => res.json())
-            .then(data => {
-                if (data.error) {
-                    document.getElementById("status").innerText = `❌ 경로 요청 실패: ${data.error}`;
-                } else {
-                    document.getElementById("status").innerText = "✅ 경로 표시 중...";
-                    vectorSource.clear();
+            try {
+                status.textContent = "📍 주소 변환 중...";
+                const start = await geocode(startAddr);
+                const end = await geocode(endAddr);
 
-                    const route = new ol.format.GeoJSON().readFeature(data.route, {
-                        dataProjection: 'EPSG:4326',
-                        featureProjection: 'EPSG:3857'
-                    });
-                    vectorSource.addFeature(route);
+                status.textContent = "🛣️ 해안도로 경유 경로 계산 중...";
+                const res = await fetch("/route", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ start, end })
+                });
 
-                    data.tourspots.forEach(spot => {
-                        const marker = new ol.Feature({
-                            geometry: new ol.geom.Point(ol.proj.fromLonLat([spot.mapx, spot.mapy])),
-                            name: spot.title
-                        });
-                        marker.setStyle(new ol.style.Style({
-                            image: new ol.style.Circle({
-                                radius: 5,
-                                fill: new ol.style.Fill({ color: 'blue' }),
-                                stroke: new ol.style.Stroke({ color: 'white', width: 1 })
-                            })
-                        }));
-                        vectorSource.addFeature(marker);
-                    });
+                const data = await res.json();
+                if (!res.ok) {
+                    status.textContent = "❌ " + (data.error || "경로 계산 실패");
+                    console.error(data.details);
+                    return;
                 }
+
+                status.textContent = "✅ 경로 표시 완료!";
+                drawRoute(data);
+            } catch (err) {
+                status.textContent = "❌ 에러 발생: " + err.message;
+            }
+        }
+
+        function drawRoute(geojson) {
+            const format = new ol.format.GeoJSON();
+            const feature = format.readFeature(geojson, {
+                featureProjection: 'EPSG:3857'
             });
+
+            const layer = new ol.layer.Vector({
+                source: new ol.source.Vector({ features: [feature] }),
+                style: new ol.style.Style({
+                    stroke: new ol.style.Stroke({ color: 'blue', width: 4 })
+                })
+            });
+
+            map.getLayers().getArray().slice(1).forEach(l => map.removeLayer(l));
+            map.addLayer(layer);
+            map.getView().fit(layer.getSource().getExtent(), { padding: [50, 50, 50, 50] });
         }
     </script>
 </body>
