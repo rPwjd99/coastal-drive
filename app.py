@@ -1,111 +1,75 @@
-# app.py
 import os
 import requests
-import urllib.parse
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 import geopandas as gpd
+import math
 from shapely.geometry import Point
 
 app = Flask(__name__)
 CORS(app)
 
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-ORS_API_KEY = os.getenv("ORS_API_KEY")
+# 해안선 로드
+coastline = gpd.read_file("coastal_route_result.geojson").to_crs(epsg=4326)
+coast_points = []
+for geom in coastline.explode(index_parts=False).geometry:
+    if geom.geom_type == "LineString":
+        coast_points.extend(geom.coords)
+    elif geom.geom_type == "MultiLineString":
+        for line in geom:
+            coast_points.extend(line.coords)
 
-# 해안선 GeoJSON 불러오기
-coastline_gdf = gpd.read_file("coastal_route_result.geojson").to_crs(epsg=4326)
+def haversine(coord1, coord2):
+    R = 6371
+    lat1, lon1 = map(math.radians, coord1)
+    lat2, lon2 = map(math.radians, coord2)
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = math.sin(dlat/2)**2 + math.cos(lat1)*math.cos(lat2)*math.sin(dlon/2)**2
+    return R * 2 * math.asin(math.sqrt(a))
 
+def find_waypoint(start):
+    lat_cands = [pt for pt in coast_points if abs(pt[1] - start[0]) < 0.1 and pt[0] > start[1]]
+    lon_cands = [pt for pt in coast_points if abs(pt[0] - start[1]) < 0.1 and pt[1] > start[0]]
 
-def correct_address(address):
-    if "세종" in address and "한누리대로" in address and "세종특별자치시" not in address:
-        return "세종특별자치시 " + address
-    return address
+    lat_pt = min(lat_cands, key=lambda pt: haversine(start, (pt[1], pt[0]))) if lat_cands else None
+    lon_pt = min(lon_cands, key=lambda pt: haversine(start, (pt[1], pt[0]))) if lon_cands else None
 
-
-def geocode_address(address):
-    address = correct_address(address)
-    encoded_address = urllib.parse.quote(address)
-    url = f"https://maps.googleapis.com/maps/api/geocode/json?address={encoded_address}&key={GOOGLE_API_KEY}"
-    response = requests.get(url)
-    if response.status_code != 200:
-        return None
-    data = response.json()
-    if data['status'] == "OK":
-        loc = data['results'][0]['geometry']['location']
-        return loc['lat'], loc['lng']
-    return None
-
-
-def find_detour_point(departure, destination):
-    dep_lat, dep_lon = departure
-    dest_lat, dest_lon = destination
-
-    coastline_gdf['lat_diff'] = (coastline_gdf.geometry.y - dep_lat).abs()
-    coastline_gdf['lon_diff'] = (coastline_gdf.geometry.x - dep_lon).abs()
-
-    by_lat = coastline_gdf.sort_values('lat_diff').iloc[0]
-    by_lon = coastline_gdf.sort_values('lon_diff').iloc[0]
-
-    dest_point = Point(dest_lon, dest_lat)
-    dist_lat = dest_point.distance(Point(by_lat.geometry.x, by_lat.geometry.y))
-    dist_lon = dest_point.distance(Point(by_lon.geometry.x, by_lon.geometry.y))
-
-    if dist_lat <= dist_lon:
-        selected = by_lat
-    else:
-        selected = by_lon
-
-    return (selected.geometry.y, selected.geometry.x)
-
-
-def get_route(coords):
-    headers = {
-        'Authorization': ORS_API_KEY,
-        'Content-Type': 'application/json'
-    }
-    url = 'https://api.openrouteservice.org/v2/directions/driving-car/geojson'
-    body = {
-        "coordinates": coords
-    }
-    response = requests.post(url, json=body, headers=headers)
-    return response.json() if response.status_code == 200 else None
-
+    if lat_pt and lon_pt:
+        d_lat = haversine(start, (lat_pt[1], lat_pt[0]))
+        d_lon = haversine(start, (lon_pt[1], lon_pt[0]))
+        return lat_pt if d_lat <= d_lon else lon_pt
+    return lat_pt or lon_pt
 
 @app.route("/")
-def index():
+def home():
     return render_template("index.html")
-
-
-@app.route("/geocode", methods=["POST"])
-def geocode():
-    data = request.get_json()
-    address = data.get("address")
-    coords = geocode_address(address)
-    return jsonify({"coords": coords}) if coords else jsonify({"error": "Geocode API returned no results."})
-
 
 @app.route("/route", methods=["POST"])
 def route():
     data = request.get_json()
-    dep_addr = data.get("departure")
-    dest_addr = data.get("destination")
+    start = data["start"]  # [lat, lon]
+    end = data["end"]      # [lat, lon]
 
-    dep_coords = geocode_address(dep_addr)
-    dest_coords = geocode_address(dest_addr)
+    waypoint = find_waypoint(tuple(start))
+    if not waypoint:
+        return jsonify({"error": "경유지 해안 좌표를 찾을 수 없습니다."}), 400
 
-    if not dep_coords or not dest_coords:
-        return jsonify({"error": "Invalid address."})
+    coords = [[start[1], start[0]], [waypoint[0], waypoint[1]], [end[1], end[0]]]
+    headers = {
+        "Authorization": os.getenv("ORS_API_KEY"),
+        "Content-Type": "application/json"
+    }
+    payload = {"coordinates": coords, "format": "geojson"}
 
-    detour = find_detour_point(dep_coords, dest_coords)
-    route_geojson = get_route([
-        [dep_coords[1], dep_coords[0]],
-        [detour[1], detour[0]],
-        [dest_coords[1], dest_coords[0]]
-    ])
+    response = requests.post(
+        "https://api.openrouteservice.org/v2/directions/driving-car/geojson",
+        headers=headers, json=payload
+    )
 
-    return jsonify(route_geojson) if route_geojson else jsonify({"error": "Routing failed."})
-
+    if response.status_code == 200:
+        return jsonify(response.json())
+    return jsonify({"error": response.text}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), debug=True)
