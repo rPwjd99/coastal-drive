@@ -1,96 +1,106 @@
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-  <meta charset="UTF-8">
-  <title>해안도로 감성 드라이브</title>
-  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
-  <style>
-    body { font-family: sans-serif; margin: 0; padding: 0; }
-    #map { width: 100%; height: 80vh; }
-    .controls { padding: 1rem; background: #f0f0f0; }
-    .controls input { width: 300px; margin-right: 0.5rem; }
-  </style>
-</head>
-<body>
-  <div class="controls">
-    <h2>해안도로 감성 드라이브 경로 검색</h2>
-    <div>
-      출발지: <input id="start" placeholder="예: 세종시청">
-      <button onclick="search('start')">주소 검색</button>
-      <span id="startResult"></span>
-    </div>
-    <div style="margin-top: 0.5rem;">
-      목적지: <input id="end" placeholder="예: 속초시청">
-      <button onclick="search('end')">주소 검색</button>
-      <span id="endResult"></span>
-    </div>
-    <div style="margin-top: 1rem;">
-      <button onclick="searchRoute()">해안도로 경로 검색</button>
-    </div>
-  </div>
-  <div id="map"></div>
+import os
+import json
+import requests
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
+from shapely.geometry import Point
+import geopandas as gpd
+import math
 
-  <script>
-    let map = new ol.Map({
-      target: 'map',
-      layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
-      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 8 })
-    });
+app = Flask(__name__)
+CORS(app)
 
-    let startCoord = null;
-    let endCoord = null;
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+ORS_API_KEY = os.getenv("ORS_API_KEY")
+VWORLD_API_KEY = os.getenv("VWORLD_API_KEY")
+TOURAPI_KEY = os.getenv("TOURAPI_KEY")
 
-    function search(type) {
-      const input = document.getElementById(type).value;
-      fetch('/geocode', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address: input })
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.lat && data.lng) {
-          if (type === 'start') startCoord = [data.lng, data.lat];
-          else endCoord = [data.lng, data.lat];
-          document.getElementById(type + 'Result').textContent = `✅ 위치: ${data.lat}, ${data.lng}`;
-        } else {
-          document.getElementById(type + 'Result').textContent = '❌ 검색 실패';
-        }
-      });
+coastline = gpd.read_file("해안선_국가기본도.geojson").to_crs(epsg=4326)
+coords = []
+for geom in coastline.explode(index_parts=False).geometry:
+    if geom.geom_type == "LineString":
+        coords.extend(list(geom.coords))
+    elif geom.geom_type == "MultiLineString":
+        for line in geom:
+            coords.extend(list(line.coords))
+
+def haversine(coord1, coord2):
+    R = 6371
+    lat1, lon1 = map(math.radians, coord1)
+    lat2, lon2 = map(math.radians, coord2)
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = math.sin(dlat/2)**2 + math.cos(lat1)*math.cos(lat2)*math.sin(dlon/2)**2
+    return R * 2 * math.asin(math.sqrt(a))
+
+@app.route("/geocode", methods=["POST"])
+def geocode():
+    data = request.get_json()
+    address = data["address"]
+    url = f"https://maps.googleapis.com/maps/api/geocode/json?address={address}&key={GOOGLE_API_KEY}"
+    response = requests.get(url)
+    result = response.json()
+    if result["status"] == "OK":
+        loc = result["results"][0]["geometry"]["location"]
+        return jsonify({"lat": loc["lat"], "lon": loc["lng"]})
+    else:
+        return jsonify({"error": result["status"]})
+
+@app.route("/route", methods=["POST"])
+def route():
+    data = request.get_json()
+    start = (data["start"][1], data["start"][0])  # (lat, lon)
+    end = (data["end"][1], data["end"][0])        # (lat, lon)
+
+    lat_candidates = [pt for pt in coords if abs(pt[1] - start[0]) < 0.1 and pt[0] > start[1]]
+    lon_candidates = [pt for pt in coords if abs(pt[0] - start[1]) < 0.1 and pt[1] > start[0]]
+
+    nearest_lat = min(lat_candidates, key=lambda x: haversine(start, (x[1], x[0]))) if lat_candidates else None
+    nearest_lon = min(lon_candidates, key=lambda x: haversine(start, (x[1], x[0]))) if lon_candidates else None
+
+    if nearest_lat and nearest_lon:
+        dist_lat = haversine(start, (nearest_lat[1], nearest_lat[0]))
+        dist_lon = haversine(start, (nearest_lon[1], nearest_lon[0]))
+        waypoint = nearest_lat if dist_lat <= dist_lon else nearest_lon
+    elif nearest_lat:
+        waypoint = nearest_lat
+    elif nearest_lon:
+        waypoint = nearest_lon
+    else:
+        return jsonify({"error": "경유지 해안 좌표를 찾을 수 없습니다."})
+
+    coords_list = [
+        [start[1], start[0]],
+        [waypoint[0], waypoint[1]],
+        [end[1], end[0]]
+    ]
+
+    headers = {
+        "Authorization": ORS_API_KEY,
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "coordinates": coords_list,
+        "format": "geojson"
     }
 
-    function searchRoute() {
-      if (!startCoord || !endCoord) return alert('출발지와 도착지를 모두 검색해 주세요');
-      fetch('/route', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ start: startCoord, end: endCoord })
-      })
-      .then(res => res.json())
-      .then(geojson => drawRoute(geojson))
-      .catch(err => alert('❌ 경로 요청 실패'));
-    }
+    res = requests.post("https://api.openrouteservice.org/v2/directions/driving-car/geojson", headers=headers, json=payload)
+    if res.status_code != 200:
+        return jsonify({"error": res.text})
 
-    function drawRoute(geojson) {
-      const format = new ol.format.GeoJSON();
-      const features = format.readFeatures(geojson, {
-        featureProjection: 'EPSG:3857'
-      });
+    route = res.json()
 
-      const layer = new ol.layer.Vector({
-        source: new ol.source.Vector({ features }),
-        style: new ol.style.Style({
-          stroke: new ol.style.Stroke({ color: 'blue', width: 4 })
-        })
-      });
+    # 관광지
+    spot_url = f"http://apis.data.go.kr/B551011/KorService1/locationBasedList1?MobileOS=ETC&MobileApp=AppTest&mapX={end[0]}&mapY={end[1]}&radius=5000&arrange=E&numOfRows=10&pageNo=1&_type=json&serviceKey={TOURAPI_KEY}"
+    tour_res = requests.get(spot_url).json()
+    items = tour_res.get("response", {}).get("body", {}).get("items", {}).get("item", [])
+    tourspots = [{"title": i["title"], "mapx": float(i["mapx"]), "mapy": float(i["mapy"])} for i in items]
 
-      map.getLayers().getArray().slice(1).forEach(l => map.removeLayer(l));
-      map.addLayer(layer);
+    return jsonify({"route": route, "tourspots": tourspots})
 
-      const extent = layer.getSource().getExtent();
-      map.getView().fit(extent, { padding: [30, 30, 30, 30] });
-    }
-  </script>
-</body>
-</html>
+@app.route("/")
+def serve_index():
+    return send_from_directory(".", "index.html")
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), debug=True)
