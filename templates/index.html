@@ -5,6 +5,15 @@
   <title>CoastalDrive - 해안도로 경로 추천</title>
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
+  <style>
+    .ol-popup {
+      background: white;
+      padding: 4px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+  </style>
 </head>
 <body>
   <h2>출발지와 목적지를 입력하세요</h2>
@@ -25,6 +34,14 @@
     });
 
     let routeLayer, markerLayer;
+    const overlay = new ol.Overlay({
+      element: document.createElement('div'),
+      positioning: 'bottom-center',
+      stopEvent: false,
+      offset: [0, -10]
+    });
+    overlay.getElement().className = 'ol-popup';
+    map.addOverlay(overlay);
 
     function searchRoute() {
       const start = document.getElementById('start').value.trim();
@@ -59,7 +76,7 @@
         }
 
         document.getElementById('corrected').innerText =
-          "✅ 보정된 주소: 출발지 → " + data.start_corrected + ", 목적지 → " + data.end_corrected;
+          "✅ 우회 경로 계산 성공!\n보정된 주소: 출발지 → " + data.start_corrected + ", 목적지 → " + data.end_corrected;
 
         if (!data.geojson || !data.geojson.features || data.geojson.features.length === 0) {
           alert('경로를 찾을 수 없습니다. 도로 연결이 불가능한 위치일 수 있습니다.');
@@ -88,7 +105,7 @@
             if (!spot.mapx || !spot.mapy) return;
             const marker = new ol.Feature({
               geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(spot.mapx), parseFloat(spot.mapy)])),
-              name: spot.title
+              name: spot.title || '관광지'
             });
             marker.setStyle(new ol.style.Style({
               image: new ol.style.Circle({
@@ -97,11 +114,23 @@
                 stroke: new ol.style.Stroke({ color: '#fff', width: 2 })
               })
             }));
+            marker.set("popupText", spot.title);
             markers.push(marker);
           });
         }
-        markerLayer = new ol.layer.Vector({ source: new ol.source.Vector({ features: markers }) });
+        const vectorSource = new ol.source.Vector({ features: markers });
+        markerLayer = new ol.layer.Vector({ source: vectorSource });
         map.addLayer(markerLayer);
+
+        map.on('pointermove', function(evt) {
+          const feature = map.forEachFeatureAtPixel(evt.pixel, f => f);
+          if (feature && feature.get("popupText")) {
+            overlay.getElement().innerHTML = feature.get("popupText");
+            overlay.setPosition(evt.coordinate);
+          } else {
+            overlay.setPosition(undefined);
+          }
+        });
       })
       .catch(err => {
         alert('❌ 예외 발생: 서버 또는 네트워크 오류. 콘솔을 확인하세요.');
