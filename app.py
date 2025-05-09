@@ -29,9 +29,13 @@ def get_route(start_coords, end_coords):
         ]
     }
     response = requests.post("https://api.openrouteservice.org/v2/directions/driving-car", headers=headers, json=body)
-    if response.status_code == 200:
+    print("📡 OpenRouteService 요청 좌표:", body)
+    print("📡 응답 코드:", response.status_code)
+    try:
         return response.json()
-    return None
+    except Exception as e:
+        print("❌ JSON 파싱 오류:", e)
+        return None
 
 def get_tourspots(lat, lng):
     url = (
@@ -40,10 +44,11 @@ def get_tourspots(lat, lng):
         f"&numOfRows=10&pageNo=1&MobileOS=ETC&MobileApp=CoastalDrive&_type=json"
         f"&mapX={lng}&mapY={lat}&radius=5000"
     )
-    response = requests.get(url).json()
     try:
+        response = requests.get(url).json()
         return response['response']['body']['items']['item']
-    except:
+    except Exception as e:
+        print("❌ 관광지 불러오기 오류:", e)
         return []
 
 @app.route('/')
@@ -56,17 +61,31 @@ def route():
     start_input = data['start']
     end_input = data['end']
 
+    print("🚀 입력 받은 출발지:", start_input)
+    print("🚀 입력 받은 목적지:", end_input)
+
     start_lat, start_lng, start_fmt = geocode_address(start_input)
     end_lat, end_lng, end_fmt = geocode_address(end_input)
 
+    print("📍 출발지 좌표:", start_lat, start_lng)
+    print("📍 목적지 좌표:", end_lat, end_lng)
+
     if None in [start_lat, start_lng, end_lat, end_lng]:
+        print("❌ 주소 보정 실패")
         return jsonify({'error': '주소를 인식하지 못했습니다. 정확한 도로명 또는 지번 주소를 입력해 주세요.'})
 
-    route_result = get_route((start_lat, start_lng), (end_lat, end_lng))
-    if not route_result or 'features' not in route_result:
-        return jsonify({'error': '경로 계산 실패'}), 500
+    try:
+        route_result = get_route((start_lat, start_lng), (end_lat, end_lng))
+        print("🧭 경로 응답:", route_result)
+        if not route_result or 'features' not in route_result:
+            print("❌ features 없음")
+            return jsonify({'error': '경로 계산 실패'}), 500
+    except Exception as e:
+        print("❌ 경로 계산 중 예외:", e)
+        return jsonify({'error': '경로 계산 중 내부 오류'}), 500
 
     tour_spots = get_tourspots(end_lat, end_lng)
+    print("🏖 관광지 수:", len(tour_spots))
 
     return jsonify({
         'geojson': route_result,
