@@ -1,103 +1,103 @@
-import os
-import requests
-from flask import Flask, request, jsonify, render_template
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>CoastalDrive - 해안도로 경로 추천</title>
+  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
+</head>
+<body>
+  <h2>출발지와 목적지를 입력하세요</h2>
+  <input id="start" placeholder="예: 세종특별자치시 한누리대로 2130" size="50">
+  <input id="end" placeholder="예: 강원도 속초시 중앙로 183" size="50">
+  <button onclick="searchRoute()">해안도로 경로 검색</button>
+  <p id="corrected"></p>
+  <div id="map" style="width: 100%; height: 500px;"></div>
 
-app = Flask(__name__)
+  <script>
+    const map = new ol.Map({
+      target: 'map',
+      layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
+      view: new ol.View({
+        center: ol.proj.fromLonLat([127.7669, 35.9078]),
+        zoom: 7
+      })
+    });
 
-GOOGLE_API_KEY = "AIzaSyC9MSD-WhkqK_Og5YdVYfux21xiRjy2q1M"
-ORS_API_KEY = "5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953"
-TOUR_API_KEY = "e1tU33wjMx2nynKjH8yDBm/S4YNne6B8mpCOWtzMH9TSONF71XG/xAwPqyv1fANpgeOvbPY+Le+gM6cYCnWV8w=="
+    function searchRoute() {
+      const start = document.getElementById('start').value;
+      const end = document.getElementById('end').value;
 
-def geocode_address(address):
-    url = f"https://maps.googleapis.com/maps/api/geocode/json?address={address}&region=kr&key={GOOGLE_API_KEY}"
-    response = requests.get(url).json()
-    if response['status'] == 'OK':
-        location = response['results'][0]['geometry']['location']
-        formatted = response['results'][0]['formatted_address']
-        return location['lat'], location['lng'], formatted
-    return None, None, None
+      fetch('/route', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start, end })
+      })
+      .then(async res => {
+        if (!res.ok) {
+          const text = await res.text();
+          alert('❌ 서버 오류 발생 (HTTP ' + res.status + ')');
+          console.error('서버 응답 내용:', text);
+          throw new Error('서버 오류');
+        }
+        return res.json();
+      })
+      .then(data => {
+        if (data.error) {
+          alert("❌ " + data.error);
+          return;
+        }
 
-def get_route(start_coords, end_coords):
-    headers = {
-        'Authorization': ORS_API_KEY,
-        'Content-Type': 'application/json'
+        document.getElementById('corrected').innerText =
+          `보정된 주소: 출발지 → ${data.start_corrected}, 목적지 → ${data.end_corrected}`;
+
+        if (!data.geojson || !data.geojson.features || data.geojson.features.length === 0) {
+          alert('경로를 찾을 수 없습니다. 도로 연결이 불가능한 위치일 수 있습니다.');
+          return;
+        }
+
+        const format = new ol.format.GeoJSON();
+        const feature = format.readFeature(data.geojson, {
+          featureProjection: map.getView().getProjection()
+        });
+
+        const routeLayer = new ol.layer.Vector({
+          source: new ol.source.Vector({ features: [feature] }),
+          style: new ol.style.Style({
+            stroke: new ol.style.Stroke({ color: '#0077cc', width: 4 })
+          })
+        });
+
+        map.getLayers().getArray().slice(1).forEach(layer => map.removeLayer(layer));
+        map.addLayer(routeLayer);
+        map.getView().fit(routeLayer.getSource().getExtent(), { padding: [30, 30, 30, 30] });
+
+        if (data.tourspots && Array.isArray(data.tourspots)) {
+          data.tourspots.forEach(spot => {
+            if (!spot.mapx || !spot.mapy) return;
+            const marker = new ol.Feature({
+              geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(spot.mapx), parseFloat(spot.mapy)])),
+              name: spot.title || '관광지'
+            });
+            marker.setStyle(new ol.style.Style({
+              image: new ol.style.Circle({
+                radius: 6,
+                fill: new ol.style.Fill({ color: 'red' }),
+                stroke: new ol.style.Stroke({ color: '#fff', width: 2 })
+              })
+            }));
+            const vectorLayer = new ol.layer.Vector({
+              source: new ol.source.Vector({ features: [marker] })
+            });
+            map.addLayer(vectorLayer);
+          });
+        }
+      })
+      .catch(err => {
+        alert('❌ 예외 발생: 서버 또는 네트워크 오류. 콘솔을 확인하세요.');
+        console.error('예외:', err);
+      });
     }
-    body = {
-        "coordinates": [
-            [start_coords[1], start_coords[0]],
-            [end_coords[1], end_coords[0]]
-        ]
-    }
-    try:
-        print("📡 ORS 요청 좌표:", body)
-        response = requests.post("https://api.openrouteservice.org/v2/directions/driving-car", headers=headers, json=body)
-        print("📡 응답 코드:", response.status_code)
-        print("📡 응답 원문:", response.text[:500])  # 응답 길이 제한
-        return response.json()
-    except Exception as e:
-        print("❌ ORS JSON 파싱 실패:", e)
-        return None
-
-def get_tourspots(lat, lng):
-    url = (
-        f"https://apis.data.go.kr/B551011/KorService1/locationBasedList1"
-        f"?serviceKey={TOUR_API_KEY}"
-        f"&numOfRows=10&pageNo=1&MobileOS=ETC&MobileApp=CoastalDrive&_type=json"
-        f"&mapX={lng}&mapY={lat}&radius=5000"
-    )
-    try:
-        response = requests.get(url).json()
-        return response['response']['body']['items']['item']
-    except Exception as e:
-        print("❌ 관광지 로딩 오류:", e)
-        return []
-
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-@app.route('/route', methods=['POST'])
-def route():
-    data = request.get_json()
-    start_input = data['start']
-    end_input = data['end']
-
-    print("🚀 입력 받은 출발지:", start_input)
-    print("🚀 입력 받은 목적지:", end_input)
-
-    start_lat, start_lng, start_fmt = geocode_address(start_input)
-    end_lat, end_lng, end_fmt = geocode_address(end_input)
-
-    print("📍 출발지 좌표:", start_lat, start_lng)
-    print("📍 목적지 좌표:", end_lat, end_lng)
-
-    if None in [start_lat, start_lng, end_lat, end_lng]:
-        print("❌ 주소 보정 실패")
-        return jsonify({'error': '주소를 인식하지 못했습니다. 도로명 또는 지번 주소를 다시 입력해 주세요.'})
-
-    try:
-        route_result = get_route((start_lat, start_lng), (end_lat, end_lng))
-        if not route_result or 'features' not in route_result:
-            print("❌ ORS 응답 오류 또는 features 없음")
-            return jsonify({'error': '경로 계산 실패'}), 500
-    except Exception as e:
-        print("❌ 경로 계산 중 예외 발생:", e)
-        return jsonify({'error': '경로 계산 중 내부 오류'}), 500
-
-    try:
-        tour_spots = get_tourspots(end_lat, end_lng)
-        print("🏖 관광지 개수:", len(tour_spots))
-    except Exception as e:
-        print("❌ 관광지 처리 예외:", e)
-        tour_spots = []
-
-    return jsonify({
-        'geojson': route_result,
-        'start_corrected': start_fmt,
-        'end_corrected': end_fmt,
-        'tourspots': tour_spots
-    })
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+  </script>
+</body>
+</html>
