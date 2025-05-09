@@ -33,24 +33,18 @@ def haversine(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
-def find_nearest_coast(start_lat, start_lng, end_lat, end_lng):
-    try:
-        coast_gdf = gpd.read_file("./coastal_route_result.geojson").to_crs(epsg=4326)
-        coords_list = []
-        for geom in coast_gdf.geometry:
-            if geom.geom_type == 'MultiLineString':
-                for line in geom.geoms:
-                    coords_list.extend(list(line.coords))
-            elif geom.geom_type == 'LineString':
-                coords_list.extend(list(geom.coords))
-
-        aligned = [(lat, lon, haversine(start_lat, start_lng, lat, lon)) for lon, lat in coords_list]
-        aligned.sort(key=lambda x: x[2])
-        return aligned[0][0], aligned[0][1]
-
-    except Exception as e:
-        print("❌ 해안선 분석 오류:", e)
-        raise
+def find_candidate_waypoints(start_lat, start_lng, end_lat, end_lng):
+    coast_gdf = gpd.read_file("./coastal_route_result.geojson").to_crs(epsg=4326)
+    coords_list = []
+    for geom in coast_gdf.geometry:
+        if geom.geom_type == 'MultiLineString':
+            for line in geom.geoms:
+                coords_list.extend(list(line.coords))
+        elif geom.geom_type == 'LineString':
+            coords_list.extend(list(geom.coords))
+    ranked = [(lat, lon, haversine(start_lat, start_lng, lat, lon) + haversine(lat, lon, end_lat, end_lng)) for lon, lat in coords_list]
+    ranked.sort(key=lambda x: x[2])
+    return [(lat, lon) for lat, lon, _ in ranked[:20]]  # 상위 20개 후보 반환
 
 def get_route_by_coords(coords):
     headers = {
@@ -58,26 +52,23 @@ def get_route_by_coords(coords):
         'Content-Type': 'application/json'
     }
     body = {"coordinates": [[lng, lat] for lat, lng in coords]}
-    print("📦 ORS 요청 좌표:", body)
     try:
         res = requests.post("https://api.openrouteservice.org/v2/directions/driving-car", headers=headers, json=body)
         print("📡 ORS 응답 코드:", res.status_code)
-        print("📨 ORS 응답 내용:", res.text[:500])
-        return res.json() if res.status_code == 200 else None
+        return res.json() if res.status_code == 200 and 'features' in res.json() else None
     except Exception as e:
         print("❌ 경로 요청 오류:", e)
         return None
 
-def find_fallback_waypoint(lat, lon):
-    coast_gdf = gpd.read_file("./coastal_route_result.geojson").to_crs(epsg=4326)
-    point = Point(lon, lat)
-    buffered = point.buffer(0.045)  # 약 5km 버퍼 (도 단위 기준)
-    for geom in coast_gdf.geometry:
-        if geom.intersects(buffered):
-            coords = list(geom.coords)
-            for lon2, lat2 in coords:
-                return lat2, lon2
-    return lat, lon
+def find_first_successful_waypoint(start_lat, start_lng, end_lat, end_lng):
+    candidates = find_candidate_waypoints(start_lat, start_lng, end_lat, end_lng)
+    for lat, lng in candidates:
+        print("🔍 테스트 중인 후보 해안 좌표:", lat, lng)
+        result = get_route_by_coords([(start_lat, start_lng), (lat, lng), (end_lat, end_lng)])
+        if result:
+            print("✅ 성공한 해안 경유지 발견!")
+            return lat, lng, result
+    return None, None, None
 
 def get_tourspots(lat, lng):
     url = (
@@ -106,17 +97,11 @@ def route():
         return jsonify({'error': '주소를 인식하지 못했습니다.'})
 
     try:
-        waypoint_lat, waypoint_lng = find_nearest_coast(start_lat, start_lng, end_lat, end_lng)
-        route_result = get_route_by_coords([(start_lat, start_lng), (waypoint_lat, waypoint_lng), (end_lat, end_lng)])
-        if not route_result or 'features' not in route_result:
-            print("❌ 첫 번째 경로 실패 → Fallback 실행")
-            waypoint_lat, waypoint_lng = find_fallback_waypoint(waypoint_lat, waypoint_lng)
-            route_result = get_route_by_coords([(start_lat, start_lng), (waypoint_lat, waypoint_lng), (end_lat, end_lng)])
-            if not route_result or 'features' not in route_result:
-                return jsonify({'error': '경로 계산 실패'}), 500
-
+        waypoint_lat, waypoint_lng, route_result = find_first_successful_waypoint(start_lat, start_lng, end_lat, end_lng)
+        if not route_result:
+            return jsonify({'error': '경로 계산 실패'}), 500
     except Exception as e:
-        print("경유지 경로 오류:", e)
+        print("❌ 전체 경로 계산 중 오류:", e)
         return jsonify({'error': '경로 계산 중 오류'}), 500
 
     tour_spots = get_tourspots(end_lat, end_lng)
