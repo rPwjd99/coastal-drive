@@ -24,16 +24,31 @@
       })
     });
 
+    let routeLayer, markerLayer;
+
     function searchRoute() {
-      const start = document.getElementById('start').value;
-      const end = document.getElementById('end').value;
+      const start = document.getElementById('start').value.trim();
+      const end = document.getElementById('end').value.trim();
+
+      if (!start || !end) {
+        alert('출발지와 목적지를 모두 입력해 주세요.');
+        return;
+      }
 
       fetch('/route', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ start, end })
       })
-      .then(res => res.json())
+      .then(async res => {
+        if (!res.ok) {
+          const text = await res.text();
+          alert('❌ 서버 오류 발생 (HTTP ' + res.status + ')');
+          console.error('서버 응답 내용:', text);
+          throw new Error('서버 오류');
+        }
+        return res.json();
+      })
       .then(data => {
         if (data.error) {
           alert("❌ " + data.error);
@@ -41,7 +56,7 @@
         }
 
         document.getElementById('corrected').innerText =
-          `보정된 주소: 출발지 → ${data.start_corrected}, 목적지 → ${data.end_corrected}`;
+          "보정된 주소: 출발지 → " + data.start_corrected + ", 목적지 → " + data.end_corrected;
 
         if (!data.geojson || !data.geojson.features || data.geojson.features.length === 0) {
           alert('경로를 찾을 수 없습니다. 도로 연결이 불가능한 위치일 수 있습니다.');
@@ -53,23 +68,23 @@
           featureProjection: map.getView().getProjection()
         });
 
-        const routeLayer = new ol.layer.Vector({
+        if (routeLayer) map.removeLayer(routeLayer);
+        routeLayer = new ol.layer.Vector({
           source: new ol.source.Vector({ features: [feature] }),
           style: new ol.style.Style({
             stroke: new ol.style.Stroke({ color: '#0077cc', width: 4 })
           })
         });
-
-        map.getLayers().getArray().slice(1).forEach(layer => map.removeLayer(layer));
         map.addLayer(routeLayer);
         map.getView().fit(routeLayer.getSource().getExtent(), { padding: [30, 30, 30, 30] });
 
+        if (markerLayer) map.removeLayer(markerLayer);
+        const markers = [];
         if (data.tourspots && Array.isArray(data.tourspots)) {
           data.tourspots.forEach(spot => {
             if (!spot.mapx || !spot.mapy) return;
             const marker = new ol.Feature({
-              geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(spot.mapx), parseFloat(spot.mapy)])),
-              name: spot.title || '관광지'
+              geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(spot.mapx), parseFloat(spot.mapy)]))
             });
             marker.setStyle(new ol.style.Style({
               image: new ol.style.Circle({
@@ -78,16 +93,15 @@
                 stroke: new ol.style.Stroke({ color: '#fff', width: 2 })
               })
             }));
-            const vectorLayer = new ol.layer.Vector({
-              source: new ol.source.Vector({ features: [marker] })
-            });
-            map.addLayer(vectorLayer);
+            markers.push(marker);
           });
         }
+        markerLayer = new ol.layer.Vector({ source: new ol.source.Vector({ features: markers }) });
+        map.addLayer(markerLayer);
       })
       .catch(err => {
-        alert('❌ 서버 오류 발생. 로그를 확인하세요.');
-        console.error(err);
+        alert('❌ 예외 발생: 서버 또는 네트워크 오류. 콘솔을 확인하세요.');
+        console.error('예외:', err);
       });
     }
   </script>
