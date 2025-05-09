@@ -5,6 +5,8 @@
     <title>CoastalDrive - 해안도로 경로 추천</title>
     <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
+    <!-- Google Maps Places API (Autocomplete) -->
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyC9MSD-WhkqK_Og5YdVYfux21xiRjy2q1M&libraries=places"></script>
 </head>
 <body>
     <h2>출발지와 목적지를 입력하세요</h2>
@@ -22,6 +24,20 @@
             view: new ol.View({ center: ol.proj.fromLonLat([127.7669, 35.9078]), zoom: 7 })
         });
 
+        // ✅ Google Places Autocomplete 활성화
+        function initAutocomplete() {
+            new google.maps.places.Autocomplete(document.getElementById('start'), {
+                types: ['geocode'],
+                componentRestrictions: { country: 'kr' }
+            });
+            new google.maps.places.Autocomplete(document.getElementById('end'), {
+                types: ['geocode'],
+                componentRestrictions: { country: 'kr' }
+            });
+        }
+        window.onload = initAutocomplete;
+
+        // ✅ 경로 검색 요청
         function searchRoute() {
             const start = document.getElementById('start').value;
             const end = document.getElementById('end').value;
