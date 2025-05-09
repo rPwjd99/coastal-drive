@@ -1,58 +1,66 @@
-from flask import Flask, request, jsonify, render_template
+import os
 import requests
-import json
+from flask import Flask, request, jsonify, render_template
 
 app = Flask(__name__)
 
+# API Keys
 GOOGLE_API_KEY = "AIzaSyC9MSD-WhkqK_Og5YdVYfux21xiRjy2q1M"
 ORS_API_KEY = "5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953"
 
-def geocode_address_google(address):
-    url = f"https://maps.googleapis.com/maps/api/geocode/json?address={address}&key={GOOGLE_API_KEY}"
+# 주소를 Google Maps Geocoding API로 좌표 변환
+def geocode_address(address):
+    url = f"https://maps.googleapis.com/maps/api/geocode/json?address={address}&region=kr&key={GOOGLE_API_KEY}"
     response = requests.get(url).json()
     if response['status'] == 'OK':
-        result = response['results'][0]
-        latlng = result['geometry']['location']
-        formatted_address = result['formatted_address']
-        return latlng['lat'], latlng['lng'], formatted_address
-    else:
-        return None, None, None
+        location = response['results'][0]['geometry']['location']
+        formatted = response['results'][0]['formatted_address']
+        return location['lat'], location['lng'], formatted
+    return None, None, None
+
+# 해안도로 기반 경로 탐색 (직선 경로는 OpenRouteService가 계산)
+def get_route(start_coords, end_coords):
+    headers = {
+        'Authorization': ORS_API_KEY,
+        'Content-Type': 'application/json'
+    }
+    body = {
+        "coordinates": [
+            [start_coords[1], start_coords[0]],
+            [end_coords[1], end_coords[0]]
+        ]
+    }
+    response = requests.post("https://api.openrouteservice.org/v2/directions/driving-car", headers=headers, json=body)
+    if response.status_code == 200:
+        return response.json()
+    return None
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
 @app.route('/route', methods=['POST'])
-def get_route():
+def route():
     data = request.get_json()
-    start = data['start']
-    end = data['end']
+    start_input = data['start']
+    end_input = data['end']
 
-    start_lat, start_lng, start_corrected = geocode_address_google(start)
-    end_lat, end_lng, end_corrected = geocode_address_google(end)
+    start_lat, start_lng, start_fmt = geocode_address(start_input)
+    end_lat, end_lng, end_fmt = geocode_address(end_input)
 
     if None in [start_lat, start_lng, end_lat, end_lng]:
-        return jsonify({'error': 'Invalid address'}), 400
+        return jsonify({'error': '주소를 인식하지 못했습니다. 정확한 도로명 또는 지번 주소를 입력해 주세요.'})
 
-    route_url = "https://api.openrouteservice.org/v2/directions/driving-car"
-    headers = {
-        'Authorization': ORS_API_KEY,
-        'Content-Type': 'application/json'
-    }
-    body = {
-        "coordinates": [[start_lng, start_lat], [end_lng, end_lat]]
-    }
+    route_result = get_route((start_lat, start_lng), (end_lat, end_lng))
+    if route_result is None:
+        return jsonify({'error': '경로 계산에 실패했습니다. 다시 시도해 주세요.'})
 
-    response = requests.post(route_url, headers=headers, json=body)
-    if response.status_code != 200:
-        return jsonify({'error': 'Route calculation failed'}), 500
-
-    route = response.json()
     return jsonify({
-        'geojson': route,
-        'start_corrected': start_corrected,
-        'end_corrected': end_corrected
+        'geojson': route_result,
+        'start_corrected': start_fmt,
+        'end_corrected': end_fmt
     })
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000, debug=True)
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port, debug=True)
