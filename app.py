@@ -1,6 +1,9 @@
 from flask import Flask, request, jsonify, render_template
 import requests
 import os
+import json
+import math
+import geopandas as gpd
 
 app = Flask(__name__, template_folder="templates")
 
@@ -21,24 +24,44 @@ def geocode_address(address):
         return location['lat'], location['lng'], formatted
     return None, None, None
 
-def get_route(start_coords, end_coords):
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
+def find_nearest_coast(start_lat, start_lng, end_lat, end_lng):
+    coast_gdf = gpd.read_file("./해안선_국가기본도.geojson")
+    coast_gdf = coast_gdf.to_crs(epsg=4326)
+    coast_points = coast_gdf.explode(index_parts=False).geometry.apply(lambda geom: list(geom.coords)).explode().tolist()
+    
+    aligned_candidates = []
+    for lon, lat in coast_points:
+        lat_dist = abs(lat - start_lat)
+        lng_dist = abs(lon - start_lng)
+        end_lat_diff = abs(lat - end_lat)
+        end_lng_diff = abs(lon - end_lng)
+        total_dist = haversine(start_lat, start_lng, lat, lon) + haversine(lat, lon, end_lat, end_lng)
+        aligned_candidates.append((lat, lon, total_dist))
+
+    aligned_candidates.sort(key=lambda x: x[2])
+    return aligned_candidates[0][0], aligned_candidates[0][1]  # lat, lon
+
+def get_route_by_coords(coords):
     headers = {
         'Authorization': ORS_API_KEY,
         'Content-Type': 'application/json'
     }
-    body = {
-        "coordinates": [
-            [start_coords[1], start_coords[0]],
-            [end_coords[1], end_coords[0]]
-        ]
-    }
+    body = {"coordinates": [[lng, lat] for lat, lng in coords]}
     try:
-        response = requests.post("https://api.openrouteservice.org/v2/directions/driving-car", headers=headers, json=body)
-        print("응답 코드:", response.status_code)
-        print("응답 내용:", response.text[:300])
-        return response.json()
+        res = requests.post("https://api.openrouteservice.org/v2/directions/driving-car", headers=headers, json=body)
+        print("ORS 응답 코드:", res.status_code)
+        print("ORS 응답 내용:", res.text[:300])
+        return res.json() if res.status_code == 200 else None
     except Exception as e:
-        print("경로 계산 오류:", e)
+        print("경로 요청 오류:", e)
         return None
 
 def get_tourspots(lat, lng):
@@ -65,13 +88,15 @@ def route():
     end_lat, end_lng, end_fmt = geocode_address(end_input)
 
     if None in [start_lat, start_lng, end_lat, end_lng]:
-        return jsonify({'error': '주소를 인식하지 못했습니다. 도로명 또는 지번 주소를 다시 입력해 주세요.'})
+        return jsonify({'error': '주소를 인식하지 못했습니다.'})
 
     try:
-        route_result = get_route((start_lat, start_lng), (end_lat, end_lng))
+        waypoint_lat, waypoint_lng = find_nearest_coast(start_lat, start_lng, end_lat, end_lng)
+        route_result = get_route_by_coords([(start_lat, start_lng), (waypoint_lat, waypoint_lng), (end_lat, end_lng)])
         if not route_result or 'features' not in route_result:
             return jsonify({'error': '경로 계산 실패'}), 500
     except Exception as e:
+        print("경유지 경로 오류:", e)
         return jsonify({'error': '경로 계산 중 오류'}), 500
 
     tour_spots = get_tourspots(end_lat, end_lng)
