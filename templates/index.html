@@ -84,7 +84,8 @@
           data.tourspots.forEach(spot => {
             if (!spot.mapx || !spot.mapy) return;
             const marker = new ol.Feature({
-              geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(spot.mapx), parseFloat(spot.mapy)]))
+              geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(spot.mapx), parseFloat(spot.mapy)])),
+              name: spot.title
             });
             marker.setStyle(new ol.style.Style({
               image: new ol.style.Circle({
