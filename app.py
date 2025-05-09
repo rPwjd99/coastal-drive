@@ -33,21 +33,34 @@ def haversine(lat1, lon1, lat2, lon2):
     return R * c
 
 def find_nearest_coast(start_lat, start_lng, end_lat, end_lng):
-    coast_gdf = gpd.read_file("./해안선_국가기본도.geojson")
-    coast_gdf = coast_gdf.to_crs(epsg=4326)
-    coast_points = coast_gdf.explode(index_parts=False).geometry.apply(lambda geom: list(geom.coords)).explode().tolist()
-    
-    aligned_candidates = []
-    for lon, lat in coast_points:
-        lat_dist = abs(lat - start_lat)
-        lng_dist = abs(lon - start_lng)
-        end_lat_diff = abs(lat - end_lat)
-        end_lng_diff = abs(lon - end_lng)
-        total_dist = haversine(start_lat, start_lng, lat, lon) + haversine(lat, lon, end_lat, end_lng)
-        aligned_candidates.append((lat, lon, total_dist))
+    try:
+        coast_gdf = gpd.read_file("./coastal_route_result.geojson")
+        coast_gdf = coast_gdf.to_crs(epsg=4326)
+        coords_list = []
 
-    aligned_candidates.sort(key=lambda x: x[2])
-    return aligned_candidates[0][0], aligned_candidates[0][1]  # lat, lon
+        for geom in coast_gdf.geometry:
+            if geom.geom_type == 'MultiLineString':
+                for line in geom.geoms:
+                    coords_list.extend(list(line.coords))
+            elif geom.geom_type == 'LineString':
+                coords_list.extend(list(geom.coords))
+            else:
+                print("⚠️ 알 수 없는 geometry:", geom.geom_type)
+
+        if not coords_list:
+            raise ValueError("해안선 좌표 없음")
+
+        aligned_candidates = []
+        for lon, lat in coords_list:
+            total_dist = haversine(start_lat, start_lng, lat, lon) + haversine(lat, lon, end_lat, end_lng)
+            aligned_candidates.append((lat, lon, total_dist))
+
+        aligned_candidates.sort(key=lambda x: x[2])
+        return aligned_candidates[0][0], aligned_candidates[0][1]
+
+    except Exception as e:
+        print("❌ 해안선 분석 중 오류:", e)
+        raise
 
 def get_route_by_coords(coords):
     headers = {
