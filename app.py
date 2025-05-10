@@ -18,15 +18,15 @@ def geocode_address_google(address):
         url = f"https://maps.googleapis.com/maps/api/geocode/json?address={address}&key={GOOGLE_API_KEY}"
         res = requests.get(url)
         data = res.json()
+        print("📨 Google Geocode 응답:", data)
         if data.get('status') == 'OK':
             loc = data['results'][0]['geometry']['location']
             formatted = data['results'][0]['formatted_address']
-            print("📍 주소 변환 성공:", formatted)
             return loc['lat'], loc['lng'], formatted
         else:
-            print("❌ 주소 변환 실패:", data.get('status'))
+            print("❌ Google 주소 변환 실패:", data.get('status'))
     except Exception as e:
-        print("❌ 주소 변환 중 오류:", e)
+        print("❌ Google 주소 변환 중 예외:", e)
     return None, None, None
 
 def get_route_naver(start_lat, start_lng, end_lat, end_lng):
@@ -41,19 +41,27 @@ def get_route_naver(start_lat, start_lng, end_lat, end_lng):
             "goal": f"{end_lng},{end_lat}",
             "option": "trafast"
         }
+        print("🛰️ NAVER 요청 파라미터:", params)
         res = requests.get(url, headers=headers, params=params)
         print("📡 NAVER 응답 코드:", res.status_code)
-        print("📦 NAVER 응답 내용:", res.text)
+        print("📦 NAVER 응답 본문:", res.text)
+
         if res.status_code != 200:
             return None
+
         data = res.json()
-        path = data['route']['trafast'][0]['path']
+        path = data.get('route', {}).get('trafast', [{}])[0].get('path')
+        if not path:
+            print("❌ NAVER 경로 응답에 path 없음")
+            return None
+
         return {
             "type": "LineString",
             "coordinates": [(pt[0], pt[1]) for pt in path]
         }
+
     except Exception as e:
-        print("❌ NAVER 경로 계산 오류:", e)
+        print("❌ NAVER 경로 계산 중 예외:", e)
         return None
 
 @app.route('/route', methods=['POST'])
@@ -67,22 +75,25 @@ def route():
         start_lat, start_lng, start_fmt = geocode_address_google(start_input)
         end_lat, end_lng, end_fmt = geocode_address_google(end_input)
 
+        print("📍 변환된 좌표:", (start_lat, start_lng), "→", (end_lat, end_lng))
         if None in [start_lat, start_lng, end_lat, end_lng]:
+            print("❌ 주소 인식 실패 (None 포함)")
             return jsonify({'error': '❌ 주소 인식 실패'}), 500
 
         route_geojson = get_route_naver(start_lat, start_lng, end_lat, end_lng)
         if not route_geojson:
+            print("❌ NAVER 경로 계산 실패")
             return jsonify({'error': '❌ 경로 계산 실패'}), 500
 
         return jsonify({
             'geojson': route_geojson,
             'start_corrected': start_fmt,
             'end_corrected': end_fmt,
-            'tourspots': []  # 관광지 기능 나중에 추가
+            'tourspots': []  # 관광지 정보는 나중에 추가 가능
         })
 
     except Exception as e:
-        print("❌ 전체 처리 예외:", e)
+        print("❌ 전체 처리 중 예외 발생:", e)
         return jsonify({'error': '❌ 서버 내부 오류'}), 500
 
 if __name__ == '__main__':
