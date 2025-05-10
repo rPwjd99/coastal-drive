@@ -3,7 +3,7 @@ import requests
 import os
 import json
 import geopandas as gpd
-from shapely.geometry import Point, LineString
+from shapely.geometry import LineString
 
 app = Flask(__name__, template_folder="templates")
 
@@ -42,13 +42,13 @@ def get_route_naver(start_lat, start_lng, end_lat, end_lng):
         "goal": f"{end_lng},{end_lat}",
         "option": "trafast"
     }
-    res = requests.get(url, headers=headers, params=params)
-    print("📡 NAVER 응답 코드:", res.status_code)
-    if res.status_code != 200:
-        print(res.text)
-        return None
-    data = res.json()
     try:
+        res = requests.get(url, headers=headers, params=params)
+        print("📡 NAVER 응답 코드:", res.status_code)
+        if res.status_code != 200:
+            print(res.text)
+            return None
+        data = res.json()
         path = data['route']['trafast'][0]['path']
         line = LineString([(pt[0], pt[1]) for pt in path])
         return {
@@ -61,26 +61,30 @@ def get_route_naver(start_lat, start_lng, end_lat, end_lng):
 
 @app.route('/route', methods=['POST'])
 def route():
-    data = request.get_json()
-    start_input = data['start']
-    end_input = data['end']
+    try:
+        data = request.get_json()
+        start_input = data['start']
+        end_input = data['end']
 
-    start_lat, start_lng, start_fmt = geocode_address_google(start_input)
-    end_lat, end_lng, end_fmt = geocode_address_google(end_input)
+        start_lat, start_lng, start_fmt = geocode_address_google(start_input)
+        end_lat, end_lng, end_fmt = geocode_address_google(end_input)
 
-    if None in [start_lat, start_lng, end_lat, end_lng]:
-        return jsonify({'error': '주소 인식 실패'})
+        if None in [start_lat, start_lng, end_lat, end_lng]:
+            return jsonify({'error': '주소 인식 실패'})
 
-    route_result = get_route_naver(start_lat, start_lng, end_lat, end_lng)
-    if not route_result:
-        return jsonify({'error': '경로 계산 실패'}), 500
+        route_result = get_route_naver(start_lat, start_lng, end_lat, end_lng)
+        if not route_result:
+            return jsonify({'error': '경로 계산 실패'}), 500
 
-    return jsonify({
-        'geojson': route_result,
-        'start_corrected': start_fmt,
-        'end_corrected': end_fmt,
-        'tourspots': []
-    })
+        return jsonify({
+            'geojson': route_result,
+            'start_corrected': start_fmt,
+            'end_corrected': end_fmt,
+            'tourspots': []
+        })
+    except Exception as e:
+        print("❌ 전체 route 처리 중 예외 발생:", e)
+        return jsonify({'error': '서버 내부 오류 발생'}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
