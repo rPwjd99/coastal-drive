@@ -1,7 +1,7 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html>
 <head>
-  <meta charset="UTF-8">
+  <meta charset="utf-8">
   <title>CoastalDrive - 해안도로 경로 추천</title>
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
@@ -9,7 +9,7 @@
     body { font-family: sans-serif; margin: 20px; }
     input { margin: 5px; padding: 5px; width: 300px; }
     button { padding: 6px 12px; }
-    #map { width: 100%; height: 500px; margin-top: 20px; }
+    #map { width: 100%; height: 500px; margin-top: 15px; }
   </style>
 </head>
 <body>
@@ -33,6 +33,7 @@
     function searchRoute() {
       const start = document.getElementById('start').value;
       const end = document.getElementById('end').value;
+
       document.getElementById('corrected').innerText = '⏳ 경로를 계산 중입니다...';
 
       fetch('/route', {
@@ -41,64 +42,63 @@
         body: JSON.stringify({ start, end })
       })
       .then(async res => {
-        const text = await res.text();
-        try {
-          const data = JSON.parse(text);
-          if (!res.ok || data.error) {
-            alert("❌ 서버 오류 발생: " + data.error);
-            console.error("서버 응답 내용:", data);
-            return;
-          }
+        if (!res.ok) {
+          const text = await res.text();
+          console.error('서버 응답 내용:', text);
+          alert('❌ 서버 오류 발생 (HTTP ' + res.status + ')');
+          throw new Error('서버 오류');
+        }
+        return res.json();
+      })
+      .then(data => {
+        if (data.error) {
+          alert('❌ ' + data.error);
+          return;
+        }
 
-          document.getElementById('corrected').innerText =
-            `✅ 우회 경로 완료\n보정된 주소: 출발지 → ${data.start_corrected}, 목적지 → ${data.end_corrected}`;
+        document.getElementById('corrected').innerText =
+          `✅ 보정된 주소: 출발지 → ${data.start_corrected}, 목적지 → ${data.end_corrected}`;
 
-          const format = new ol.format.GeoJSON();
-          const features = format.readFeatures(data.geojson, {
-            featureProjection: map.getView().getProjection()
-          });
+        const format = new ol.format.GeoJSON();
+        const features = format.readFeatures(data.geojson, {
+          featureProjection: map.getView().getProjection()
+        });
 
-          const routeLayer = new ol.layer.Vector({
-            source: new ol.source.Vector({ features }),
-            style: new ol.style.Style({
-              stroke: new ol.style.Stroke({ color: '#0077cc', width: 4 })
-            })
-          });
+        const routeLayer = new ol.layer.Vector({
+          source: new ol.source.Vector({ features }),
+          style: new ol.style.Style({
+            stroke: new ol.style.Stroke({ color: '#0077cc', width: 4 })
+          })
+        });
 
-          map.getLayers().getArray().slice(1).forEach(layer => map.removeLayer(layer));
-          map.addLayer(routeLayer);
-          map.getView().fit(routeLayer.getSource().getExtent(), { padding: [20, 20, 20, 20] });
+        map.getLayers().getArray().slice(1).forEach(layer => map.removeLayer(layer));
+        map.addLayer(routeLayer);
+        map.getView().fit(routeLayer.getSource().getExtent(), { padding: [30, 30, 30, 30] });
 
-          if (data.tourspots) {
-            data.tourspots.forEach(spot => {
-              const lon = parseFloat(spot.mapx);
-              const lat = parseFloat(spot.mapy);
-              if (!lon || !lat) return;
-              const marker = new ol.Feature({
-                geometry: new ol.geom.Point(ol.proj.fromLonLat([lon, lat])),
-                name: spot.title
-              });
-              marker.setStyle(new ol.style.Style({
-                image: new ol.style.Circle({
-                  radius: 6,
-                  fill: new ol.style.Fill({ color: 'red' }),
-                  stroke: new ol.style.Stroke({ color: '#fff', width: 2 })
-                })
-              }));
-              const vectorLayer = new ol.layer.Vector({
-                source: new ol.source.Vector({ features: [marker] })
-              });
-              map.addLayer(vectorLayer);
+        if (data.tourspots && Array.isArray(data.tourspots)) {
+          data.tourspots.forEach(spot => {
+            if (!spot.mapx || !spot.mapy) return;
+            const marker = new ol.Feature({
+              geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(spot.mapx), parseFloat(spot.mapy)])),
+              name: spot.title || '관광지'
             });
-          }
-        } catch (e) {
-          console.error('예외 발생:', e);
-          alert("❌ 예외 발생: 서버 또는 네트워크 오류. 콘솔을 확인하세요.");
+            marker.setStyle(new ol.style.Style({
+              image: new ol.style.Circle({
+                radius: 6,
+                fill: new ol.style.Fill({ color: 'red' }),
+                stroke: new ol.style.Stroke({ color: '#fff', width: 2 })
+              })
+            }));
+            const vectorLayer = new ol.layer.Vector({
+              source: new ol.source.Vector({ features: [marker] })
+            });
+            map.addLayer(vectorLayer);
+          });
         }
       })
       .catch(err => {
-        console.error('Fetch 오류:', err);
-        alert("❌ 서버 통신 실패");
+        alert('❌ 예외 발생: 서버 또는 네트워크 오류. 콘솔을 확인하세요.');
+        console.error('예외:', err);
       });
     }
   </script>
