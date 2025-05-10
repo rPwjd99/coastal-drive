@@ -1,87 +1,74 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>CoastalDrive - 해안도로 경로 추천</title>
-  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
-  <style>
-    body { font-family: sans-serif; margin: 20px; }
-    input { margin: 5px; padding: 5px; width: 300px; }
-    button { padding: 6px 12px; margin: 5px; cursor: pointer; }
-    #map { width: 100%; height: 500px; margin-top: 10px; }
-  </style>
-</head>
-<body>
-  <h2>출발지와 목적지를 입력하세요</h2>
-  <input id="start" placeholder="예: 세종특별자치시 한누리대로 2130">
-  <input id="end" placeholder="예: 강원도 속초시 중앙로 183">
-  <button onclick="searchRoute()">해안도로 경로 검색</button>
-  <p id="corrected"></p>
-  <div id="map"></div>
+from flask import Flask, request, jsonify, render_template
+import requests
+import os
 
-  <script>
-    const map = new ol.Map({
-      target: 'map',
-      layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
-      view: new ol.View({
-        center: ol.proj.fromLonLat([127.7669, 35.9078]),
-        zoom: 7
-      })
-    });
+app = Flask(__name__)
 
-    function searchRoute() {
-      const start = document.getElementById('start').value;
-      const end = document.getElementById('end').value;
-      document.getElementById('corrected').innerText = '⏳ 경로를 계산 중입니다...';
+# 경로 루트
+@app.route('/')
+def index():
+    return render_template("index.html")
 
-      fetch('/route', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ start, end })
-      })
-      .then(async res => {
-        const text = await res.text();
-        if (!res.ok) {
-          alert('❌ 서버 오류 발생 (HTTP ' + res.status + ')');
-          console.error('서버 응답 내용:', text);
-          throw new Error('서버 오류');
+# 경로 계산 요청
+@app.route('/route', methods=['POST'])
+def route():
+    try:
+        data = request.get_json()
+        start_address = data.get('start')
+        end_address = data.get('end')
+
+        print(f"📍 입력 주소: 출발지 = {start_address}, 목적지 = {end_address}")
+
+        # 구글 지오코딩
+        google_key = os.environ.get("GOOGLE_API_KEY")
+        if not google_key:
+            return jsonify({'error': 'Google API Key 없음'}), 500
+
+        def geocode(address):
+            url = f"https://maps.googleapis.com/maps/api/geocode/json?address={address}&key={google_key}"
+            res = requests.get(url).json()
+            if res['status'] == 'OK':
+                loc = res['results'][0]['geometry']['location']
+                return loc['lat'], loc['lng'], res['results'][0]['formatted_address']
+            return None, None, None
+
+        start_lat, start_lng, start_fmt = geocode(start_address)
+        end_lat, end_lng, end_fmt = geocode(end_address)
+
+        if not all([start_lat, start_lng, end_lat, end_lng]):
+            return jsonify({'error': '❌ 주소 인식 실패'}), 500
+
+        print(f"✅ 주소 변환 성공: 출발 좌표 ({start_lat}, {start_lng}), 목적 좌표 ({end_lat}, {end_lng})")
+
+        # 네이버 경로 API
+        naver_id = os.environ.get("NAVER_CLIENT_ID")
+        naver_secret = os.environ.get("NAVER_CLIENT_SECRET")
+        headers = {
+            "X-NCP-APIGW-API-KEY-ID": naver_id,
+            "X-NCP-APIGW-API-KEY": naver_secret
         }
-        return JSON.parse(text);
-      })
-      .then(data => {
-        if (data.error) {
-          alert("❌ " + data.error);
-          return;
+        naver_url = f"https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving?start={start_lng},{start_lat}&goal={end_lng},{end_lat}&option=trafast"
+
+        route_res = requests.get(naver_url, headers=headers).json()
+        if route_res.get("code") != 0:
+            return jsonify({'error': '❌ 경로 계산 실패'}), 500
+
+        coords = route_res['route']['trafast'][0]['path']
+        geojson = {
+            "type": "LineString",
+            "coordinates": coords
         }
 
-        document.getElementById('corrected').innerText =
-          `보정된 주소: 출발지 → ${data.start_corrected}, 목적지 → ${data.end_corrected}`;
+        return jsonify({
+            "geojson": geojson,
+            "start_corrected": start_fmt,
+            "end_corrected": end_fmt
+        })
 
-        const format = new ol.format.GeoJSON();
-        const route = format.readFeature({
-          type: 'Feature',
-          geometry: data.geojson
-        }, {
-          featureProjection: map.getView().getProjection()
-        });
+    except Exception as e:
+        print("❌ 서버 내부 오류:", e)
+        return jsonify({'error': '❌ 서버 내부 오류'}), 500
 
-        const routeLayer = new ol.layer.Vector({
-          source: new ol.source.Vector({ features: [route] }),
-          style: new ol.style.Style({
-            stroke: new ol.style.Stroke({ color: '#0077cc', width: 4 })
-          })
-        });
 
-        map.getLayers().getArray().slice(1).forEach(l => map.removeLayer(l));
-        map.addLayer(routeLayer);
-        map.getView().fit(routeLayer.getSource().getExtent(), { padding: [30, 30, 30, 30] });
-      })
-      .catch(err => {
-        alert('❌ 예외 발생: 서버 또는 네트워크 오류. 콘솔을 확인하세요.');
-        console.error('예외:', err);
-      });
-    }
-  </script>
-</body>
-</html>
+if __name__ == '__main__':
+    app.run(debug=True, port=10000)
