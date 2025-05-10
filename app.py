@@ -1,109 +1,87 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>CoastalDrive - 해안도로 경로 추천</title>
-  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
-  <style>
-    #map { width: 100%; height: 500px; margin-top: 10px; }
-    input { margin: 5px; }
-  </style>
-</head>
-<body>
-  <h2>출발지와 목적지를 입력하세요</h2>
-  <input id="start" placeholder="예: 세종특별자치시 한누리대로 2130" size="50">
-  <input id="end" placeholder="예: 강원도 속초시 중앙로 183" size="50">
-  <button onclick="searchRoute()">해안도로 경로 검색</button>
-  <p id="corrected"></p>
-  <div id="map"></div>
+from flask import Flask, request, jsonify, render_template
+import requests
+import os
+from shapely.geometry import LineString
 
-  <script>
-    const map = new ol.Map({
-      target: 'map',
-      layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
-      view: new ol.View({
-        center: ol.proj.fromLonLat([127.7669, 35.9078]),
-        zoom: 7
-      })
-    });
+app = Flask(__name__, template_folder='templates')
 
-    function searchRoute() {
-      const start = document.getElementById('start').value;
-      const end = document.getElementById('end').value;
-      document.getElementById('corrected').innerText = '⏳ 경로를 계산 중입니다...';
+# API 키 설정
+GOOGLE_API_KEY = "AIzaSyC9MSD-WhkqK_Og5YdVYfux21xiRjy2q1M"
+NAVER_CLIENT_ID = "vsdzf1f4n5"
+NAVER_CLIENT_SECRET = "0gzctO51PUTVv0gUZU025JYNHPTmVzLS9sGbfYBM"
 
-      fetch('https://coastal-drive.onrender.com/route', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ start, end })
-      })
-      .then(async res => {
-        if (!res.ok) {
-          const text = await res.text();
-          alert('❌ 서버 오류 발생 (HTTP ' + res.status + ')');
-          console.error('서버 응답 내용:', text);
-          throw new Error('서버 오류');
-        }
-        return res.json();
-      })
-      .then(data => {
-        if (data.error) {
-          alert("❌ " + data.error);
-          return;
-        }
+@app.route('/')
+def index():
+    return render_template("index.html")
 
-        document.getElementById('corrected').innerText =
-          `✅ 우회 경로 계산 성공!\n보정된 주소: 출발지 → ${data.start_corrected}, 목적지 → ${data.end_corrected}`;
+def geocode_address_google(address):
+    url = f"https://maps.googleapis.com/maps/api/geocode/json?address={address}&key={GOOGLE_API_KEY}"
+    try:
+        res = requests.get(url)
+        data = res.json()
+        if data.get('status') == 'OK':
+            loc = data['results'][0]['geometry']['location']
+            formatted = data['results'][0]['formatted_address']
+            return loc['lat'], loc['lng'], formatted
+    except Exception as e:
+        print("❌ Google 주소 변환 오류:", e)
+    return None, None, None
 
-        if (!data.geojson || !data.geojson.coordinates) {
-          alert('❌ 경로를 찾을 수 없습니다.');
-          return;
-        }
-
-        const routeFeature = new ol.format.GeoJSON().readFeature({
-          type: 'Feature', geometry: data.geojson
-        }, {
-          featureProjection: map.getView().getProjection()
-        });
-
-        const routeLayer = new ol.layer.Vector({
-          source: new ol.source.Vector({ features: [routeFeature] }),
-          style: new ol.style.Style({
-            stroke: new ol.style.Stroke({ color: '#0077cc', width: 4 })
-          })
-        });
-
-        map.getLayers().getArray().slice(1).forEach(l => map.removeLayer(l));
-        map.addLayer(routeLayer);
-        map.getView().fit(routeLayer.getSource().getExtent(), { padding: [30, 30, 30, 30] });
-
-        if (data.tourspots && Array.isArray(data.tourspots)) {
-          data.tourspots.forEach(spot => {
-            if (!spot.mapx || !spot.mapy) return;
-            const marker = new ol.Feature({
-              geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(spot.mapx), parseFloat(spot.mapy)])),
-              name: spot.title || '관광지'
-            });
-            marker.setStyle(new ol.style.Style({
-              image: new ol.style.Circle({
-                radius: 6,
-                fill: new ol.style.Fill({ color: 'red' }),
-                stroke: new ol.style.Stroke({ color: '#fff', width: 2 })
-              })
-            }));
-            const vectorLayer = new ol.layer.Vector({
-              source: new ol.source.Vector({ features: [marker] })
-            });
-            map.addLayer(vectorLayer);
-          });
-        }
-      })
-      .catch(err => {
-        alert('❌ 예외 발생: 서버 또는 네트워크 오류. 콘솔을 확인하세요.');
-        console.error('예외:', err);
-      });
+def get_route_naver(start_lat, start_lng, end_lat, end_lng):
+    url = "https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving"
+    headers = {
+        "X-NCP-APIGW-API-KEY-ID": NAVER_CLIENT_ID,
+        "X-NCP-APIGW-API-KEY": NAVER_CLIENT_SECRET
     }
-  </script>
-</body>
-</html>
+    params = {
+        "start": f"{start_lng},{start_lat}",
+        "goal": f"{end_lng},{end_lat}",
+        "option": "trafast"
+    }
+    try:
+        res = requests.get(url, headers=headers, params=params)
+        print("📡 NAVER 응답 코드:", res.status_code)
+        print("📦 NAVER 응답 내용:", res.text)
+        if res.status_code != 200:
+            return None
+        data = res.json()
+        path = data['route']['trafast'][0]['path']
+        return {
+            "type": "LineString",
+            "coordinates": [(pt[0], pt[1]) for pt in path]
+        }
+    except Exception as e:
+        print("❌ NAVER 경로 오류:", e)
+        return None
+
+@app.route('/route', methods=['POST'])
+def route():
+    try:
+        data = request.get_json()
+        start_input = data['start']
+        end_input = data['end']
+
+        start_lat, start_lng, start_fmt = geocode_address_google(start_input)
+        end_lat, end_lng, end_fmt = geocode_address_google(end_input)
+
+        if None in [start_lat, start_lng, end_lat, end_lng]:
+            return jsonify({'error': '주소 인식 실패'})
+
+        route_result = get_route_naver(start_lat, start_lng, end_lat, end_lng)
+        if not route_result:
+            return jsonify({'error': '경로 계산 실패'}), 500
+
+        return jsonify({
+            'geojson': route_result,
+            'start_corrected': start_fmt,
+            'end_corrected': end_fmt,
+            'tourspots': []
+        })
+
+    except Exception as e:
+        print("❌ 전체 처리 예외:", e)
+        return jsonify({'error': '서버 내부 오류'}), 500
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port, debug=True)
