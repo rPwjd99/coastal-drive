@@ -7,6 +7,7 @@ from shapely.geometry import Point, LineString
 
 app = Flask(__name__, template_folder="templates")
 
+GOOGLE_API_KEY = "AIzaSyC9MSD-WhkqK_Og5YdVYfux21xiRjy2q1M"
 NAVER_CLIENT_ID = "vsdzf1f4n5"
 NAVER_CLIENT_SECRET = "0gzctO51PUTVv0gUZU025JYNHPTmVzLS9sGbfYBM"
 
@@ -14,17 +15,20 @@ NAVER_CLIENT_SECRET = "0gzctO51PUTVv0gUZU025JYNHPTmVzLS9sGbfYBM"
 def index():
     return render_template("index.html")
 
-def geocode_address_naver(address):
-    url = f"https://naveropenapi.apigw.ntruss.com/map-geocode/v2/geocode?query={address}"
-    headers = {
-        "X-NCP-APIGW-API-KEY-ID": NAVER_CLIENT_ID,
-        "X-NCP-APIGW-API-KEY": NAVER_CLIENT_SECRET
-    }
-    res = requests.get(url, headers=headers)
-    data = res.json()
-    if data.get('addresses'):
-        first = data['addresses'][0]
-        return float(first['y']), float(first['x']), first['roadAddress']
+def geocode_address_google(address):
+    url = f"https://maps.googleapis.com/maps/api/geocode/json?address={address}&key={GOOGLE_API_KEY}"
+    try:
+        res = requests.get(url)
+        data = res.json()
+        print(f"🌍 주소 요청: {address}")
+        print(f"📨 구글 응답 상태: {data.get('status')}")
+        if data.get('status') == 'OK':
+            loc = data['results'][0]['geometry']['location']
+            formatted = data['results'][0]['formatted_address']
+            return loc['lat'], loc['lng'], formatted
+        print("❌ Google 주소 변환 실패:", data)
+    except Exception as e:
+        print("❌ Google API 호출 중 예외 발생:", e)
     return None, None, None
 
 def get_route_naver(start_lat, start_lng, end_lat, end_lng):
@@ -61,8 +65,8 @@ def route():
     start_input = data['start']
     end_input = data['end']
 
-    start_lat, start_lng, start_fmt = geocode_address_naver(start_input)
-    end_lat, end_lng, end_fmt = geocode_address_naver(end_input)
+    start_lat, start_lng, start_fmt = geocode_address_google(start_input)
+    end_lat, end_lng, end_fmt = geocode_address_google(end_input)
 
     if None in [start_lat, start_lng, end_lat, end_lng]:
         return jsonify({'error': '주소 인식 실패'})
