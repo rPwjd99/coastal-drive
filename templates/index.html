@@ -7,9 +7,8 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
   <style>
     body { font-family: sans-serif; margin: 20px; }
-    input { margin: 5px; padding: 5px; width: 300px; }
-    button { padding: 6px 12px; }
-    #map { width: 100%; height: 500px; margin-top: 15px; }
+    input { margin: 5px; width: 400px; }
+    button { padding: 8px 16px; }
   </style>
 </head>
 <body>
@@ -17,15 +16,15 @@
   <input id="start" placeholder="예: 세종특별자치시 한누리대로 2130">
   <input id="end" placeholder="예: 강원도 속초시 중앙로 183">
   <button onclick="searchRoute()">해안도로 경로 검색</button>
-  <p id="corrected"></p>
-  <div id="map"></div>
+  <p id="status"></p>
+  <div id="map" style="width: 100%; height: 600px;"></div>
 
   <script>
     const map = new ol.Map({
       target: 'map',
       layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
       view: new ol.View({
-        center: ol.proj.fromLonLat([127.7669, 35.9078]),
+        center: ol.proj.fromLonLat([127.8, 36.5]),
         zoom: 7
       })
     });
@@ -33,72 +32,70 @@
     function searchRoute() {
       const start = document.getElementById('start').value;
       const end = document.getElementById('end').value;
-
-      document.getElementById('corrected').innerText = '⏳ 경로를 계산 중입니다...';
+      document.getElementById('status').innerText = "⏳ 경로를 계산 중입니다...";
 
       fetch('/route', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ start, end })
       })
-      .then(async res => {
-        if (!res.ok) {
-          const text = await res.text();
-          console.error('서버 응답 내용:', text);
-          alert('❌ 서버 오류 발생 (HTTP ' + res.status + ')');
-          throw new Error('서버 오류');
-        }
+      .then(res => {
+        if (!res.ok) throw new Error("❌ 서버 응답 실패");
         return res.json();
       })
       .then(data => {
         if (data.error) {
-          alert('❌ ' + data.error);
+          alert(data.error);
+          document.getElementById('status').innerText = '';
           return;
         }
 
-        document.getElementById('corrected').innerText =
-          `✅ 보정된 주소: 출발지 → ${data.start_corrected}, 목적지 → ${data.end_corrected}`;
+        document.getElementById('status').innerText = `✅ 경유지 포함 경로 계산 완료`;
 
-        const format = new ol.format.GeoJSON();
-        const features = format.readFeatures(data.geojson, {
-          featureProjection: map.getView().getProjection()
+        // 기존 경로 및 마커 제거
+        map.getLayers().getArray().slice(1).forEach(l => map.removeLayer(l));
+
+        // 경로 그리기 (LineString)
+        const routeCoords = data.route.map(coord => ol.proj.fromLonLat(coord));
+        const routeFeature = new ol.Feature({
+          geometry: new ol.geom.LineString(routeCoords)
         });
-
+        routeFeature.setStyle(new ol.style.Style({
+          stroke: new ol.style.Stroke({ color: '#0077cc', width: 4 })
+        }));
         const routeLayer = new ol.layer.Vector({
-          source: new ol.source.Vector({ features }),
-          style: new ol.style.Style({
-            stroke: new ol.style.Stroke({ color: '#0077cc', width: 4 })
-          })
+          source: new ol.source.Vector({ features: [routeFeature] })
         });
-
-        map.getLayers().getArray().slice(1).forEach(layer => map.removeLayer(layer));
         map.addLayer(routeLayer);
-        map.getView().fit(routeLayer.getSource().getExtent(), { padding: [30, 30, 30, 30] });
+        map.getView().fit(routeFeature.getGeometry().getExtent(), { padding: [30, 30, 30, 30] });
 
-        if (data.tourspots && Array.isArray(data.tourspots)) {
-          data.tourspots.forEach(spot => {
-            if (!spot.mapx || !spot.mapy) return;
-            const marker = new ol.Feature({
-              geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(spot.mapx), parseFloat(spot.mapy)])),
-              name: spot.title || '관광지'
+        // 관광지 마커
+        if (Array.isArray(data.tourspots)) {
+          const spotFeatures = data.tourspots.map(s => {
+            const feature = new ol.Feature({
+              geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(s.mapx), parseFloat(s.mapy)])),
+              name: s.title
             });
-            marker.setStyle(new ol.style.Style({
+            feature.setStyle(new ol.style.Style({
               image: new ol.style.Circle({
-                radius: 6,
+                radius: 5,
                 fill: new ol.style.Fill({ color: 'red' }),
                 stroke: new ol.style.Stroke({ color: '#fff', width: 2 })
               })
             }));
-            const vectorLayer = new ol.layer.Vector({
-              source: new ol.source.Vector({ features: [marker] })
-            });
-            map.addLayer(vectorLayer);
+            return feature;
           });
+
+          const markerLayer = new ol.layer.Vector({
+            source: new ol.source.Vector({ features: spotFeatures })
+          });
+          map.addLayer(markerLayer);
         }
       })
       .catch(err => {
-        alert('❌ 예외 발생: 서버 또는 네트워크 오류. 콘솔을 확인하세요.');
-        console.error('예외:', err);
+        console.error(err);
+        alert("❌ 예외 발생: 서버 또는 네트워크 오류. 콘솔을 확인하세요.");
+        document.getElementById('status').innerText = '';
       });
     }
   </script>
