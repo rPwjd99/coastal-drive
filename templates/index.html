@@ -7,7 +7,8 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
   <style>
     body { font-family: sans-serif; margin: 20px; }
-    input { margin: 5px; }
+    input { margin: 5px; padding: 5px; }
+    #map { width: 100%; height: 500px; margin-top: 20px; }
   </style>
 </head>
 <body>
@@ -15,60 +16,72 @@
   <input id="start" placeholder="예: 세종특별자치시 한누리대로 2130" size="50">
   <input id="end" placeholder="예: 강원도 속초시 중앙로 183" size="50">
   <button onclick="searchRoute()">해안도로 경로 검색</button>
-  <p id="corrected"></p>
-  <div id="map" style="width: 100%; height: 500px;"></div>
+  <p id="status"></p>
+  <div id="map"></div>
 
   <script>
     const map = new ol.Map({
       target: 'map',
       layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
-      view: new ol.View({
-        center: ol.proj.fromLonLat([127.7669, 35.9078]),
-        zoom: 7
-      })
+      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.3]), zoom: 7 })
     });
 
     function searchRoute() {
-      const start = document.getElementById('start').value;
-      const end = document.getElementById('end').value;
+      const start = document.getElementById('start').value.trim();
+      const end = document.getElementById('end').value.trim();
+      if (!start || !end) {
+        alert("출발지와 목적지를 모두 입력하세요.");
+        return;
+      }
 
-      document.getElementById('corrected').innerText = '⏳ 경로를 계산 중입니다...';
+      document.getElementById("status").innerText = "⏳ 경로를 계산 중입니다...";
 
       fetch('/route', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ start, end })
       })
-      .then(res => res.json())
+      .then(async res => {
+        if (!res.ok) {
+          const text = await res.text();
+          console.error("서버 응답 내용:", text);
+          throw new Error("❌ 서버 응답 실패");
+        }
+        return res.json();
+      })
       .then(data => {
         if (data.error) {
-          alert("❌ 서버 오류 발생: " + data.error);
+          alert("❌ " + data.error);
           return;
         }
 
-        document.getElementById('corrected').innerText = `✅ 우회 경로 성공: 출발지 → ${data.start_corrected}, 경유지 → ${data.waypoint}, 목적지 → ${data.end_corrected}`;
+        document.getElementById("status").innerText =
+          `✅ 출발지: ${data.start_corrected}\n✅ 목적지: ${data.end_corrected}\n✅ 우회 경유지: ${data.waypoint_used || '없음'}`;
 
-        const format = new ol.format.GeoJSON();
-        const route = format.readFeature(data.geojson, {
+        const geojson = new ol.format.GeoJSON().readFeatures(data.geojson, {
           featureProjection: map.getView().getProjection()
         });
 
+        const vectorSource = new ol.source.Vector({ features: geojson });
         const routeLayer = new ol.layer.Vector({
-          source: new ol.source.Vector({ features: [route] }),
+          source: vectorSource,
           style: new ol.style.Style({
-            stroke: new ol.style.Stroke({ color: '#0077cc', width: 4 })
+            stroke: new ol.style.Stroke({ color: 'blue', width: 4 })
           })
         });
 
-        map.getLayers().getArray().slice(1).forEach(layer => map.removeLayer(layer));
+        // 기존 경로 제거
+        map.getLayers().getArray().slice(1).forEach(l => map.removeLayer(l));
         map.addLayer(routeLayer);
         map.getView().fit(routeLayer.getSource().getExtent(), { padding: [30, 30, 30, 30] });
 
-        if (data.tourspots) {
+        // 관광지 마커
+        if (Array.isArray(data.tourspots)) {
           data.tourspots.forEach(spot => {
             if (!spot.mapx || !spot.mapy) return;
             const marker = new ol.Feature({
-              geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(spot.mapx), parseFloat(spot.mapy)]))
+              geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(spot.mapx), parseFloat(spot.mapy)])),
+              name: spot.title || "관광지"
             });
             marker.setStyle(new ol.style.Style({
               image: new ol.style.Circle({
@@ -85,8 +98,9 @@
         }
       })
       .catch(err => {
-        alert('❌ 예외 발생: 서버 또는 네트워크 오류. 콘솔을 확인하세요.');
-        console.error('Error:', err);
+        alert("❌ 예외 발생: 서버 또는 네트워크 오류. 콘솔을 확인하세요.");
+        console.error("Error:", err);
+        document.getElementById("status").innerText = "❌ 경로 계산 중 오류 발생";
       });
     }
   </script>
