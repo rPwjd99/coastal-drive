@@ -1,100 +1,119 @@
-from flask import Flask, render_template, request, jsonify
+import os
+import json
 import requests
 import geopandas as gpd
+from flask import Flask, request, jsonify, render_template
+from flask_cors import CORS
 from shapely.geometry import Point
-import math
+from shapely.ops import nearest_points
 
 app = Flask(__name__)
+CORS(app)
 
-NAVER_CLIENT_ID = 'vsdzf1f4n5'
-NAVER_CLIENT_SECRET = '0gzctO51PUTVv0gUZU025JYNHPTmVzLS9sGbfYBM'
+NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID", "vsdzf1f4n5")
+NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET", "0gzctO51PUTVv0gUZU025JYNHPTmVzLS9sGbfYBM")
 
-# 해안선 GeoJSON 불러오기
-coast_gdf = gpd.read_file("coastal_route_result.geojson")
+coastline_gdf = gpd.read_file("coastal_route_result.geojson")
+coastline_gdf = coastline_gdf.to_crs(epsg=4326)
 
-# 거리 계산 함수
-def haversine(lat1, lon1, lat2, lon2):
-    R = 6371
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
-    c = 2 * math.asin(math.sqrt(a))
-    return R * c
+# fallback 방식: 해안선에서 여러 후보 좌표 생성 후 도로 연결 성공한 좌표 반환
+def get_fallback_waypoint(start, end):
+    coast_candidates = coastline_gdf.copy()
+    coast_candidates["dist"] = coast_candidates.geometry.centroid.distance(Point(start))
+    coast_candidates = coast_candidates.sort_values("dist").head(20)
 
-# 가장 가까운 해안선 좌표 반환
-def get_nearest_coast_point(lat, lon):
-    coast_gdf["dist"] = coast_gdf.geometry.apply(lambda p: haversine(lat, lon, p.y, p.x))
-    nearest = coast_gdf.sort_values("dist").iloc[0]
-    return nearest.geometry.y, nearest.geometry.x
+    for idx, row in coast_candidates.iterrows():
+        point = row.geometry.centroid
+        lon, lat = point.x, point.y
+        print(f"\U0001F4CD 테스트 후보 좌표: {lat:.6f}, {lon:.6f}")
+        if test_route_with_waypoint(start, (lat, lon), end):
+            print("✅ 사용 가능한 waypoint 발견")
+            return lat, lon
+    print("❌ 모든 후보 waypoint 실패")
+    return None
 
-# VWorld API를 통한 주소 → 좌표 변환
-def geocode_address(address):
-    url = "https://api.vworld.kr/req/address"
-    params = {
-        "service": "address",
-        "request": "getcoord",
-        "format": "json",
-        "crs": "EPSG:4326",
-        "address": address,
-        "type": "road",
-        "key": "9E77283D-954A-3077-B7C8-9BD5ADB33255"
-    }
-    res = requests.get(url, params=params)
-    try:
-        coord = res.json()['response']['result']['point']
-        return float(coord['y']), float(coord['x'])
-    except:
-        return None
-
-# Naver Directions API를 통한 경로 계산
-def get_naver_route(start, waypoint, end):
-    url = "https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving"
+def test_route_with_waypoint(start, waypoint, end):
     headers = {
         "X-NCP-APIGW-API-KEY-ID": NAVER_CLIENT_ID,
-        "X-NCP-APIGW-API-KEY": NAVER_CLIENT_SECRET
+        "X-NCP-APIGW-API-KEY": NAVER_CLIENT_SECRET,
+        "Content-Type": "application/json"
     }
-    params = {
-        "start": f"{start[1]},{start[0]}",
-        "goal": f"{end[1]},{end[0]}",
-        "waypoints": f"{waypoint[1]},{waypoint[0]}",
-        "option": "trafast"
+    body = {
+        "start": {"x": str(start[1]), "y": str(start[0]), "name": "출발지"},
+        "goal": {"x": str(end[1]), "y": str(end[0]), "name": "도착지"},
+        "waypoints": [{"x": str(waypoint[1]), "y": str(waypoint[0]), "name": "해안경유지"}]
     }
-    res = requests.get(url, headers=headers, params=params)
     try:
-        return res.json()
-    except:
+        res = requests.post("https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving", 
+                             headers=headers, json=body)
+        if res.status_code == 200 and res.json().get("route"):
+            return True
+    except Exception as e:
+        print("❌ 테스트 요청 예외:", e)
+    return False
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+@app.route("/route", methods=["POST"])
+def route():
+    data = request.json
+    start_addr = data.get("start")
+    end_addr = data.get("end")
+
+    def geocode(addr):
+        url = "https://maps.googleapis.com/maps/api/geocode/json"
+        params = {"address": addr, "key": os.getenv("GOOGLE_API_KEY")}
+        res = requests.get(url, params=params)
+        geo = res.json()
+        if geo["status"] == "OK":
+            loc = geo["results"][0]["geometry"]["location"]
+            return loc["lat"], loc["lng"]
         return None
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+    start = geocode(start_addr)
+    end = geocode(end_addr)
 
-@app.route('/route', methods=['POST'])
-def route():
+    if not start or not end:
+        print("❌ 주소 geocoding 실패")
+        return jsonify({"error": "❌ 주소 인식 실패"}), 500
+
+    print("\U0001F4CD 출발지 좌표:", start)
+    print("\U0001F4CD 도착지 좌표:", end)
+
+    waypoint = get_fallback_waypoint(start, end)
+    if not waypoint:
+        return jsonify({"error": "❌ 사용할 수 있는 해안 waypoint 없음"}), 500
+
+    headers = {
+        "X-NCP-APIGW-API-KEY-ID": NAVER_CLIENT_ID,
+        "X-NCP-APIGW-API-KEY": NAVER_CLIENT_SECRET,
+        "Content-Type": "application/json"
+    }
+    body = {
+        "start": {"x": str(start[1]), "y": str(start[0]), "name": "출발지"},
+        "goal": {"x": str(end[1]), "y": str(end[0]), "name": "도착지"},
+        "waypoints": [{"x": str(waypoint[1]), "y": str(waypoint[0]), "name": "해안경유지"}]
+    }
+
     try:
-        data = request.get_json()
-        start_address = data['start']
-        end_address = data['end']
-
-        start = geocode_address(start_address)
-        end = geocode_address(end_address)
-        if not start or not end:
-            return jsonify({"error": "❌ 주소 인식 실패"}), 500
-
-        waypoint = get_nearest_coast_point(start[0], start[1])
-        route_data = get_naver_route(start, waypoint, end)
-
-        if not route_data or 'route' not in route_data:
+        res = requests.post("https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving", 
+                            headers=headers, json=body)
+        if res.status_code != 200:
+            print("❌ 네이버 Directions API 요청 실패", res.text)
             return jsonify({"error": "❌ 경로 계산 실패"}), 500
 
+        result = res.json()
+        print("\U0001F4C8 경로 계산 성공")
         return jsonify({
-            "route": route_data['route'],
-            "start_corrected": start_address,
-            "end_corrected": end_address,
-            "waypoint": waypoint
+            "start_corrected": start_addr,
+            "end_corrected": end_addr,
+            "route": result
         })
     except Exception as e:
-        return jsonify({"error": f"❌ 서버 오류: {str(e)}"}), 500
+        print("❌ 예외 발생:", e)
+        return jsonify({"error": "❌ 서버 예외 발생"}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000, debug=True)
+    app.run(debug=True, port=10000)
