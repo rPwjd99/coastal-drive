@@ -2,111 +2,125 @@ import os
 import json
 import requests
 import geopandas as gpd
+from shapely.geometry import Point
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
-from shapely.geometry import Point
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
 
-# 🔧 네이버 API 키
+# API KEY
 NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID", "vsdzf1f4n5")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET", "0gzctO51PUTVv0gUZU025JYNHPTmVzLS9sGbfYBM")
 
-# 📍 해안선 파일 경로
-GEOJSON_PATH = os.path.join(os.path.dirname(__file__), "coastal_route_result.geojson")
+# 해안선 GeoJSON 불러오기
+coastline_path = "coastal_route_result.geojson"
+coastline = gpd.read_file(coastline_path)
 
-def geocode_google(address):
-    url = f"https://maps.googleapis.com/maps/api/geocode/json?address={address}&key=AIzaSyC9MSD-WhkqK_Og5YdVYfux21xiRjy2q1M"
-    res = requests.get(url)
-    data = res.json()
-    if data["status"] == "OK":
-        location = data["results"][0]["geometry"]["location"]
-        return location["lat"], location["lng"]
-    else:
-        raise Exception("주소 변환 실패: " + address)
+# 대표 좌표(centroid) 계산
+if not coastline.geometry.geom_type.isin(['Point']).all():
+    coastline['centroid'] = coastline.geometry.centroid
+else:
+    coastline['centroid'] = coastline.geometry
 
-def naver_directions(start, end, waypoint=None):
+def geocode_address_google(address):
+    try:
+        url = f"https://maps.googleapis.com/maps/api/geocode/json?address={address}&key=AIzaSyC9MSD-WhkqK_Og5YdVYfux21xiRjy2q1M"
+        response = requests.get(url)
+        data = response.json()
+        if data["status"] == "OK":
+            loc = data["results"][0]["geometry"]["location"]
+            return loc["lat"], loc["lng"]
+        else:
+            print(f"❌ 구글 주소 변환 실패: {address}, 상태: {data['status']}")
+            return None
+    except Exception as e:
+        print("❌ 예외 발생(주소 변환):", e)
+        return None
+
+def find_best_waypoint(start_lat, start_lon, end_lat, end_lon):
+    print("🔍 해안 경유지 탐색 중...")
+    try:
+        # centroid 기준 위도, 경도 추출
+        coast_centroids = coastline['centroid']
+
+        # 위도 기준 가까운 해안 20개
+        lat_sorted = coastline.iloc[(coast_centroids.y - start_lat).abs().argsort()[:20]]
+        # 경도 기준 가까운 해안 20개
+        lon_sorted = coastline.iloc[(coast_centroids.x - start_lon).abs().argsort()[:20]]
+
+        # 두 후보 중 목적지와 더 가까운 쪽 선택
+        lat_pt = lat_sorted.iloc[0].centroid
+        lon_pt = lon_sorted.iloc[0].centroid
+        dist_lat = Point(end_lon, end_lat).distance(lat_pt)
+        dist_lon = Point(end_lon, end_lat).distance(lon_pt)
+        best_pt = lat_pt if dist_lat < dist_lon else lon_pt
+
+        print("✅ 선택된 Waypoint:", best_pt.y, best_pt.x)
+        return best_pt.y, best_pt.x  # (lat, lon)
+    except Exception as e:
+        print("❌ 해안 경유지 탐색 실패:", e)
+        return None
+
+def get_naver_route(start, waypoint, end):
     headers = {
         "X-NCP-APIGW-API-KEY-ID": NAVER_CLIENT_ID,
         "X-NCP-APIGW-API-KEY": NAVER_CLIENT_SECRET,
         "Content-Type": "application/json"
     }
-    url = "https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving"
-    params = {
-        "start": f"{start[1]},{start[0]}",
-        "goal": f"{end[1]},{end[0]}",
-        "option": "trafast"
+    body = {
+        "start": {"x": str(start[1]), "y": str(start[0]), "name": "출발지"},
+        "goal": {"x": str(end[1]), "y": str(end[0]), "name": "도착지"},
+        "waypoints": [{"x": str(waypoint[1]), "y": str(waypoint[0]), "name": "해안"}],
+        "option": "traoptimal"
     }
-    if waypoint:
-        params["waypoints"] = f"{waypoint[1]},{waypoint[0]}"
-    res = requests.get(url, headers=headers, params=params)
-    return res.json()
-
-def extract_centroid_coords(geom):
-    if geom.geom_type == 'Point':
-        return geom.y, geom.x
-    else:
-        centroid = geom.centroid
-        return centroid.y, centroid.x
-
-def find_nearest_waypoint(start_lat, start_lng, end_lat, end_lng):
-    coastline = gpd.read_file(GEOJSON_PATH)
-    coastline = coastline[coastline.geometry.is_valid]
-
-    if coastline.empty:
-        raise Exception("❌ 해안선 데이터가 비어 있습니다.")
-
-    # 중심 좌표 추출
-    coastline["lat"] = coastline.geometry.apply(lambda g: extract_centroid_coords(g)[0])
-    coastline["lng"] = coastline.geometry.apply(lambda g: extract_centroid_coords(g)[1])
-
-    # 위도 기준
-    lat_sorted = coastline.iloc[(coastline["lat"] - start_lat).abs().argsort()[:20]]
-    lng_sorted = coastline.iloc[(coastline["lng"] - start_lng).abs().argsort()[:20]]
-
-    # 거리 기반 판단
-    lat_dist = abs(lat_sorted.iloc[0]["lat"] - start_lat)
-    lng_dist = abs(lng_sorted.iloc[0]["lng"] - start_lng)
-
-    if lat_dist <= lng_dist:
-        target = lat_sorted.iloc[0]
-    else:
-        target = lng_sorted.iloc[0]
-
-    return (target["lat"], target["lng"])
+    try:
+        res = requests.post("https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving", headers=headers, data=json.dumps(body))
+        data = res.json()
+        if res.status_code == 200 and "route" in data:
+            path = data["route"]["traoptimal"][0]["path"]
+            print("✅ 네이버 경로 계산 성공")
+            return path
+        else:
+            print("❌ 경로 계산 실패:", data)
+            return None
+    except Exception as e:
+        print("❌ 경로 요청 예외:", e)
+        return None
 
 @app.route("/")
-def index():
+def home():
     return render_template("index.html")
 
 @app.route("/route", methods=["POST"])
 def route():
     try:
-        data = request.get_json()
+        data = request.json
         start_address = data["start"]
         end_address = data["end"]
 
-        start = geocode_google(start_address)
-        end = geocode_google(end_address)
+        start = geocode_address_google(start_address)
+        end = geocode_address_google(end_address)
 
-        waypoint = find_nearest_waypoint(start[0], start[1], end[0], end[1])
+        if not start or not end:
+            return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
-        nav_result = naver_directions(start, end, waypoint)
+        waypoint = find_best_waypoint(start[0], start[1], end[0], end[1])
+        if not waypoint:
+            return jsonify({"error": "❌ 해안 경유지 탐색 실패"}), 500
 
-        if "route" not in nav_result:
-            raise Exception("❌ 경로 탐색 실패")
+        route_path = get_naver_route(start, waypoint, end)
+        if not route_path:
+            return jsonify({"error": "❌ 경로 탐색 실패"}), 500
 
-        path = nav_result["route"]["trafast"][0]["path"]
-
-        return jsonify({
-            "route": path,
-            "waypoint": waypoint
-        })
-
+        return jsonify({"path": route_path})
     except Exception as e:
+        print("❌ 서버 오류:", e)
         return jsonify({"error": f"❌ 서버 오류: {str(e)}"}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=port)
