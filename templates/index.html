@@ -1,147 +1,119 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8">
-  <title>바다따라: 해안도로 감성 드라이브</title>
+  <meta charset="UTF-8" />
+  <title>바다따라 🌊 - 해안도로 드라이브</title>
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.css">
+  <link href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" rel="stylesheet" />
   <style>
     body { font-family: sans-serif; margin: 0; padding: 0; }
-    #controls { padding: 10px; }
-    input { width: 300px; margin: 5px; padding: 8px; }
-    button { padding: 10px 20px; }
     #map { width: 100%; height: 80vh; }
+    .controls { padding: 10px; background: #f0f0f0; }
+    input { width: 300px; margin-right: 10px; }
+    button { padding: 5px 10px; }
   </style>
 </head>
 <body>
-  <div id="controls">
-    <h2>🚗 바다따라 감성 해안도로 추천</h2>
-    <input type="text" id="start" placeholder="출발지 (예: 세종특별자치시청)">
-    <input type="text" id="end" placeholder="도착지 (예: 속초시청)">
-    <button onclick="searchRoute()">해안도로 경로 검색</button>
-    <div id="status"></div>
+  <div class="controls">
+    <input id="start" placeholder="출발지 주소 (예: 세종특별자치시 한누리대로 2130)" />
+    <input id="end" placeholder="도착지 주소 (예: 강원도 속초시 중앙로 183)" />
+    <button onclick="searchRoute()">🌊 해안도로 경로 검색</button>
+    <span id="status"></span>
   </div>
   <div id="map"></div>
 
   <script>
     const map = new ol.Map({
-      target: 'map',
-      layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
-      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
+      target: "map",
+      layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
+      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36]), zoom: 7 }),
     });
 
     let routeLayer = null;
-    let markerLayer = null;
+    let spotLayer = null;
 
-    function searchRoute() {
-      const start = document.getElementById('start').value;
-      const end = document.getElementById('end').value;
-      const status = document.getElementById('status');
+    async function searchRoute() {
+      const start = document.getElementById("start").value;
+      const end = document.getElementById("end").value;
+      document.getElementById("status").innerText = "⏳ 경로를 계산 중입니다...";
 
-      if (!start || !end) {
-        status.innerText = "❗ 출발지와 도착지를 모두 입력하세요.";
-        return;
-      }
+      try {
+        const res = await fetch("/route", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ start, end }),
+        });
 
-      status.innerText = "⏳ 경로를 계산 중입니다...";
-
-      fetch('/route', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ start, end })
-      })
-      .then(res => {
         if (!res.ok) throw new Error("❌ 서버 응답 실패");
-        return res.json();
-      })
-      .then(data => {
-        if (data.error) {
-          status.innerText = `❌ 서버 오류: ${data.error}`;
-          return;
-        }
 
-        status.innerText = "✅ 경로 계산 완료!";
-        drawRoute(data.route);
-        drawTourspots(data.tourspots);
-      })
-      .catch(err => {
-        status.innerText = `❌ 예외 발생: ${err.message}`;
-      });
+        const data = await res.json();
+        drawRoute(data.route.route.traoptimal[0].path);
+        drawSpots(data.spots);
+        document.getElementById("status").innerText = "✅ 해안 경유지 경로 계산 완료!";
+      } catch (err) {
+        console.error(err);
+        document.getElementById("status").innerText = "❌ 예외 발생: " + err.message;
+      }
     }
 
-    function drawRoute(geojson) {
+    function drawRoute(coords) {
       if (routeLayer) map.removeLayer(routeLayer);
 
-      const format = new ol.format.GeoJSON();
-      const features = format.readFeatures(geojson, {
-        featureProjection: 'EPSG:3857'
+      const routeFeature = new ol.Feature({
+        geometry: new ol.geom.LineString(coords.map(([x, y]) => ol.proj.fromLonLat([x, y]))),
       });
 
       routeLayer = new ol.layer.Vector({
-        source: new ol.source.Vector({ features }),
+        source: new ol.source.Vector({ features: [routeFeature] }),
         style: new ol.style.Style({
-          stroke: new ol.style.Stroke({
-            color: 'blue',
-            width: 4
-          })
-        })
+          stroke: new ol.style.Stroke({ color: "blue", width: 3 }),
+        }),
       });
 
       map.addLayer(routeLayer);
-      map.getView().fit(routeLayer.getSource().getExtent(), { padding: [50, 50, 50, 50] });
     }
 
-    function drawTourspots(spots) {
-      if (markerLayer) map.removeLayer(markerLayer);
+    function drawSpots(spots) {
+      if (spotLayer) map.removeLayer(spotLayer);
 
       const features = spots.map(spot => {
-        const icon = new ol.Feature({
-          geometry: new ol.geom.Point(ol.proj.fromLonLat([spot.mapx, spot.mapy])),
-          name: spot.title,
-          address: spot.addr1,
-          image: spot.firstimage
-        });
-        icon.setStyle(new ol.style.Style({
-          image: new ol.style.Icon({
-            src: "https://cdn-icons-png.flaticon.com/512/854/854878.png",
-            scale: 0.05
-          })
-        }));
-        return icon;
+        const lon = parseFloat(spot.mapx);
+        const lat = parseFloat(spot.mapy);
+        const coord = ol.proj.fromLonLat([lon, lat]);
+        const feature = new ol.Feature({ geometry: new ol.geom.Point(coord) });
+        feature.set("name", spot.title);
+        feature.set("addr", spot.addr1);
+        return feature;
       });
 
-      markerLayer = new ol.layer.Vector({
-        source: new ol.source.Vector({ features })
+      spotLayer = new ol.layer.Vector({
+        source: new ol.source.Vector({ features }),
+        style: new ol.style.Style({
+          image: new ol.style.Circle({
+            radius: 6,
+            fill: new ol.style.Fill({ color: "red" }),
+            stroke: new ol.style.Stroke({ color: "#fff", width: 1 }),
+          }),
+        }),
       });
 
-      map.addLayer(markerLayer);
+      map.addLayer(spotLayer);
 
-      const overlay = new ol.Overlay({
-        element: document.createElement('div'),
-        positioning: 'bottom-center',
-        stopEvent: false,
-        offset: [0, -10]
-      });
+      const overlay = new ol.Overlay({ element: document.createElement("div"), offset: [0, -10], positioning: "bottom-center" });
       map.addOverlay(overlay);
 
-      map.on('click', evt => {
-        map.forEachFeatureAtPixel(evt.pixel, function (feature) {
-          const coords = feature.getGeometry().getCoordinates();
-          const name = feature.get('name');
-          const address = feature.get('address');
-          const image = feature.get('image');
-
-          const content = `
-            <div style="background:white;border:1px solid #ccc;padding:10px;">
-              <strong>${name}</strong><br>
-              ${address}<br>
-              ${image ? `<img src="${image}" width="150">` : ""}
-            </div>
-          `;
-
-          const element = overlay.getElement();
-          element.innerHTML = content;
-          overlay.setPosition(coords);
+      map.on("click", evt => {
+        overlay.setPosition(undefined);
+        map.forEachFeatureAtPixel(evt.pixel, (feature) => {
+          const name = feature.get("name");
+          const addr = feature.get("addr");
+          const content = document.createElement("div");
+          content.style.background = "white";
+          content.style.border = "1px solid gray";
+          content.style.padding = "5px";
+          content.innerHTML = `<strong>${name}</strong><br>${addr}`;
+          overlay.setElement(content);
+          overlay.setPosition(evt.coordinate);
         });
       });
     }
