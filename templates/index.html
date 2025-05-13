@@ -2,27 +2,23 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>바다따라 🌊 해안도로 감성 드라이브 코스</title>
+  <title>🚗 바다따라: 해안도로 감성 드라이브</title>
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-  <link href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
   <style>
     body { font-family: sans-serif; margin: 0; padding: 0; }
-    #map { width: 100%; height: 90vh; }
-    #controls {
-      padding: 1rem;
-      background: #f9f9f9;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-    }
-    input { margin: 5px; padding: 5px; width: 300px; }
-    button { padding: 5px 10px; }
+    #map { width: 100%; height: 80vh; }
+    #controls { padding: 1rem; background: #f5f5f5; }
+    input, button { margin: 0.5rem 0; padding: 0.5rem; width: 100%; max-width: 400px; }
+    .error { color: red; font-weight: bold; }
   </style>
 </head>
 <body>
   <div id="controls">
     <h2>🚗 바다따라: 해안도로 감성 드라이브 코스</h2>
-    <p>출발지와 목적지를 입력하면 바다를 경유한 감성 드라이브 코스를 추천해드립니다.</p>
-    <input type="text" id="start" placeholder="출발지 주소" value="세종특별자치시 한누리대로 2130" />
-    <input type="text" id="end" placeholder="도착지 주소" value="강원도 속초시 중앙로 183" />
+    <p>출발지와 목적지를 입력하세요:</p>
+    <input id="start" placeholder="예: 세종특별자치시 한누리대로 2130" />
+    <input id="end" placeholder="예: 강원도 속초시 중앙로 183" />
     <button onclick="searchRoute()">해안도로 경로 검색</button>
     <p id="status"></p>
   </div>
@@ -31,75 +27,60 @@
   <script>
     const map = new ol.Map({
       target: 'map',
-      layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
-      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 }),
+      layers: [
+        new ol.layer.Tile({ source: new ol.source.OSM() })
+      ],
+      view: new ol.View({
+        center: ol.proj.fromLonLat([127.5, 36.5]),
+        zoom: 7
+      })
     });
 
-    let routeLayer, markerLayer;
-
-    function showGeoJSONOnMap(geojson) {
-      if (routeLayer) map.removeLayer(routeLayer);
-      routeLayer = new ol.layer.Vector({
-        source: new ol.source.Vector({
-          features: new ol.format.GeoJSON().readFeatures(geojson, {
-            featureProjection: 'EPSG:3857',
-          }),
-        }),
-        style: new ol.style.Style({
-          stroke: new ol.style.Stroke({ color: 'blue', width: 4 }),
-        }),
-      });
-      map.addLayer(routeLayer);
-
-      // 확대
-      const extent = routeLayer.getSource().getExtent();
-      map.getView().fit(extent, { padding: [50, 50, 50, 50] });
-    }
-
-    function showTourMarkers(places) {
-      if (markerLayer) map.removeLayer(markerLayer);
-      const features = places.map(p => {
-        const feature = new ol.Feature({
-          geometry: new ol.geom.Point(ol.proj.fromLonLat([p.mapx, p.mapy])),
-          name: p.title,
-        });
-        feature.setStyle(new ol.style.Style({
-          image: new ol.style.Circle({
-            radius: 6,
-            fill: new ol.style.Fill({ color: 'red' }),
-            stroke: new ol.style.Stroke({ color: 'white', width: 1 }),
-          }),
-        }));
-        return feature;
-      });
-
-      markerLayer = new ol.layer.Vector({
-        source: new ol.source.Vector({ features }),
-      });
-      map.addLayer(markerLayer);
-    }
-
     async function searchRoute() {
-      const start = document.getElementById('start').value;
-      const end = document.getElementById('end').value;
-      document.getElementById('status').innerText = "⏳ 경로를 계산 중입니다...";
+      const start = document.getElementById("start").value;
+      const end = document.getElementById("end").value;
+      const status = document.getElementById("status");
+      status.textContent = "⏳ 경로를 계산 중입니다...";
+
+      if (!start || !end) {
+        status.textContent = "❌ 출발지와 목적지를 모두 입력하세요.";
+        return;
+      }
+
       try {
-        const res = await fetch('/route', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+        const res = await fetch("/route", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ start, end })
         });
-        if (!res.ok) throw new Error("❌ 서버 응답 실패");
+
         const data = await res.json();
 
-        if (data.error) throw new Error("❌ " + data.error);
+        if (!res.ok) {
+          throw new Error(data.error || "❌ 서버 응답 실패");
+        }
 
-        showGeoJSONOnMap(data.route);
-        showTourMarkers(data.tourspots);
-        document.getElementById('status').innerText = "✅ 경로 탐색 완료!";
+        const routeLayer = new ol.layer.Vector({
+          source: new ol.source.Vector({
+            features: new ol.format.GeoJSON().readFeatures(data, {
+              featureProjection: "EPSG:3857"
+            })
+          }),
+          style: new ol.style.Style({
+            stroke: new ol.style.Stroke({
+              color: "#0077cc",
+              width: 4
+            })
+          })
+        });
+
+        map.getLayers().getArray().slice(1).forEach(l => map.removeLayer(l));
+        map.addLayer(routeLayer);
+        map.getView().fit(routeLayer.getSource().getExtent(), { padding: [40, 40, 40, 40] });
+        status.textContent = "✅ 경로 계산 완료!";
       } catch (err) {
-        document.getElementById('status').innerText = "❌ 예외 발생: " + err.message;
         console.error(err);
+        status.innerHTML = `❌ 예외 발생: <span class="error">${err.message}</span>`;
       }
     }
   </script>
