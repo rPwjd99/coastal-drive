@@ -3,94 +3,94 @@
 <head>
   <meta charset="UTF-8" />
   <title>바다따라: 해안도로 감성 드라이브 코스</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      padding: 40px;
-      background-color: #f0f8ff;
+    html, body {
+      margin: 0;
+      padding: 0;
+      font-family: sans-serif;
     }
-    h1 {
-      color: #004080;
-    }
-    label {
-      display: block;
-      margin-top: 20px;
-      font-weight: bold;
-    }
-    input {
+    #map {
       width: 100%;
+      height: 60vh;
+    }
+    .form {
+      padding: 20px;
+    }
+    input, button {
       padding: 10px;
-      font-size: 1em;
-      margin-top: 5px;
-      box-sizing: border-box;
-    }
-    button {
-      margin-top: 20px;
-      padding: 12px;
-      font-size: 1em;
-      background-color: #0074d9;
-      color: white;
-      border: none;
-      cursor: pointer;
+      margin: 5px 0;
       width: 100%;
-    }
-    button:hover {
-      background-color: #005fa3;
-    }
-    #response {
-      margin-top: 30px;
-      white-space: pre-wrap;
-      font-family: monospace;
-      background: #ffffff;
-      border: 1px solid #ccc;
-      padding: 15px;
+      font-size: 1em;
     }
   </style>
 </head>
 <body>
-  <h1>바다따라: 해안도로 감성 드라이브 코스</h1>
+  <div class="form">
+    <h1>바다따라: 해안도로 감성 드라이브 코스</h1>
+    <input type="text" id="start" placeholder="출발지 주소 (예: 세종특별자치시청)">
+    <input type="text" id="end" placeholder="도착지 주소 (예: 속초시청)">
+    <button onclick="searchRoute()">경로 검색</button>
+  </div>
+  <div id="map"></div>
 
-  <label for="start">출발지 주소:</label>
-  <input type="text" id="start" placeholder="예: 세종특별자치시 한누리대로 2130" />
-
-  <label for="end">도착지 주소:</label>
-  <input type="text" id="end" placeholder="예: 강원도 속초시 중앙로 183" />
-
-  <button onclick="searchRoute()">해안도로 경로 검색</button>
-
-  <div id="response"></div>
-
+  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
   <script>
+    const map = new ol.Map({
+      target: 'map',
+      layers: [
+        new ol.layer.Tile({
+          source: new ol.source.OSM()
+        })
+      ],
+      view: new ol.View({
+        center: ol.proj.fromLonLat([127.5, 36.5]),
+        zoom: 7
+      })
+    });
+
+    let routeLayer;
+
     async function searchRoute() {
       const start = document.getElementById("start").value.trim();
       const end = document.getElementById("end").value.trim();
-      const resDiv = document.getElementById("response");
-
       if (!start || !end) {
-        resDiv.innerHTML = "❗ 출발지와 도착지를 모두 입력해 주세요.";
+        alert("출발지와 도착지를 모두 입력해 주세요.");
         return;
       }
 
-      resDiv.innerHTML = "⏳ 경로를 계산 중입니다...";
+      const res = await fetch("/route", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ start, end })
+      });
 
-      try {
-        const res = await fetch("/route", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ start, end })
-        });
-
-        const data = await res.json();
-
-        if (!res.ok) {
-          resDiv.innerHTML = `❌ 오류 발생:\n${JSON.stringify(data, null, 2)}`;
-        } else {
-          resDiv.innerHTML = `✅ 경로 요청 성공:\n${JSON.stringify(data, null, 2)}`;
-          console.log("🔍 경로 응답:", data);
-        }
-      } catch (e) {
-        resDiv.innerHTML = `❌ 예외 발생: ${e}`;
+      const geojson = await res.json();
+      if (!res.ok || geojson.error) {
+        alert("❌ 경로 탐색 실패: " + geojson.error);
+        return;
       }
+
+      // 이전 경로 제거
+      if (routeLayer) map.removeLayer(routeLayer);
+
+      const vectorSource = new ol.source.Vector({
+        features: new ol.format.GeoJSON().readFeatures(geojson, {
+          featureProjection: 'EPSG:3857'
+        })
+      });
+
+      routeLayer = new ol.layer.Vector({
+        source: vectorSource,
+        style: new ol.style.Style({
+          stroke: new ol.style.Stroke({
+            color: 'blue', width: 4
+          })
+        })
+      });
+
+      map.addLayer(routeLayer);
+      map.getView().fit(vectorSource.getExtent(), { padding: [20, 20, 20, 20] });
     }
   </script>
 </body>
