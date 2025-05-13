@@ -12,21 +12,18 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# API Key 설정
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 
-# 경로 설정
 COASTLINE_PATH = os.path.join(os.path.dirname(__file__), "coastal_route_result.geojson")
 ROAD_CSV_PATH = os.path.join(os.path.dirname(__file__), "road_endpoints_reduced.csv")
 
-# 데이터 불러오기
 coastline = gpd.read_file(COASTLINE_PATH).to_crs(epsg=4326)
 road_points = pd.read_csv(ROAD_CSV_PATH)
 coastline["centroid"] = coastline.geometry.representative_point()
 
-# 해버사인 거리 계산 함수
+# 해버사인 거리 계산
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371
     dlat = radians(lat2 - lat1)
@@ -47,7 +44,7 @@ def geocode_google(address):
     except:
         return None
 
-# 유사 위도 또는 유사 경도 기준 가장 가까운 해안선 중심점 찾기
+# 위도/경도 기준 해안선 중심점 선택
 def find_coastal_point_by_direction(start_lat, start_lon, end_lat, end_lon):
     lat_diff = abs(start_lat - end_lat)
     lon_diff = abs(start_lon - end_lon)
@@ -61,13 +58,14 @@ def find_coastal_point_by_direction(start_lat, start_lon, end_lat, end_lon):
     nearest = coastline.sort_values("dir_diff").iloc[0].centroid
     return nearest.y, nearest.x
 
-# 가장 가까운 도로 점 찾기
+# 도로 끝점에서 가장 가까운 위치 찾기
 def find_nearest_road_point(lat, lon):
     road_points["dist"] = road_points.apply(lambda row: haversine(lat, lon, row["y"], row["x"]), axis=1)
     nearest = road_points.sort_values("dist").iloc[0]
     return nearest["y"], nearest["x"]
 
-# 네이버 경로 탐색
+# 네이버 경로 계산 API
+
 def get_naver_route(start, waypoint, end):
     url = "https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving"
     headers = {
@@ -78,7 +76,8 @@ def get_naver_route(start, waypoint, end):
         "start": f"{start[1]},{start[0]}",
         "goal": f"{end[1]},{end[0]}",
         "waypoints": f"{waypoint[1]},{waypoint[0]}",
-        "option": "trafast"
+        "option": "trafast",
+        "output": "json"
     }
     res = requests.get(url, headers=headers, params=params)
     if res.status_code != 200:
@@ -100,17 +99,32 @@ def route():
     if not start or not end:
         return jsonify({"error": "❌ 주소 → 좌표 변환 실패"}), 400
 
-    # 방향성 기반 해안 경유지 찾기
     coast_lat, coast_lon = find_coastal_point_by_direction(start[0], start[1], end[0], end[1])
-    # 가장 가까운 도로점으로 보정
     waypoint = find_nearest_road_point(coast_lat, coast_lon)
 
-    # 경로 요청
     route_data = get_naver_route(start, waypoint, end)
     if not route_data:
         return jsonify({"error": "❌ 경로 탐색 실패"}), 500
 
-    return jsonify(route_data)
+    # GeoJSON 형태로 반환
+    try:
+        coords = route_data["route"]["trafast"][0]["path"]
+        geojson = {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": coords
+                    },
+                    "properties": {}
+                }
+            ]
+        }
+        return jsonify(geojson)
+    except:
+        return jsonify({"error": "❌ 경로 데이터 파싱 실패"}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
