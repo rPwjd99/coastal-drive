@@ -6,15 +6,13 @@ import geopandas as gpd
 from flask import Flask, request, jsonify, render_template
 from shapely.geometry import Point
 from math import radians, cos, sin, asin, sqrt
-from dotenv import load_dotenv
-
-load_dotenv()
 
 app = Flask(__name__)
 
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
-NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
+# ✅ API 키 직접 삽입
+GOOGLE_API_KEY = "AIzaSyC9MSD-WhkqK_Og5YdVYfux21xiRjy2q1M"  # 실제 구글 API 키로 교체 필요
+NAVER_CLIENT_ID = "unqlfmw9y6"
+NAVER_CLIENT_SECRET = "TWFG08VAEkBcKwB0OnsdsEmN8C5D9ePLYuQWpr6E"
 
 COASTLINE_PATH = os.path.join(os.path.dirname(__file__), "coastal_route_result.geojson")
 ROAD_CSV_PATH = os.path.join(os.path.dirname(__file__), "road_endpoints_reduced.csv")
@@ -91,6 +89,9 @@ def get_naver_route(start, waypoint, end):
         "option": "trafast",
         "output": "json"
     }
+    print("📡 네이버 API 요청 URL:", url)
+    print("📡 요청 헤더:", headers)
+    print("📡 요청 파라미터:", params)
     res = requests.get(url, headers=headers, params=params)
     print("📡 네이버 응답코드:", res.status_code)
     if res.status_code != 200:
