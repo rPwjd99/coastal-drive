@@ -129,7 +129,9 @@ def route():
 
     route_data, status = get_naver_route(start, waypoint, end)
     if not route_data or "api_error" in route_data:
-        return jsonify({"error": f"❌ 네이버 경로 탐색 실패 (HTTP {status}): {route_data.get('api_error') if isinstance(route_data, dict) else ''}"}), 500
+        return jsonify({
+            "error": f"❌ 네이버 경로 탐색 실패 (HTTP {status}): {route_data.get('api_error') if isinstance(route_data, dict) else ''}"
+        }), 500
 
     try:
         coords = route_data["route"]["trafast"][0]["path"]
@@ -151,6 +153,7 @@ def route():
         print("❌ GeoJSON 파싱 오류:", str(e))
         return jsonify({"error": f"❌ 응답 파싱 실패: {str(e)}"}), 500
 
+# ✅ Render 환경 대응 포트
 if __name__ == "__main__":
     PORT = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=PORT)
