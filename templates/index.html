@@ -1,72 +1,97 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-    <meta charset="UTF-8">
-    <title>바다따라: 해안도로 감성 드라이브 코스</title>
-    <style>
-        body {
-            font-family: sans-serif;
-            margin: 30px;
-            background: #f0f8ff;
-        }
-        h1 {
-            color: #003366;
-        }
-        input, button {
-            padding: 10px;
-            margin: 10px 0;
-            width: 100%;
-            font-size: 1em;
-        }
-        #response {
-            margin-top: 20px;
-            white-space: pre-wrap;
-            background: #fff;
-            padding: 10px;
-            border: 1px solid #ccc;
-            font-family: monospace;
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <title>바다따라: 해안도로 감성 드라이브 코스</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 40px;
+      background-color: #f0f8ff;
+    }
+    h1 {
+      color: #004080;
+    }
+    label {
+      display: block;
+      margin-top: 20px;
+      font-weight: bold;
+    }
+    input {
+      width: 100%;
+      padding: 10px;
+      font-size: 1em;
+      margin-top: 5px;
+      box-sizing: border-box;
+    }
+    button {
+      margin-top: 20px;
+      padding: 12px;
+      font-size: 1em;
+      background-color: #0074d9;
+      color: white;
+      border: none;
+      cursor: pointer;
+      width: 100%;
+    }
+    button:hover {
+      background-color: #005fa3;
+    }
+    #response {
+      margin-top: 30px;
+      white-space: pre-wrap;
+      font-family: monospace;
+      background: #ffffff;
+      border: 1px solid #ccc;
+      padding: 15px;
+    }
+  </style>
 </head>
 <body>
-    <h1>바다따라: 해안도로 감성 드라이브 코스</h1>
+  <h1>바다따라: 해안도로 감성 드라이브 코스</h1>
 
-    <label>출발지 주소:</label>
-    <input type="text" id="start" placeholder="예: 세종특별자치시 한누리대로 2130">
+  <label for="start">출발지 주소:</label>
+  <input type="text" id="start" placeholder="예: 세종특별자치시 한누리대로 2130" />
 
-    <label>도착지 주소:</label>
-    <input type="text" id="end" placeholder="예: 강원도 속초시 중앙로 183">
+  <label for="end">도착지 주소:</label>
+  <input type="text" id="end" placeholder="예: 강원도 속초시 중앙로 183" />
 
-    <button onclick="searchRoute()">해안도로 경로 검색</button>
+  <button onclick="searchRoute()">해안도로 경로 검색</button>
 
-    <div id="response"></div>
+  <div id="response"></div>
 
-    <script>
-        async function searchRoute() {
-            const start = document.getElementById('start').value;
-            const end = document.getElementById('end').value;
-            const resDiv = document.getElementById('response');
+  <script>
+    async function searchRoute() {
+      const start = document.getElementById("start").value.trim();
+      const end = document.getElementById("end").value.trim();
+      const resDiv = document.getElementById("response");
 
-            resDiv.innerHTML = "⏳ 경로를 계산 중입니다...";
+      if (!start || !end) {
+        resDiv.innerHTML = "❗ 출발지와 도착지를 모두 입력해 주세요.";
+        return;
+      }
 
-            try {
-                const res = await fetch("/route", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ start, end })
-                });
+      resDiv.innerHTML = "⏳ 경로를 계산 중입니다...";
 
-                const data = await res.json();
-                if (!res.ok) {
-                    resDiv.innerHTML = `❌ 오류: ${JSON.stringify(data)}`;
-                } else {
-                    resDiv.innerHTML = `✅ 경로 요청 성공\n\n${JSON.stringify(data, null, 2)}`;
-                    console.log("경로 결과:", data);
-                }
-            } catch (e) {
-                resDiv.innerHTML = "❌ 예외 발생: " + e;
-            }
+      try {
+        const res = await fetch("/route", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ start, end })
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          resDiv.innerHTML = `❌ 오류 발생:\n${JSON.stringify(data, null, 2)}`;
+        } else {
+          resDiv.innerHTML = `✅ 경로 요청 성공:\n${JSON.stringify(data, null, 2)}`;
+          console.log("🔍 경로 응답:", data);
         }
-    </script>
+      } catch (e) {
+        resDiv.innerHTML = `❌ 예외 발생: ${e}`;
+      }
+    }
+  </script>
 </body>
 </html>
