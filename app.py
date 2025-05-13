@@ -31,7 +31,6 @@ def haversine(lat1, lon1, lat2, lon2):
     return 2 * R * asin(sqrt(a))
 
 # 주소 → 좌표 변환 with 다양한 조건
-
 def geocode_google(address):
     base_url = "https://maps.googleapis.com/maps/api/geocode/json"
     queries = [
@@ -71,6 +70,10 @@ def find_directional_road_point(start_lat, start_lon, end_lat, end_lon):
         lambda row: haversine(row["y"], row["x"], end_lat, end_lon), axis=1
     )
 
+    if road_points.empty:
+        print("❌ 도로 점 데이터 비어 있음")
+        return None
+
     candidate = road_points.sort_values(["dir_diff", "dist_to_end"]).iloc[0]
     return candidate["y"], candidate["x"]
 
@@ -92,8 +95,8 @@ def get_naver_route(start, waypoint, end):
     print("📡 네이버 응답코드:", res.status_code)
     if res.status_code != 200:
         print("❌ 응답 오류:", res.text)
-        return None
-    return res.json()
+        return None, res.status_code
+    return res.json(), 200
 
 @app.route("/")
 def index():
@@ -109,15 +112,18 @@ def route():
 
     start = geocode_google(start_addr)
     end = geocode_google(end_addr)
-    if not start or not end:
-        return jsonify({"error": "❌ 주소 → 좌표 변환 실패"}), 400
+    if not start:
+        return jsonify({"error": "❌ 출발지 주소 변환 실패"}), 400
+    if not end:
+        return jsonify({"error": "❌ 목적지 주소 변환 실패"}), 400
 
     waypoint = find_directional_road_point(start[0], start[1], end[0], end[1])
-    print("✅ 선택된 waypoint:", waypoint)
+    if not waypoint:
+        return jsonify({"error": "❌ 경유지(해안 도로점) 선택 실패"}), 500
 
-    route_data = get_naver_route(start, waypoint, end)
+    route_data, status = get_naver_route(start, waypoint, end)
     if not route_data:
-        return jsonify({"error": "❌ 경로 탐색 실패"}), 500
+        return jsonify({"error": f"❌ 네이버 경로 탐색 실패 (HTTP {status})"}), 500
 
     try:
         coords = route_data["route"]["trafast"][0]["path"]
@@ -138,7 +144,8 @@ def route():
         return jsonify(geojson)
     except Exception as e:
         print("❌ GeoJSON 변환 실패:", e)
-        return jsonify({"error": "❌ 경로 데이터 파싱 실패"}), 500
+        print(json.dumps(route_data, indent=2))
+        return jsonify({"error": "❌ 네이버 경로 응답 파싱 실패"}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
