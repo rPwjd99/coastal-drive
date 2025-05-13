@@ -10,7 +10,7 @@ from math import radians, cos, sin, asin, sqrt
 app = Flask(__name__)
 
 # ✅ API 키 직접 삽입
-GOOGLE_API_KEY = "AIzaSyC9MSD-WhkqK_Og5YdVYfux21xiRjy2q1M"  # 실제 구글 API 키로 교체 필요
+GOOGLE_API_KEY = "AIzaSyC9MSD-WhkqK_Og5YdVYfux21xiRjy2q1M"
 NAVER_CLIENT_ID = "unqlfmw9y6"
 NAVER_CLIENT_SECRET = "TWFG08VAEkBcKwB0OnsdsEmN8C5D9ePLYuQWpr6E"
 
@@ -53,7 +53,7 @@ def geocode_google(address):
     print("❌ 모든 주소 변환 실패:", address)
     return None
 
-# 방향성 기반 도로점 탐색
+# 방향성 기반 도로점 탐색 (출발지 기준, 목적지 방향 유사 좌표 선택)
 def find_directional_road_point(start_lat, start_lon, end_lat, end_lon):
     lat_diff = abs(start_lat - end_lat)
     lon_diff = abs(start_lon - end_lon)
@@ -75,7 +75,8 @@ def find_directional_road_point(start_lat, start_lon, end_lat, end_lon):
     candidate = road_points.sort_values(["dir_diff", "dist_to_end"]).iloc[0]
     return candidate["y"], candidate["x"]
 
-# 네이버 경로 탐색
+# 네이버 경로 탐색 API
+
 def get_naver_route(start, waypoint, end):
     url = "https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving"
     headers = {
@@ -89,13 +90,11 @@ def get_naver_route(start, waypoint, end):
         "option": "trafast",
         "output": "json"
     }
-    print("📡 네이버 API 요청 URL:", url)
-    print("📡 요청 헤더:", headers)
-    print("📡 요청 파라미터:", params)
+    print("📡 네이버 API 요청 파라미터:", params)
     res = requests.get(url, headers=headers, params=params)
-    print("📡 네이버 응답코드:", res.status_code)
+    print("📡 응답코드:", res.status_code)
     if res.status_code != 200:
-        print("❌ 응답 오류:", res.text)
+        print("❌ 응답 실패:", res.text)
         return None, res.status_code
     return res.json(), 200
 
@@ -120,7 +119,7 @@ def route():
 
     waypoint = find_directional_road_point(start[0], start[1], end[0], end[1])
     if not waypoint:
-        return jsonify({"error": "❌ 경유지(해안 도로점) 선택 실패"}), 500
+        return jsonify({"error": "❌ 해안 도로 경유지 탐색 실패"}), 500
 
     route_data, status = get_naver_route(start, waypoint, end)
     if not route_data:
@@ -128,7 +127,6 @@ def route():
 
     try:
         coords = route_data["route"]["trafast"][0]["path"]
-        print("✅ 경로 좌표 개수:", len(coords))
         geojson = {
             "type": "FeatureCollection",
             "features": [
@@ -144,8 +142,7 @@ def route():
         }
         return jsonify(geojson)
     except Exception as e:
-        print("❌ GeoJSON 변환 실패:", e)
-        print(json.dumps(route_data, indent=2))
+        print("❌ GeoJSON 파싱 오류:", e)
         return jsonify({"error": "❌ 네이버 경로 응답 파싱 실패"}), 500
 
 if __name__ == "__main__":
