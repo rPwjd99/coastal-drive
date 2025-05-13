@@ -21,7 +21,6 @@ ROAD_CSV_PATH = os.path.join(os.path.dirname(__file__), "road_endpoints_reduced.
 
 coastline = gpd.read_file(COASTLINE_PATH).to_crs(epsg=4326)
 road_points = pd.read_csv(ROAD_CSV_PATH)
-coastline["centroid"] = coastline.geometry.representative_point()
 
 # 해버사인 거리 계산
 def haversine(lat1, lon1, lat2, lon2):
@@ -44,27 +43,28 @@ def geocode_google(address):
     except:
         return None
 
-# 위도/경도 기준 해안선 중심점 선택
-def find_coastal_point_by_direction(start_lat, start_lon, end_lat, end_lon):
+# 출발지 기준 유사 위도 or 유사 경도 도로점 중 목적지 방향에 가까운 점 선택
+def find_directional_road_point(start_lat, start_lon, end_lat, end_lon):
+    print("🚩 출발지:", start_lat, start_lon)
+    print("🏁 목적지:", end_lat, end_lon)
     lat_diff = abs(start_lat - end_lat)
     lon_diff = abs(start_lon - end_lon)
     use_lat = lat_diff > lon_diff
 
     if use_lat:
-        coastline["dir_diff"] = coastline.centroid.apply(lambda pt: abs(pt.y - start_lat))
+        road_points["dir_diff"] = road_points["y"].apply(lambda y: abs(y - start_lat))
     else:
-        coastline["dir_diff"] = coastline.centroid.apply(lambda pt: abs(pt.x - start_lon))
+        road_points["dir_diff"] = road_points["x"].apply(lambda x: abs(x - start_lon))
 
-    nearest = coastline.sort_values("dir_diff").iloc[0].centroid
-    return nearest.y, nearest.x
+    road_points["dist_to_end"] = road_points.apply(
+        lambda row: haversine(row["y"], row["x"], end_lat, end_lon), axis=1
+    )
 
-# 도로 끝점에서 가장 가까운 위치 찾기
-def find_nearest_road_point(lat, lon):
-    road_points["dist"] = road_points.apply(lambda row: haversine(lat, lon, row["y"], row["x"]), axis=1)
-    nearest = road_points.sort_values("dist").iloc[0]
-    return nearest["y"], nearest["x"]
+    candidate = road_points.sort_values(["dir_diff", "dist_to_end"]).iloc[0]
+    print("🛣 선택된 도로점:", candidate["y"], candidate["x"])
+    return candidate["y"], candidate["x"]
 
-# 네이버 경로 계산 API
+# 네이버 경로 계산
 
 def get_naver_route(start, waypoint, end):
     url = "https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving"
@@ -80,7 +80,9 @@ def get_naver_route(start, waypoint, end):
         "output": "json"
     }
     res = requests.get(url, headers=headers, params=params)
+    print("📡 네이버 API 응답코드:", res.status_code)
     if res.status_code != 200:
+        print("❌ 응답 오류:", res.text)
         return None
     return res.json()
 
@@ -94,21 +96,28 @@ def route():
     start_addr = data.get("start")
     end_addr = data.get("end")
 
+    print("📨 요청 수신:", start_addr, "→", end_addr)
+
     start = geocode_google(start_addr)
     end = geocode_google(end_addr)
     if not start or not end:
+        print("❌ 주소 변환 실패")
         return jsonify({"error": "❌ 주소 → 좌표 변환 실패"}), 400
 
-    coast_lat, coast_lon = find_coastal_point_by_direction(start[0], start[1], end[0], end[1])
-    waypoint = find_nearest_road_point(coast_lat, coast_lon)
+    print("✅ 주소 좌표 변환 완료")
 
+    # 도로 끝점 중 목적지 방향에 가까운 점 선택
+    waypoint = find_directional_road_point(start[0], start[1], end[0], end[1])
+
+    # 경로 요청
     route_data = get_naver_route(start, waypoint, end)
     if not route_data:
+        print("❌ 네이버 경로 탐색 실패")
         return jsonify({"error": "❌ 경로 탐색 실패"}), 500
 
-    # GeoJSON 형태로 반환
     try:
         coords = route_data["route"]["trafast"][0]["path"]
+        print("✅ 경로 좌표 개수:", len(coords))
         geojson = {
             "type": "FeatureCollection",
             "features": [
@@ -123,7 +132,8 @@ def route():
             ]
         }
         return jsonify(geojson)
-    except:
+    except Exception as e:
+        print("❌ GeoJSON 변환 실패:", e)
         return jsonify({"error": "❌ 경로 데이터 파싱 실패"}), 500
 
 if __name__ == "__main__":
