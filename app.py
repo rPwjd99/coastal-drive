@@ -9,7 +9,6 @@ from math import radians, cos, sin, asin, sqrt
 
 app = Flask(__name__)
 
-# ✅ API 키 직접 삽입
 GOOGLE_API_KEY = "AIzaSyC9MSD-WhkqK_Og5YdVYfux21xiRjy2q1M"
 NAVER_CLIENT_ID = "unqlfmw9y6"
 NAVER_CLIENT_SECRET = "TWFG08VAEkBcKwB0OnsdsEmN8C5D9ePLYuQWpr6E"
@@ -20,7 +19,6 @@ ROAD_CSV_PATH = os.path.join(os.path.dirname(__file__), "road_endpoints_reduced.
 coastline = gpd.read_file(COASTLINE_PATH).to_crs(epsg=4326)
 road_points = pd.read_csv(ROAD_CSV_PATH, low_memory=False)
 
-# 해버사인 거리 계산
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371
     dlat = radians(lat2 - lat1)
@@ -28,7 +26,6 @@ def haversine(lat1, lon1, lat2, lon2):
     a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
     return 2 * R * asin(sqrt(a))
 
-# 주소 → 좌표 변환 with 다양한 조건
 def geocode_google(address):
     base_url = "https://maps.googleapis.com/maps/api/geocode/json"
     queries = [
@@ -53,7 +50,6 @@ def geocode_google(address):
     print("❌ 모든 주소 변환 실패:", address)
     return None
 
-# 방향성 기반 도로점 탐색 (출발지 기준, 목적지 방향 유사 좌표 선택)
 def find_directional_road_point(start_lat, start_lon, end_lat, end_lon):
     lat_diff = abs(start_lat - end_lat)
     lon_diff = abs(start_lon - end_lon)
@@ -74,8 +70,6 @@ def find_directional_road_point(start_lat, start_lon, end_lat, end_lon):
 
     candidate = road_points.sort_values(["dir_diff", "dist_to_end"]).iloc[0]
     return candidate["y"], candidate["x"]
-
-# 네이버 경로 탐색 API
 
 def get_naver_route(start, waypoint, end):
     url = "https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving"
@@ -126,6 +120,7 @@ def route():
         return jsonify({"error": f"❌ 네이버 경로 탐색 실패 (HTTP {status})"}), 500
 
     try:
+        print("📦 네이버 API 응답:", json.dumps(route_data, indent=2, ensure_ascii=False))
         coords = route_data["route"]["trafast"][0]["path"]
         geojson = {
             "type": "FeatureCollection",
