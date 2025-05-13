@@ -6,12 +6,15 @@ import geopandas as gpd
 from flask import Flask, request, jsonify, render_template
 from shapely.geometry import Point
 from math import radians, cos, sin, asin, sqrt
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
 
-GOOGLE_API_KEY = "AIzaSyC9MSD-WhkqK_Og5YdVYfux21xiRjy2q1M"
-NAVER_CLIENT_ID = "unqlfmw9y6"
-NAVER_CLIENT_SECRET = "TWFG08VAEkBcKwB0OnsdsEmN8C5D9ePLYuQWpr6E"
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
+NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 
 COASTLINE_PATH = os.path.join(os.path.dirname(__file__), "coastal_route_result.geojson")
 ROAD_CSV_PATH = os.path.join(os.path.dirname(__file__), "road_endpoints_reduced.csv")
@@ -89,7 +92,7 @@ def get_naver_route(start, waypoint, end):
     print("📡 응답코드:", res.status_code)
     if res.status_code != 200:
         print("❌ 응답 실패:", res.text)
-        return None, res.status_code
+        return {"api_error": res.text}, res.status_code
     return res.json(), 200
 
 @app.route("/")
@@ -116,8 +119,8 @@ def route():
         return jsonify({"error": "❌ 해안 도로 경유지 탐색 실패"}), 500
 
     route_data, status = get_naver_route(start, waypoint, end)
-    if not route_data:
-        return jsonify({"error": f"❌ 네이버 경로 탐색 실패 (HTTP {status})"}), 500
+    if not route_data or "api_error" in route_data:
+        return jsonify({"error": f"❌ 네이버 경로 탐색 실패 (HTTP {status}): {route_data.get('api_error') if isinstance(route_data, dict) else ''}"}), 500
 
     try:
         print("📦 네이버 API 응답:", json.dumps(route_data, indent=2, ensure_ascii=False))
