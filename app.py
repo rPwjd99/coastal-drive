@@ -72,6 +72,7 @@ def find_directional_road_point(start_lat, start_lon, end_lat, end_lon):
         return None
 
     candidate = road_points.sort_values(["dir_diff", "dist_to_end"]).iloc[0]
+    print("📍 선택된 waypoint:", candidate["y"], candidate["x"])
     return candidate["y"], candidate["x"]
 
 def get_naver_route(start, waypoint, end):
@@ -93,6 +94,7 @@ def get_naver_route(start, waypoint, end):
     if res.status_code != 200:
         print("❌ 응답 실패:", res.text)
         return {"api_error": res.text}, res.status_code
+    print("📦 네이버 API 응답:", res.text)
     return res.json(), 200
 
 @app.route("/")
@@ -109,6 +111,7 @@ def route():
 
     start = geocode_google(start_addr)
     end = geocode_google(end_addr)
+    print("📍 변환된 좌표:", start, "→", end)
     if not start:
         return jsonify({"error": "❌ 출발지 주소 변환 실패"}), 400
     if not end:
@@ -123,7 +126,6 @@ def route():
         return jsonify({"error": f"❌ 네이버 경로 탐색 실패 (HTTP {status}): {route_data.get('api_error') if isinstance(route_data, dict) else ''}"}), 500
 
     try:
-        print("📦 네이버 API 응답:", json.dumps(route_data, indent=2, ensure_ascii=False))
         coords = route_data["route"]["trafast"][0]["path"]
         geojson = {
             "type": "FeatureCollection",
@@ -140,8 +142,9 @@ def route():
         }
         return jsonify(geojson)
     except Exception as e:
-        print("❌ GeoJSON 파싱 오류:", e)
-        return jsonify({"error": "❌ 네이버 경로 응답 파싱 실패"}), 500
+        print("❌ GeoJSON 파싱 오류:", str(e))
+        return jsonify({"error": f"❌ 응답 파싱 실패: {str(e)}"}), 500
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    PORT = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=PORT)
