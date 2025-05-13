@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8">
   <title>바다따라: 해안도로 감성 드라이브 코스</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
   <style>
@@ -33,8 +33,8 @@
 <body>
   <div class="form">
     <h1>바다따라: 해안도로 감성 드라이브 코스</h1>
-    <input type="text" id="start" placeholder="출발지 주소 (예: 세종특별자치시 한누리대로 2130 또는 세종시청)">
-    <input type="text" id="end" placeholder="도착지 주소 (예: 강원도 속초시 중앙로 183 또는 속초시청)">
+    <input type="text" id="start" placeholder="출발지 주소 (예: 세종특별자치시청 또는 한누리대로 2130)">
+    <input type="text" id="end" placeholder="도착지 주소 (예: 속초시청 또는 중앙로 183)">
     <button onclick="searchRoute()">경로 검색</button>
     <div id="status"></div>
   </div>
@@ -45,9 +45,7 @@
     const map = new ol.Map({
       target: 'map',
       layers: [
-        new ol.layer.Tile({
-          source: new ol.source.OSM()
-        })
+        new ol.layer.Tile({ source: new ol.source.OSM() })
       ],
       view: new ol.View({
         center: ol.proj.fromLonLat([127.5, 36.5]),
@@ -94,9 +92,7 @@
         routeLayer = new ol.layer.Vector({
           source: vectorSource,
           style: new ol.style.Style({
-            stroke: new ol.style.Stroke({
-              color: 'blue', width: 4
-            })
+            stroke: new ol.style.Stroke({ color: 'blue', width: 4 })
           })
         });
 
