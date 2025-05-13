@@ -20,7 +20,7 @@ COASTLINE_PATH = os.path.join(os.path.dirname(__file__), "coastal_route_result.g
 ROAD_CSV_PATH = os.path.join(os.path.dirname(__file__), "road_endpoints_reduced.csv")
 
 coastline = gpd.read_file(COASTLINE_PATH).to_crs(epsg=4326)
-road_points = pd.read_csv(ROAD_CSV_PATH)
+road_points = pd.read_csv(ROAD_CSV_PATH, low_memory=False)
 
 # 해버사인 거리 계산
 def haversine(lat1, lon1, lat2, lon2):
@@ -30,23 +30,34 @@ def haversine(lat1, lon1, lat2, lon2):
     a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
     return 2 * R * asin(sqrt(a))
 
-# 주소 → 좌표 변환
-def geocode_google(address):
-    url = "https://maps.googleapis.com/maps/api/geocode/json"
-    params = {"address": address, "key": GOOGLE_API_KEY}
-    res = requests.get(url, params=params)
-    if res.status_code != 200:
-        return None
-    try:
-        location = res.json()["results"][0]["geometry"]["location"]
-        return location["lat"], location["lng"]
-    except:
-        return None
+# 주소 → 좌표 변환 with 다양한 조건
 
-# 출발지 기준 유사 위도 or 유사 경도 도로점 중 목적지 방향에 가까운 점 선택
+def geocode_google(address):
+    base_url = "https://maps.googleapis.com/maps/api/geocode/json"
+    queries = [
+        address,
+        address + " 도로명주소",
+        address + " 지번주소",
+        address + " 건물명",
+        address + " POI",
+        address + " 업체명",
+        address + " 대한민국"
+    ]
+    for q in queries:
+        res = requests.get(base_url, params={"address": q, "key": GOOGLE_API_KEY})
+        if res.status_code != 200:
+            continue
+        try:
+            location = res.json()["results"][0]["geometry"]["location"]
+            print("📍 주소 변환 성공:", q, "→", location)
+            return location["lat"], location["lng"]
+        except:
+            continue
+    print("❌ 모든 주소 변환 실패:", address)
+    return None
+
+# 방향성 기반 도로점 탐색
 def find_directional_road_point(start_lat, start_lon, end_lat, end_lon):
-    print("🚩 출발지:", start_lat, start_lon)
-    print("🏁 목적지:", end_lat, end_lon)
     lat_diff = abs(start_lat - end_lat)
     lon_diff = abs(start_lon - end_lon)
     use_lat = lat_diff > lon_diff
@@ -61,11 +72,9 @@ def find_directional_road_point(start_lat, start_lon, end_lat, end_lon):
     )
 
     candidate = road_points.sort_values(["dir_diff", "dist_to_end"]).iloc[0]
-    print("🛣 선택된 도로점:", candidate["y"], candidate["x"])
     return candidate["y"], candidate["x"]
 
-# 네이버 경로 계산
-
+# 네이버 경로 탐색
 def get_naver_route(start, waypoint, end):
     url = "https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving"
     headers = {
@@ -80,7 +89,7 @@ def get_naver_route(start, waypoint, end):
         "output": "json"
     }
     res = requests.get(url, headers=headers, params=params)
-    print("📡 네이버 API 응답코드:", res.status_code)
+    print("📡 네이버 응답코드:", res.status_code)
     if res.status_code != 200:
         print("❌ 응답 오류:", res.text)
         return None
@@ -96,23 +105,18 @@ def route():
     start_addr = data.get("start")
     end_addr = data.get("end")
 
-    print("📨 요청 수신:", start_addr, "→", end_addr)
+    print("📨 요청 주소:", start_addr, "→", end_addr)
 
     start = geocode_google(start_addr)
     end = geocode_google(end_addr)
     if not start or not end:
-        print("❌ 주소 변환 실패")
         return jsonify({"error": "❌ 주소 → 좌표 변환 실패"}), 400
 
-    print("✅ 주소 좌표 변환 완료")
-
-    # 도로 끝점 중 목적지 방향에 가까운 점 선택
     waypoint = find_directional_road_point(start[0], start[1], end[0], end[1])
+    print("✅ 선택된 waypoint:", waypoint)
 
-    # 경로 요청
     route_data = get_naver_route(start, waypoint, end)
     if not route_data:
-        print("❌ 네이버 경로 탐색 실패")
         return jsonify({"error": "❌ 경로 탐색 실패"}), 500
 
     try:
