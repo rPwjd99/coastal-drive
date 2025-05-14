@@ -14,8 +14,8 @@ app = Flask(__name__)
 
 # ✅ 환경변수에서 API 키 불러오기
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")  # l8jxeiubya
-NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")  # W8qIqro8...
+NAVER_API_KEY_ID = os.getenv("NAVER_API_KEY_ID")
+NAVER_API_KEY_SECRET = os.getenv("NAVER_API_KEY_SECRET")
 
 COASTLINE_PATH = os.path.join(os.path.dirname(__file__), "coastal_route_result.geojson")
 ROAD_CSV_PATH = os.path.join(os.path.dirname(__file__), "road_endpoints_reduced.csv")
@@ -24,7 +24,7 @@ ROAD_CSV_PATH = os.path.join(os.path.dirname(__file__), "road_endpoints_reduced.
 coastline = gpd.read_file(COASTLINE_PATH).to_crs(epsg=4326)
 road_points = pd.read_csv(ROAD_CSV_PATH, low_memory=False)
 
-# 거리 계산 (하버사인)
+# 거리 계산
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371
     dlat = radians(lat2 - lat1)
@@ -32,7 +32,7 @@ def haversine(lat1, lon1, lat2, lon2):
     a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
     return 2 * R * asin(sqrt(a))
 
-# 주소 → 좌표 (Google Geocoding)
+# 주소 → 좌표
 def geocode_google(address):
     base_url = "https://maps.googleapis.com/maps/api/geocode/json"
     queries = [
@@ -54,7 +54,7 @@ def geocode_google(address):
     print("❌ 모든 주소 변환 실패:", address)
     return None
 
-# 도로 경유지 탐색 (출발지 기준 방향)
+# 도로 경유지 선택
 def find_directional_road_point(start_lat, start_lon, end_lat, end_lon):
     lat_diff = abs(start_lat - end_lat)
     lon_diff = abs(start_lon - end_lon)
@@ -81,8 +81,8 @@ def find_directional_road_point(start_lat, start_lon, end_lat, end_lon):
 def get_naver_route(start, waypoint, end):
     url = "https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving"
     headers = {
-        "X-NCP-APIGW-API-KEY-ID": NAVER_CLIENT_ID,
-        "X-NCP-APIGW-API-KEY": NAVER_CLIENT_SECRET,
+        "X-NCP-APIGW-API-KEY-ID": NAVER_API_KEY_ID,
+        "X-NCP-APIGW-API-KEY": NAVER_API_KEY_SECRET,
     }
     params = {
         "start": f"{start[1]},{start[0]}",
@@ -97,10 +97,15 @@ def get_naver_route(start, waypoint, end):
     if res.status_code != 200:
         print("❌ 응답 실패:", res.text)
         return {"api_error": res.text}, res.status_code
-    print("📦 네이버 API 응답:", res.text)
-    return res.json(), 200
+    try:
+        response_json = res.json()
+        print("📦 네이버 API 응답:", response_json)
+        return response_json, 200
+    except Exception as e:
+        print("❌ JSON 디코딩 오류:", str(e))
+        return {"api_error": "Invalid JSON"}, 500
 
-# 웹 경로
+# 웹 엔드포인트
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -132,7 +137,9 @@ def route():
         }), 500
 
     try:
-        coords = route_data["route"]["trafast"][0]["path"]
+        coords = route_data.get("route", {}).get("trafast", [{}])[0].get("path")
+        if not coords:
+            raise ValueError("경로 정보가 비어 있습니다.")
         geojson = {
             "type": "FeatureCollection",
             "features": [
@@ -151,7 +158,7 @@ def route():
         print("❌ GeoJSON 파싱 오류:", str(e))
         return jsonify({"error": f"❌ 응답 파싱 실패: {str(e)}"}), 500
 
-# ✅ Render 대응
+# Render 대응
 if __name__ == "__main__":
     PORT = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=PORT)
