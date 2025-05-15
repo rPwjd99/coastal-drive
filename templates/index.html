@@ -2,41 +2,33 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>바다따라: 해안도로 감성 드라이브</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>🌊 바다따라: 해안도로 감성 드라이브</title>
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
   <style>
-    body { font-family: sans-serif; margin: 0; padding: 0; }
-    #map { width: 100%; height: 80vh; }
-    #form {
-      padding: 1em;
-      background: #f5f5f5;
-      display: flex;
-      flex-direction: column;
-      gap: 0.5em;
+    body { margin: 0; font-family: sans-serif; }
+    #map { width: 100%; height: 90vh; }
+    #controls {
+      padding: 10px;
+      background: #f2f2f2;
+      border-bottom: 1px solid #ccc;
     }
-    input, button {
-      padding: 0.5em;
-      font-size: 1em;
-    }
-    #error {
-      color: red;
-      font-weight: bold;
-      white-space: pre-line;
+    input {
+      width: 200px;
+      margin: 0 5px;
     }
   </style>
 </head>
 <body>
-  <h2 style="text-align:center;">🌊 바다따라: 해안도로 감성 드라이브</h2>
-
-  <div id="form">
-    <input type="text" id="start" placeholder="출발지 주소 (예: 세종특별자치시 한누리대로 2130)" />
-    <input type="text" id="end" placeholder="도착지 주소 (예: 강원도 속초시 중앙로 183)" />
+  <div id="controls">
+    <h3>🌊 바다따라: 해안도로 감성 드라이브</h3>
+    <label>출발지 위도,경도</label>
+    <input type="text" id="start" value="36.4802,127.2891" />
+    <label>도착지 위도,경도</label>
+    <input type="text" id="end" value="38.2043,128.5912" />
     <button onclick="searchRoute()">🚗 경로 검색</button>
-    <div id="error"></div>
+    <span id="error" style="color: red; margin-left: 10px;"></span>
   </div>
-
   <div id="map"></div>
 
   <script>
@@ -49,59 +41,55 @@
       })
     });
 
-    let routeLayer;
+    const routeLayer = new ol.layer.Vector({
+      source: new ol.source.Vector(),
+      style: new ol.style.Style({
+        stroke: new ol.style.Stroke({ color: 'blue', width: 4 })
+      })
+    });
+    map.addLayer(routeLayer);
 
-    function searchRoute() {
-      const start = document.getElementById("start").value.trim();
-      const end = document.getElementById("end").value.trim();
-      const errorDiv = document.getElementById("error");
-      errorDiv.textContent = "";
+    async function searchRoute() {
+      const startInput = document.getElementById("start").value.trim();
+      const endInput = document.getElementById("end").value.trim();
+      const [startLat, startLng] = startInput.split(',').map(Number);
+      const [endLat, endLng] = endInput.split(',').map(Number);
 
-      if (!start || !end) {
-        errorDiv.textContent = "❗ 출발지와 도착지를 모두 입력해 주세요.";
+      if (isNaN(startLat) || isNaN(startLng) || isNaN(endLat) || isNaN(endLng)) {
+        document.getElementById("error").textContent = "⚠ 좌표 형식을 확인하세요 (예: 위도,경도)";
         return;
       }
 
-      fetch("/route", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start, end })
-      })
-      .then(async res => {
-        const status = res.status;
-        const data = await res.json();
-
-        if (!res.ok || data.error) {
-          const msg = `❌ 오류 발생 (HTTP ${status})\n${data.error || "알 수 없는 오류"}`
-          errorDiv.textContent = msg;
-          console.error("🔴 오류 응답:", data);
-          return;
-        }
-
-        const format = new ol.format.GeoJSON();
-        const features = format.readFeatures(data, {
-          featureProjection: "EPSG:3857"
-        });
-
-        if (routeLayer) map.removeLayer(routeLayer);
-        routeLayer = new ol.layer.Vector({
-          source: new ol.source.Vector({ features }),
-          style: new ol.style.Style({
-            stroke: new ol.style.Stroke({
-              color: "#ff6600",
-              width: 4
-            })
+      try {
+        const res = await fetch("/route", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            start: { lat: startLat, lng: startLng },
+            end: { lat: endLat, lng: endLng }
           })
         });
 
-        map.addLayer(routeLayer);
-        const extent = routeLayer.getSource().getExtent();
-        map.getView().fit(extent, { padding: [50, 50, 50, 50] });
-      })
-      .catch(err => {
-        errorDiv.textContent = `❌ 네트워크 오류: ${err.message}`;
-        console.error("🔴 fetch 예외:", err);
-      });
+        if (!res.ok) {
+          const errData = await res.json();
+          document.getElementById("error").textContent = `❌ 오류: ${errData.message || '서버 오류'}`;
+          return;
+        }
+
+        const geojson = await res.json();
+        const format = new ol.format.GeoJSON();
+        const features = format.readFeatures(geojson, {
+          featureProjection: 'EPSG:3857'
+        });
+
+        routeLayer.getSource().clear();
+        routeLayer.getSource().addFeatures(features);
+        map.getView().fit(routeLayer.getSource().getExtent(), { padding: [30, 30, 30, 30] });
+        document.getElementById("error").textContent = "";
+      } catch (e) {
+        document.getElementById("error").textContent = "❌ 서버 연결 실패";
+        console.error(e);
+      }
     }
   </script>
 </body>
