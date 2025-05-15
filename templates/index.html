@@ -2,6 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>🌊 바다따라: 해안도로 감성 드라이브</title>
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
@@ -81,6 +82,7 @@
 
         if (!res.ok || !result || result.error) {
           errorBox.textContent = result.error || "❌ 경로 탐색 실패";
+          routeLayer.getSource().clear();
           return;
         }
 
@@ -91,6 +93,7 @@
 
         if (!features || features.length === 0) {
           errorBox.textContent = "❌ 표시할 경로가 없습니다.";
+          routeLayer.getSource().clear();
           return;
         }
 
@@ -104,6 +107,7 @@
       } catch (err) {
         console.error("❌ 서버 오류:", err);
         errorBox.textContent = "❌ 서버 연결 실패 또는 JSON 파싱 실패";
+        routeLayer.getSource().clear();
       }
     }
   </script>
