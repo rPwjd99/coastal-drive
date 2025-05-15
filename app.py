@@ -41,14 +41,11 @@ def geocode_google(address):
 
 def compute_dist_to_coast():
     coast_points = coastline.geometry.apply(lambda geom: geom.representative_point().coords[0])
-    coast_coords = [(pt[1], pt[0]) for pt in coast_points]  # (lat, lon)
-
+    coast_coords = [(pt[1], pt[0]) for pt in coast_points]
     def min_dist_to_coast(row):
         return min(haversine(row['y'], row['x'], lat, lon) for lat, lon in coast_coords)
-
     road_points["dist_to_coast_km"] = road_points.apply(min_dist_to_coast, axis=1)
 
-# 해안 거리 미리 계산 (없을 시 자동 처리)
 if "dist_to_coast_km" not in road_points.columns:
     print("📦 해안거리 계산 중...")
     compute_dist_to_coast()
@@ -59,24 +56,34 @@ def find_best_coastal_waypoint(start, end):
 
     use_lat = abs(start_lat - end_lat) > abs(start_lon - end_lon)
 
-    if use_lat:
-        road_points["dir_diff"] = road_points["y"].apply(lambda y: abs(y - start_lat))
-        road_points["target_dist"] = road_points["x"].apply(lambda x: abs(x - end_lon))
-    else:
-        road_points["dir_diff"] = road_points["x"].apply(lambda x: abs(x - start_lon))
-        road_points["target_dist"] = road_points["y"].apply(lambda y: abs(y - end_lat))
+    # 방향성 우선 필터링
+    def is_in_direction(row):
+        if use_lat:
+            return (end_lon - start_lon) * (row['x'] - start_lon) > 0
+        else:
+            return (end_lat - start_lat) * (row['y'] - start_lat) > 0
 
-    road_points["dist_to_end"] = road_points.apply(
+    filtered = road_points[
+        (road_points["dist_to_coast_km"] <= 1.0) &
+        (road_points.apply(is_in_direction, axis=1))
+    ]
+
+    if filtered.empty:
+        print("❌ 조건에 맞는 해안도로 경유지 없음")
+        return None
+
+    if use_lat:
+        filtered["dir_diff"] = abs(filtered["y"] - start_lat)
+        filtered["target_dist"] = abs(filtered["x"] - end_lon)
+    else:
+        filtered["dir_diff"] = abs(filtered["x"] - start_lon)
+        filtered["target_dist"] = abs(filtered["y"] - end_lat)
+
+    filtered["dist_to_end"] = filtered.apply(
         lambda row: haversine(row["y"], row["x"], end_lat, end_lon), axis=1
     )
 
-    # 1km 이내 해안도로 필터링
-    nearby = road_points[road_points["dist_to_coast_km"] <= 1.0]
-    if nearby.empty:
-        print("❌ 1km 이내 해안도로 없음")
-        return None
-
-    candidate = nearby.sort_values(["dir_diff", "target_dist", "dist_to_end"]).iloc[0]
+    candidate = filtered.sort_values(["dir_diff", "target_dist", "dist_to_end"]).iloc[0]
     print("📍 선택된 waypoint:", candidate["y"], candidate["x"])
     return candidate["y"], candidate["x"]
 
@@ -118,7 +125,7 @@ def route():
 
     waypoint = find_best_coastal_waypoint(start, end)
     if not waypoint:
-        return jsonify({"error": "❌ 경유지 탐색 실패 (1km 이내 해안 도로 없음)"}), 500
+        return jsonify({"error": "❌ 경유지 탐색 실패 (방향 + 해안 1km 이내 조건 불충족)"}), 500
 
     route_data, status = get_ors_route(start, waypoint, end)
     if "error" in route_data:
@@ -126,8 +133,7 @@ def route():
 
     return jsonify(route_data)
 
-# ✅ Render + 로컬 호환 포트 실행
 if __name__ == "__main__":
-    PORT = int(os.environ.get("PORT", 5000))  # 로컬은 기본 5000, Render는 자동 할당
+    PORT = int(os.environ.get("PORT", 5000))
     print(f"✅ 실행 포트: {PORT}")
     app.run(host="0.0.0.0", port=PORT)
