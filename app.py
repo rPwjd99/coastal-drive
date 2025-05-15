@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 import geopandas as gpd
 from flask import Flask, request, jsonify, render_template
-from shapely.geometry import Point
+from shapely.geometry import LineString, MultiLineString
 from math import radians, cos, sin, asin, sqrt
 from dotenv import load_dotenv
 
@@ -18,59 +18,67 @@ print("🔑 ORS 키 앞:", ORS_API_KEY[:6] if ORS_API_KEY else "❌ 없음", flu
 COASTLINE_PATH = os.path.join(os.path.dirname(__file__), "coastal_route_result.geojson")
 ROAD_CSV_PATH = os.path.join(os.path.dirname(__file__), "road_endpoints_reduced.csv")
 
-coastline = gpd.read_file(COASTLINE_PATH).to_crs(epsg=4326)
-road_points = pd.read_csv(ROAD_CSV_PATH, low_memory=False)
+try:
+    coastline_gdf = gpd.read_file(COASTLINE_PATH).to_crs(epsg=4326)
+    road_points = pd.read_csv(ROAD_CSV_PATH)
+except Exception as e:
+    print("❌ 파일 로딩 실패:", e)
+    coastline_gdf = gpd.GeoDataFrame()
+    road_points = pd.DataFrame()
 
 def haversine(lat1, lon1, lat2, lon2):
-    R = 6371
+    R = 6371  # km
     dlat = radians(lat2 - lat1)
     dlon = radians(lon2 - lon1)
-    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
+    a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
     return 2 * R * asin(sqrt(a))
+
+def extract_all_vertices(gdf):
+    vertices = []
+    for geom in gdf.geometry:
+        if isinstance(geom, LineString):
+            vertices.extend(list(geom.coords))
+        elif isinstance(geom, MultiLineString):
+            for part in geom.geoms:
+                vertices.extend(list(part.coords))
+    return [(round(lat, 6), round(lon, 6)) for lon, lat in vertices]
+
+all_coast_points = extract_all_vertices(coastline_gdf)
 
 def geocode_google(address):
     url = "https://maps.googleapis.com/maps/api/geocode/json"
     res = requests.get(url, params={"address": address, "key": GOOGLE_API_KEY})
     try:
         location = res.json()["results"][0]["geometry"]["location"]
-        print("📍 주소 변환 성공:", address, "→", location, flush=True)
         return location["lat"], location["lng"]
     except:
-        print("❌ 주소 변환 실패:", address, flush=True)
+        print(f"❌ 주소 변환 실패: {address}")
         return None
 
-def find_best_coastal_waypoint(start_lat, start_lon, end_lat, end_lon):
-    lat_diff = abs(start_lat - end_lat)
-    lon_diff = abs(start_lon - end_lon)
-    use_lat = lat_diff > lon_diff
+def find_waypoint(start_lat, start_lon, end_lat, end_lon):
+    use_lat = abs(start_lat - end_lat) > abs(start_lon - end_lon)
+    road_candidates = []
 
-    rounded_lat = round(start_lat, 2)
-    rounded_lon = round(start_lon, 2)
+    for _, row in road_points.iterrows():
+        ry, rx = row["y"], row["x"]
+        for cy, cx in all_coast_points:
+            if haversine(ry, rx, cy, cx) <= 1:
+                if use_lat:
+                    if round(ry, 2) == round(start_lat, 2):
+                        road_candidates.append((ry, rx))
+                else:
+                    if round(rx, 2) == round(start_lon, 2):
+                        road_candidates.append((ry, rx))
+                break
 
-    lat_matches = road_points[road_points["y"].round(2) == rounded_lat].copy()
-    lon_matches = road_points[road_points["x"].round(2) == rounded_lon].copy()
-
-    candidates = pd.concat([lat_matches, lon_matches]).drop_duplicates()
-    if candidates.empty:
-        print("❌ 유사 좌표 도로점 없음", flush=True)
+    if not road_candidates:
         return None
 
-    coast_coords = [(round(pt.y, 2), round(pt.x, 2)) for pt in coastline.geometry.representative_point()]
+    def score(pt):
+        return haversine(pt[0], pt[1], end_lat, end_lon)
 
-    def is_close_to_coast(row):
-        return any(round(row["y"], 2) == coast_lat and round(row["x"], 2) == coast_lon for coast_lat, coast_lon in coast_coords)
-
-    coastal_candidates = candidates[candidates.apply(is_close_to_coast, axis=1)]
-    if coastal_candidates.empty:
-        print("❌ 해안 유사 좌표 없음, 전체 후보에서 가장 가까운 점 선택", flush=True)
-        coastal_candidates = candidates
-
-    coastal_candidates["dist_to_end"] = coastal_candidates.apply(
-        lambda row: haversine(row["y"], row["x"], end_lat, end_lon), axis=1
-    )
-    selected = coastal_candidates.sort_values("dist_to_end").iloc[0]
-    print("📍 선택된 waypoint:", selected["y"], selected["x"], flush=True)
-    return selected["y"], selected["x"]
+    road_candidates.sort(key=score)
+    return road_candidates[0]
 
 def get_ors_route(start, waypoint, end):
     url = "https://api.openrouteservice.org/v2/directions/driving-car/geojson"
@@ -85,28 +93,11 @@ def get_ors_route(start, waypoint, end):
             [end[1], end[0]]
         ]
     }
-
     res = requests.post(url, headers=headers, json=body)
-    print("📡 ORS 응답코드:", res.status_code, flush=True)
     try:
-        response = res.json()
-        coords = response["features"][0]["geometry"]["coordinates"]
-        geojson = {
-            "type": "FeatureCollection",
-            "features": [
-                {
-                    "type": "Feature",
-                    "geometry": {
-                        "type": "LineString",
-                        "coordinates": coords
-                    },
-                    "properties": {}
-                }
-            ]
-        }
-        return geojson, 200
-    except Exception as e:
-        return {"error": str(e)}, 500
+        return res.json(), res.status_code
+    except:
+        return {"error": "❌ 응답 파싱 오류"}, 500
 
 @app.route("/")
 def index():
@@ -123,17 +114,16 @@ def route():
     if not start or not end:
         return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
-    waypoint = find_best_coastal_waypoint(start[0], start[1], end[0], end[1])
+    waypoint = find_waypoint(start[0], start[1], end[0], end[1])
     if not waypoint:
-        return jsonify({"error": "❌ 해안도로 경유지 없음"}), 500
+        return jsonify({"error": "❌ 해안도로 경유지 탐색 실패"}), 500
 
     route_data, status = get_ors_route(start, waypoint, end)
     if "error" in route_data:
-        return jsonify({"error": f"❌ 경로 요청 실패: {route_data.get('error')}" }), status
+        return jsonify({"error": route_data["error"]}), status
 
     return jsonify(route_data)
 
 if __name__ == "__main__":
-    PORT = int(os.environ.get("PORT", 10000))
-    print(f"✅ 실행 포트: {PORT}", flush=True)
-    app.run(host="0.0.0.0", port=PORT)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
