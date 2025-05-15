@@ -48,7 +48,7 @@ def compute_dist_to_coast():
 
     road_points["dist_to_coast_km"] = road_points.apply(min_dist_to_coast, axis=1)
 
-# 최초 실행 시 1회 계산 (또는 사전 컬럼이 있다면 생략)
+# 해안 거리 미리 계산 (없을 시 자동 처리)
 if "dist_to_coast_km" not in road_points.columns:
     print("📦 해안거리 계산 중...")
     compute_dist_to_coast()
@@ -70,11 +70,10 @@ def find_best_coastal_waypoint(start, end):
         lambda row: haversine(row["y"], row["x"], end_lat, end_lon), axis=1
     )
 
-    # 1km 이내 해안도로만 필터링
+    # 1km 이내 해안도로 필터링
     nearby = road_points[road_points["dist_to_coast_km"] <= 1.0]
-
     if nearby.empty:
-        print("❌ 1km 이내 해안도로가 없음")
+        print("❌ 1km 이내 해안도로 없음")
         return None
 
     candidate = nearby.sort_values(["dir_diff", "target_dist", "dist_to_end"]).iloc[0]
@@ -127,6 +126,8 @@ def route():
 
     return jsonify(route_data)
 
+# ✅ Render + 로컬 호환 포트 실행
 if __name__ == "__main__":
-    PORT = int(os.environ.get("PORT", 10000))
+    PORT = int(os.environ.get("PORT", 5000))  # 로컬은 기본 5000, Render는 자동 할당
+    print(f"✅ 실행 포트: {PORT}")
     app.run(host="0.0.0.0", port=PORT)
