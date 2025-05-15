@@ -15,7 +15,6 @@ ORS_API_KEY = os.getenv("ORS_API_KEY")
 
 print("🔑 ORS 키 앞:", ORS_API_KEY[:6])
 
-# Geo 데이터 경로
 COASTLINE_PATH = os.path.join(os.path.dirname(__file__), "coastal_route_result.geojson")
 ROAD_CSV_PATH = os.path.join(os.path.dirname(__file__), "road_endpoints_reduced.csv")
 
@@ -40,15 +39,46 @@ def geocode_google(address):
         print("❌ 주소 변환 실패:", address)
         return None
 
-def find_directional_road_point(start_lat, start_lon, end_lat, end_lon):
-    lat_diff = abs(start_lat - end_lat)
-    lon_diff = abs(start_lon - end_lon)
-    use_lat = lat_diff > lon_diff
-    road_points["dir_diff"] = road_points["y"].apply(lambda y: abs(y - start_lat)) if use_lat else road_points["x"].apply(lambda x: abs(x - start_lon))
+def compute_dist_to_coast():
+    coast_points = coastline.geometry.apply(lambda geom: geom.representative_point().coords[0])
+    coast_coords = [(pt[1], pt[0]) for pt in coast_points]  # (lat, lon)
+
+    def min_dist_to_coast(row):
+        return min(haversine(row['y'], row['x'], lat, lon) for lat, lon in coast_coords)
+
+    road_points["dist_to_coast_km"] = road_points.apply(min_dist_to_coast, axis=1)
+
+# 최초 실행 시 1회 계산 (또는 사전 컬럼이 있다면 생략)
+if "dist_to_coast_km" not in road_points.columns:
+    print("📦 해안거리 계산 중...")
+    compute_dist_to_coast()
+
+def find_best_coastal_waypoint(start, end):
+    start_lat, start_lon = start
+    end_lat, end_lon = end
+
+    use_lat = abs(start_lat - end_lat) > abs(start_lon - end_lon)
+
+    if use_lat:
+        road_points["dir_diff"] = road_points["y"].apply(lambda y: abs(y - start_lat))
+        road_points["target_dist"] = road_points["x"].apply(lambda x: abs(x - end_lon))
+    else:
+        road_points["dir_diff"] = road_points["x"].apply(lambda x: abs(x - start_lon))
+        road_points["target_dist"] = road_points["y"].apply(lambda y: abs(y - end_lat))
+
     road_points["dist_to_end"] = road_points.apply(
         lambda row: haversine(row["y"], row["x"], end_lat, end_lon), axis=1
     )
-    candidate = road_points.sort_values(["dir_diff", "dist_to_end"]).iloc[0]
+
+    # 1km 이내 해안도로만 필터링
+    nearby = road_points[road_points["dist_to_coast_km"] <= 1.0]
+
+    if nearby.empty:
+        print("❌ 1km 이내 해안도로가 없음")
+        return None
+
+    candidate = nearby.sort_values(["dir_diff", "target_dist", "dist_to_end"]).iloc[0]
+    print("📍 선택된 waypoint:", candidate["y"], candidate["x"])
     return candidate["y"], candidate["x"]
 
 def get_ors_route(start, waypoint, end):
@@ -87,9 +117,9 @@ def route():
     if not start or not end:
         return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
-    waypoint = find_directional_road_point(start[0], start[1], end[0], end[1])
+    waypoint = find_best_coastal_waypoint(start, end)
     if not waypoint:
-        return jsonify({"error": "❌ 해안 경유지 탐색 실패"}), 500
+        return jsonify({"error": "❌ 경유지 탐색 실패 (1km 이내 해안 도로 없음)"}), 500
 
     route_data, status = get_ors_route(start, waypoint, end)
     if "error" in route_data:
