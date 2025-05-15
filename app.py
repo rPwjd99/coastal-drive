@@ -13,19 +13,26 @@ app = Flask(__name__)
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 ORS_API_KEY = os.getenv("ORS_API_KEY")
 
-print("🔑 ORS 키 앞:", ORS_API_KEY[:6], flush=True)
+print("🔑 ORS 키 앞:", ORS_API_KEY[:6] if ORS_API_KEY else "❌ 없음", flush=True)
 
+# 파일 경로 설정
 COASTLINE_PATH = os.path.join(os.path.dirname(__file__), "coastal_route_result.geojson")
 ROAD_CSV_PATH = os.path.join(os.path.dirname(__file__), "road_endpoints_reduced.csv")
 
-coastline = gpd.read_file(COASTLINE_PATH).to_crs(epsg=4326)
-road_points = pd.read_csv(ROAD_CSV_PATH, low_memory=False)
+# 파일 불러오기
+try:
+    coastline = gpd.read_file(COASTLINE_PATH).to_crs(epsg=4326)
+    road_points = pd.read_csv(ROAD_CSV_PATH, low_memory=False)
+except Exception as e:
+    print("❌ 파일 로딩 오류:", str(e), flush=True)
+    coastline = gpd.GeoDataFrame()
+    road_points = pd.DataFrame()
 
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371
     dlat = radians(lat2 - lat1)
-    dlon = radians(lat2 - lon1)
-    a = sin(dlat / 2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2)**2
+    dlon = radians(lon2 - lon1)
+    a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
     return 2 * R * asin(sqrt(a))
 
 def geocode_google(address):
@@ -33,10 +40,10 @@ def geocode_google(address):
     res = requests.get(url, params={"address": address, "key": GOOGLE_API_KEY})
     try:
         location = res.json()["results"][0]["geometry"]["location"]
-        print("📍 주소 변환 성공:", address, "→", location, flush=True)
+        print(f"📍 주소 변환 성공: {address} → {location}", flush=True)
         return location["lat"], location["lng"]
-    except:
-        print("❌ 주소 변환 실패:", address, flush=True)
+    except Exception:
+        print(f"❌ 주소 변환 실패: {address}", flush=True)
         return None
 
 def compute_dist_to_coast():
@@ -46,14 +53,16 @@ def compute_dist_to_coast():
         return min(haversine(row['y'], row['x'], lat, lon) for lat, lon in coast_coords)
     road_points["dist_to_coast_km"] = road_points.apply(min_dist_to_coast, axis=1)
 
-if "dist_to_coast_km" not in road_points.columns:
+if not coastline.empty and "dist_to_coast_km" not in road_points.columns:
     print("📦 해안거리 계산 중...", flush=True)
     compute_dist_to_coast()
 
 def find_best_coastal_waypoint(start, end):
+    if road_points.empty:
+        return None
+
     start_lat, start_lon = start
     end_lat, end_lon = end
-
     use_lat = abs(start_lat - end_lat) > abs(start_lon - end_lon)
 
     def is_in_direction(row):
