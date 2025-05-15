@@ -134,4 +134,12 @@ def route():
         return jsonify(route_data)
     except Exception as e:
         print("❌ 서버 오류:", str(e), flush=True)
-        return jsonify({"error": f"❌ 서버 내부 오류: {
+        return jsonify({"error": f"❌ 서버 내부 오류: {str(e)}"}), 500
+
+if __name__ == "__main__":
+    try:
+        port = int(os.environ.get("PORT", 5000))
+        print(f"✅ 실행 포트: {port}", flush=True)
+        app.run(host="0.0.0.0", port=port)
+    except Exception as e:
+        print("❌ 서버 시작 실패:", str(e), flush=True)
