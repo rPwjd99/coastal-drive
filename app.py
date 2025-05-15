@@ -68,7 +68,7 @@ def find_best_coastal_waypoint(start, end):
     ]
 
     if filtered.empty:
-        print("❌ 1km 이내 해안도로 + 방향 조건에 맞는 도로 없음")
+        print("❌ 조건에 맞는 해안도로 없음")
         return None
 
     if use_lat:
@@ -124,7 +124,7 @@ def route():
 
     waypoint = find_best_coastal_waypoint(start, end)
     if not waypoint:
-        return jsonify({"error": "❌ 경유지 탐색 실패 (방향 + 해안조건 불만족)"}), 500
+        return jsonify({"error": "❌ 해안도로 경유지 없음"}), 500
 
     route_data, status = get_ors_route(start, waypoint, end)
     if "error" in route_data:
@@ -133,6 +133,6 @@ def route():
     return jsonify(route_data)
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))  # Render 자동 할당 / 로컬 기본값
+    port = int(os.environ.get("PORT", 5000))  # ✅ Render가 감지할 수 있는 방식
     print(f"✅ 실행 포트: {port}")
     app.run(host="0.0.0.0", port=port)
