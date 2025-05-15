@@ -1,9 +1,7 @@
 import os
 import requests
 import pandas as pd
-import geopandas as gpd
 from flask import Flask, request, jsonify, render_template
-from shapely.geometry import LineString, MultiLineString
 from math import radians, cos, sin, asin, sqrt
 from dotenv import load_dotenv
 
@@ -12,29 +10,22 @@ app = Flask(__name__)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 ORS_API_KEY = os.getenv("ORS_API_KEY")
+
 print("🔑 ORS 키 앞:", ORS_API_KEY[:6] if ORS_API_KEY else "❌ 없음", flush=True)
 
-# 파일 경로 설정
-BASE_DIR = os.getcwd()
-COASTLINE_PATH = os.path.join(BASE_DIR, "coastal_route_result.geojson")
-ROAD_CSV_PATH = os.path.join(BASE_DIR, "road_endpoints_reduced.csv")
-
 # 데이터 불러오기
-try:
-    coastline_gdf = gpd.read_file(COASTLINE_PATH).to_crs(epsg=4326)
-    road_points = pd.read_csv(ROAD_CSV_PATH)
-except Exception as e:
-    print("❌ 파일 로딩 오류:", str(e), flush=True)
-    coastline_gdf = gpd.GeoDataFrame()
-    road_points = pd.DataFrame()
+ROAD_CSV_PATH = os.path.join(os.path.dirname(__file__), "road_endpoints_reduced.csv")
+road_points = pd.read_csv(ROAD_CSV_PATH, low_memory=False)
 
+# 거리 계산 함수
 def haversine(lat1, lon1, lat2, lon2):
-    R = 6371
+    R = 6371  # 지구 반지름(km)
     dlat = radians(lat2 - lat1)
     dlon = radians(lon2 - lon1)
     a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
     return 2 * R * asin(sqrt(a))
 
+# 주소 → 좌표
 def geocode_google(address):
     url = "https://maps.googleapis.com/maps/api/geocode/json"
     res = requests.get(url, params={"address": address, "key": GOOGLE_API_KEY})
@@ -46,46 +37,45 @@ def geocode_google(address):
         print(f"❌ 주소 변환 실패: {address}", flush=True)
         return None
 
-def extract_vertices(gdf):
-    coords = []
-    for geom in gdf.geometry:
-        if isinstance(geom, LineString):
-            coords.extend(list(geom.coords))
-        elif isinstance(geom, MultiLineString):
-            for line in geom.geoms:
-                coords.extend(list(line.coords))
-    return [(lat, lon) for lon, lat in coords]
-
-def find_best_waypoint(start, end):
-    if road_points.empty or coastline_gdf.empty:
-        return None
-
+# 최적 waypoint 찾기
+def find_optimal_waypoint(start, end):
     start_lat, start_lon = start
     end_lat, end_lon = end
 
-    coast_points = extract_vertices(coastline_gdf)
+    # 위도·경도 소수점 둘째자리 유사 조건
+    rounded_lat = round(start_lat, 2)
+    rounded_lon = round(start_lon, 2)
 
-    def is_near_coast(row):
-        return any(haversine(row['y'], row['x'], lat, lon) <= 1.0 for lat, lon in coast_points)
+    candidate_points = road_points[
+        (round(road_points['y'], 2) == rounded_lat) |
+        (round(road_points['x'], 2) == rounded_lon)
+    ].copy()
 
-    def is_similar_lat_or_lon(row):
-        return round(row['y'], 2) == round(start_lat, 2) or round(row['x'], 2) == round(start_lon, 2)
-
-    candidates = road_points[
-        road_points.apply(is_near_coast, axis=1) & road_points.apply(is_similar_lat_or_lon, axis=1)
-    ]
-
-    if candidates.empty:
-        print("❌ 경유지 후보 없음", flush=True)
+    if candidate_points.empty:
+        print("❌ 유사 방향 도로점 없음", flush=True)
         return None
 
-    candidates["dist_to_end"] = candidates.apply(
-        lambda row: haversine(row["y"], row["x"], end_lat, end_lon), axis=1
+    # 해안 근접 거리 계산 (좌표 기준점: 출발지)
+    candidate_points["dist_to_start"] = candidate_points.apply(
+        lambda row: haversine(start_lat, start_lon, row["y"], row["x"]), axis=1
     )
-    best = candidates.sort_values("dist_to_end").iloc[0]
-    print("📍 선택된 waypoint:", best["y"], best["x"], flush=True)
+
+    # 목적지 거리도 계산
+    candidate_points["dist_to_end"] = candidate_points.apply(
+        lambda row: haversine(end_lat, end_lon, row["y"], row["x"]), axis=1
+    )
+
+    # 해안과 가까우면서 목적지와 가까운 점 선택
+    filtered = candidate_points[candidate_points["dist_to_start"] <= 1.0]
+    if filtered.empty:
+        print("❌ 해안 근접 도로 없음 (1km 이내)", flush=True)
+        return None
+
+    best = filtered.sort_values(["dist_to_end"]).iloc[0]
+    print(f"📍 선택된 waypoint: ({best['y']}, {best['x']})", flush=True)
     return best["y"], best["x"]
 
+# ORS 경로 요청
 def get_ors_route(start, waypoint, end):
     url = "https://api.openrouteservice.org/v2/directions/driving-car/geojson"
     headers = {
@@ -106,33 +96,28 @@ def get_ors_route(start, waypoint, end):
     except Exception as e:
         return {"error": str(e)}, 500
 
+# 라우팅
 @app.route("/")
 def index():
     return render_template("index.html")
 
 @app.route("/route", methods=["POST"])
 def route():
-    try:
-        data = request.get_json()
-        start_addr = data.get("start")
-        end_addr = data.get("end")
-        start = geocode_google(start_addr)
-        end = geocode_google(end_addr)
-        if not start or not end:
-            return jsonify({"error": "❌ 주소 변환 실패"}), 400
+    data = request.get_json()
+    start = geocode_google(data.get("start"))
+    end = geocode_google(data.get("end"))
+    if not start or not end:
+        return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
-        waypoint = find_best_waypoint(start, end)
-        if not waypoint:
-            return jsonify({"error": "❌ 경유지 없음"}), 500
+    waypoint = find_optimal_waypoint(start, end)
+    if not waypoint:
+        return jsonify({"error": "❌ 해안 경유지 탐색 실패"}), 500
 
-        route_data, status = get_ors_route(start, waypoint, end)
-        if "error" in route_data:
-            return jsonify({"error": f"❌ 경로 요청 실패: {route_data['error']}" }), status
+    route_data, status = get_ors_route(start, waypoint, end)
+    if "error" in route_data:
+        return jsonify({"error": f"❌ 경로 요청 실패: {route_data['error']}" }), status
 
-        return jsonify(route_data)
-    except Exception as e:
-        print("❌ 서버 내부 오류:", str(e), flush=True)
-        return jsonify({"error": f"❌ 서버 내부 오류: {str(e)}"}), 500
+    return jsonify(route_data)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
