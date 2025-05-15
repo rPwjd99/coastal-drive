@@ -32,7 +32,7 @@ def haversine(lat1, lon1, lat2, lon2):
     R = 6371
     dlat = radians(lat2 - lat1)
     dlon = radians(lon2 - lon1)
-    a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
+    a = sin(dlat / 2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2)**2
     return 2 * R * asin(sqrt(a))
 
 def geocode_google(address):
@@ -118,7 +118,11 @@ def get_ors_route(start, waypoint, end):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    try:
+        return render_template("index.html")
+    except Exception as e:
+        print("❌ index.html 렌더링 실패:", str(e), flush=True)
+        return "템플릿 오류", 500
 
 @app.route("/route", methods=["POST"])
 def route():
@@ -145,10 +149,12 @@ def route():
         print("❌ 서버 오류:", str(e), flush=True)
         return jsonify({"error": f"❌ 서버 내부 오류: {str(e)}"}), 500
 
+# ✅ 반드시 포트 실행 코드가 있어야 Render에서 감지됨
 if __name__ == "__main__":
     try:
-        port = int(os.environ.get("PORT", 5000))
-        print(f"✅ 실행 포트: {port}", flush=True)
+        port = int(os.environ.get("PORT", 10000))
+        print("✅ 실행 포트:", port, flush=True)
+        print("🚀 Flask 서버 실행 시작", flush=True)
         app.run(host="0.0.0.0", port=port)
     except Exception as e:
         print("❌ 서버 시작 실패:", str(e), flush=True)
