@@ -11,7 +11,7 @@
     #map { width: 100%; height: 90vh; }
     #controls {
       padding: 10px;
-      background: #f7f7f7;
+      background: #f0f0f0;
       border-bottom: 1px solid #ccc;
     }
     input {
@@ -106,7 +106,7 @@
 
       } catch (err) {
         console.error("❌ 서버 오류:", err);
-        errorBox.textContent = "❌ 서버 연결 실패 또는 JSON 파싱 실패";
+        errorBox.textContent = "❌ 서버 연결 실패 또는 JSON 파싱 오류";
         routeLayer.getSource().clear();
       }
     }
