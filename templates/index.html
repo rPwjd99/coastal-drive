@@ -79,7 +79,7 @@
 
         const result = await res.json();
 
-        if (!res.ok || !result || result.error) {
+        if (!res.ok || result.error) {
           errorBox.textContent = result.error || "❌ 경로 탐색 실패";
           return;
         }
