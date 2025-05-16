@@ -26,44 +26,47 @@ def geocode_google(address):
     res = requests.get(url, params={"address": address, "key": GOOGLE_API_KEY})
     try:
         location = res.json()["results"][0]["geometry"]["location"]
-        print("\ud83d\udccd 주소 변환 성공:", address, "\u2192", location)
+        print("📍 주소 변환 성공:", address, "→", location)
         return location["lat"], location["lng"]
     except:
-        print("\u274c 주소 변환 실패:", address)
+        print("❌ 주소 변환 실패:", address)
         return None
 
-def find_best_waypoint(start, end):
+def find_coastal_waypoint(start, end):
     start_lat, start_lon = start
     end_lat, end_lon = end
     use_lat = abs(start_lat - end_lat) > abs(start_lon - end_lon)
 
-    lat_range = (start_lat - 0.01, start_lat + 0.01)
-    lon_range = (start_lon - 0.01, start_lon + 0.01)
-
-    candidates = road_points[
-        (road_points["y"].between(*lat_range)) &
-        (road_points["x"].between(*lon_range))
-    ]
-
-    if candidates.empty:
-        print("\u274c 후보 도로 없음")
-        return None
+    # 기준 좌표 (소수점 2자리)
+    base_lat = round(start_lat, 2)
+    base_lon = round(start_lon, 2)
 
     if use_lat:
-        candidates = candidates[(end_lon - start_lon) * (candidates["x"] - start_lon) > 0]
+        candidates = road_points[road_points["y"].round(2) == base_lat]
+        direction = lambda row: (end_lon - start_lon) * (row["x"] - start_lon) > 0
     else:
-        candidates = candidates[(end_lat - start_lat) * (candidates["y"] - start_lat) > 0]
+        candidates = road_points[road_points["x"].round(2) == base_lon]
+        direction = lambda row: (end_lat - start_lat) * (row["y"] - start_lat) > 0
+
+    # 방향 필터
+    candidates = candidates[candidates.apply(direction, axis=1)]
+
+    # 거리 필터 (3km 이내)
+    candidates["dist_to_start"] = candidates.apply(
+        lambda row: haversine(row["y"], row["x"], start_lat, start_lon), axis=1
+    )
+    candidates = candidates[candidates["dist_to_start"] <= 3]
 
     if candidates.empty:
-        print("\u274c 방향성 조건을 만족하는 도로 없음")
+        print("❌ 조건에 맞는 웨이포인트 없음")
         return None
 
+    # 목적지와 가장 가까운 점 선택
     candidates["dist_to_end"] = candidates.apply(
-        lambda row: haversine(row["y"], row["x"], end[0], end[1]), axis=1
+        lambda row: haversine(row["y"], row["x"], end_lat, end_lon), axis=1
     )
-
     selected = candidates.sort_values("dist_to_end").iloc[0]
-    print("\ud83d\udccd 선택된 waypoint:", selected["y"], selected["x"])
+    print("✅ 선택된 waypoint:", selected["y"], selected["x"])
     return selected["y"], selected["x"]
 
 def get_ors_route(start, waypoint, end):
@@ -79,8 +82,9 @@ def get_ors_route(start, waypoint, end):
             [end[1], end[0]]
         ]
     }
+
     res = requests.post(url, headers=headers, json=body)
-    print("\ud83d\udce1 ORS 응답코드:", res.status_code)
+    print("📡 ORS 응답코드:", res.status_code)
     try:
         return res.json(), res.status_code
     except Exception as e:
@@ -97,22 +101,22 @@ def route():
         start = geocode_google(data.get("start"))
         end = geocode_google(data.get("end"))
         if not start or not end:
-            return jsonify({"error": "\u274c 주소 변환 실패"}), 400
+            return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
-        waypoint = find_best_waypoint(start, end)
+        waypoint = find_coastal_waypoint(start, end)
         if not waypoint:
-            return jsonify({"error": "\u274c 경유지 탐색 실패"}), 500
+            return jsonify({"error": "❌ 해안 경유지 탐색 실패"}), 500
 
         route_data, status = get_ors_route(start, waypoint, end)
         if "error" in route_data:
-            return jsonify({"error": f"\u274c 경로 요청 실패: {route_data.get('error')}" }), status
+            return jsonify({"error": f"❌ 경로 요청 실패: {route_data.get('error')}" }), status
 
         return jsonify(route_data)
     except Exception as e:
-        print("\u274c 서버 오류:", str(e))
-        return jsonify({"error": f"\u274c 서버 내부 오류: {str(e)}"}), 500
+        print("❌ 서버 오류:", str(e))
+        return jsonify({"error": f"❌ 서버 내부 오류: {str(e)}"}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    print(f"\u2705 실행 포트: {port}")
+    print("✅ 실행 포트:", port)
     app.run(host="0.0.0.0", port=port)
