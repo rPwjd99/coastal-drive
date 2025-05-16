@@ -16,7 +16,7 @@
     input {
       width: 300px;
       padding: 6px;
-      margin-right: 10px;
+      margin-right: 8px;
     }
     button {
       padding: 6px 12px;
@@ -27,7 +27,7 @@
     }
     #error {
       color: red;
-      margin-left: 10px;
+      margin-left: 12px;
     }
   </style>
 </head>
@@ -77,10 +77,18 @@
           body: JSON.stringify({ start, end })
         });
 
-        const result = await res.json();
+        const contentType = res.headers.get("content-type");
+        if (!res.ok) {
+          const errorText = await res.text();
+          throw new Error("❌ 서버 오류: " + errorText);
+        }
 
-        if (!res.ok || !result || result.error) {
-          errorBox.textContent = result.error || "❌ 경로 탐색 실패";
+        const result = contentType && contentType.includes("application/json")
+          ? await res.json()
+          : null;
+
+        if (!result || result.error) {
+          errorBox.textContent = result?.error || "❌ 경로 탐색 실패";
           return;
         }
 
@@ -89,21 +97,17 @@
           featureProjection: "EPSG:3857"
         });
 
-        if (!features || features.length === 0) {
-          errorBox.textContent = "❌ 표시할 경로가 없습니다.";
-          return;
-        }
-
         routeLayer.getSource().clear();
         routeLayer.getSource().addFeatures(features);
+
         map.getView().fit(routeLayer.getSource().getExtent(), {
           padding: [30, 30, 30, 30],
           duration: 1000
         });
 
       } catch (err) {
-        console.error("❌ 서버 오류:", err);
-        errorBox.textContent = "❌ 서버 연결 실패 또는 JSON 파싱 오류";
+        console.error(err);
+        errorBox.textContent = err.message || "❌ 서버 연결 실패 또는 JSON 파싱 실패";
       }
     }
   </script>
