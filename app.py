@@ -1,6 +1,6 @@
 import os
-import requests
 import pandas as pd
+import requests
 from flask import Flask, request, jsonify, render_template
 from math import radians, cos, sin, asin, sqrt
 from dotenv import load_dotenv
@@ -10,26 +10,26 @@ app = Flask(__name__)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 ORS_API_KEY = os.getenv("ORS_API_KEY")
+PORT = int(os.environ.get("PORT", 10000))
 
 ROAD_CSV_PATH = os.path.join(os.path.dirname(__file__), "road_endpoints_reduced.csv")
+road_points = pd.read_csv(ROAD_CSV_PATH, encoding="cp949", low_memory=False)
 
-try:
-    road_points = pd.read_csv(ROAD_CSV_PATH, encoding="cp949", low_memory=False)
-except Exception as e:
-    print("❌ CSV 파일 로딩 실패:", str(e))
-    road_points = pd.DataFrame()
+# ✅ 해안선 범위만 필터링
+east_coast = (
+    (road_points["y"] >= 35.0) & (road_points["y"] <= 38.0) &
+    (road_points["x"] >= 128.0) & (road_points["x"] <= 131.0)
+)
+south_coast = (
+    (road_points["y"] >= 33.0) & (road_points["y"] <= 35.0) &
+    (road_points["x"] >= 126.0) & (road_points["x"] <= 129.0)
+)
+west_coast = (
+    (road_points["y"] >= 34.0) & (road_points["y"] <= 38.0) &
+    (road_points["x"] >= 124.0) & (road_points["x"] <= 126.0)
+)
 
-# 해안선 범위 필터 (대한민국 해안선 범위만 사용)
-road_points = road_points[
-    (
-        ((road_points["x"] >= 128) & (road_points["x"] <= 131) &  # 동해
-         (road_points["y"] >= 35) & (road_points["y"] <= 38)) |
-        ((road_points["x"] >= 126) & (road_points["x"] <= 129) &  # 남해
-         (road_points["y"] >= 33) & (road_points["y"] <= 35)) |
-        ((road_points["x"] >= 124) & (road_points["x"] <= 126) &  # 서해
-         (road_points["y"] >= 34) & (road_points["y"] <= 38))
-    )
-].copy()
+road_points = road_points[east_coast | south_coast | west_coast].copy()
 
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371
@@ -45,39 +45,36 @@ def geocode_google(address):
         location = res.json()["results"][0]["geometry"]["location"]
         print("📍 주소 변환 성공:", address, "→", location)
         return location["lat"], location["lng"]
-    except Exception:
+    except:
         print("❌ 주소 변환 실패:", address)
         return None
 
-def find_waypoint(start, end):
-    if road_points.empty:
-        return None
-
+def find_best_waypoint(start, end):
     start_lat, start_lon = start
     end_lat, end_lon = end
     use_lat = abs(start_lat - end_lat) > abs(start_lon - end_lon)
 
-    rounded_lat = round(start_lat, 2)
-    rounded_lon = round(start_lon, 2)
+    # 방향성 조건
+    def direction_filter(row):
+        if use_lat:
+            return (end_lon - start_lon) * (row["x"] - start_lon) > 0
+        else:
+            return (end_lat - start_lat) * (row["y"] - start_lat) > 0
 
-    if use_lat:
-        candidates = road_points[road_points["y"].round(2) == rounded_lat]
-        direction = lambda row: (end_lon - start_lon) * (row["x"] - start_lon) > 0
-    else:
-        candidates = road_points[road_points["x"].round(2) == rounded_lon]
-        direction = lambda row: (end_lat - start_lat) * (row["y"] - start_lat) > 0
-
-    candidates = candidates[candidates.apply(direction, axis=1)]
+    candidates = road_points.copy()
+    candidates = candidates[candidates.apply(direction_filter, axis=1)]
 
     if candidates.empty:
         print("❌ 해안 경유지 없음")
         return None
 
-    candidates["dist_to_end"] = candidates.apply(
-        lambda row: haversine(row["y"], row["x"], end_lat, end_lon), axis=1
+    candidates["dist_to_start"] = candidates.apply(
+        lambda row: haversine(start_lat, start_lon, row["y"], row["x"]), axis=1
     )
-
-    selected = candidates.sort_values("dist_to_end").iloc[0]
+    candidates["dist_to_end"] = candidates.apply(
+        lambda row: haversine(end_lat, end_lon, row["y"], row["x"]), axis=1
+    )
+    selected = candidates.sort_values(["dist_to_start", "dist_to_end"]).iloc[0]
     print("✅ 선택된 waypoint:", selected["y"], selected["x"])
     return selected["y"], selected["x"]
 
@@ -112,11 +109,10 @@ def route():
         data = request.get_json()
         start = geocode_google(data.get("start"))
         end = geocode_google(data.get("end"))
-
         if not start or not end:
             return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
-        waypoint = find_waypoint(start, end)
+        waypoint = find_best_waypoint(start, end)
         if not waypoint:
             return jsonify({"error": "❌ 해안 경유지 탐색 실패"}), 500
 
@@ -130,6 +126,5 @@ def route():
         return jsonify({"error": f"❌ 서버 내부 오류: {str(e)}"}), 500
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    print("✅ 실행 포트:", port)
-    app.run(host="0.0.0.0", port=port)
+    print(f"✅ 실행 포트: {PORT}")
+    app.run(host="0.0.0.0", port=PORT)
