@@ -16,7 +16,7 @@
     input {
       width: 300px;
       padding: 6px;
-      margin-right: 8px;
+      margin-right: 10px;
     }
     button {
       padding: 6px 12px;
@@ -27,7 +27,7 @@
     }
     #error {
       color: red;
-      margin-left: 12px;
+      margin-left: 10px;
     }
   </style>
 </head>
@@ -78,8 +78,8 @@
         });
 
         if (!res.ok) {
-          const errorResult = await res.json();
-          errorBox.textContent = errorResult.error || "❌ 경로 탐색 실패";
+          const errorData = await res.json();
+          errorBox.textContent = errorData.error || "❌ 경로 탐색 실패";
           return;
         }
 
@@ -89,8 +89,8 @@
           featureProjection: "EPSG:3857"
         });
 
-        if (!features.length) {
-          errorBox.textContent = "❌ 경로가 없습니다.";
+        if (!features || features.length === 0) {
+          errorBox.textContent = "❌ 표시할 경로가 없습니다.";
           return;
         }
 
@@ -103,7 +103,7 @@
 
       } catch (err) {
         console.error("❌ 서버 오류:", err);
-        errorBox.textContent = "❌ 서버 오류: 응답이 올바르지 않음";
+        errorBox.textContent = "❌ 서버 연결 실패 또는 JSON 파싱 실패";
       }
     }
   </script>
