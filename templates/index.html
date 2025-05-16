@@ -10,11 +10,11 @@
     #map { width: 100%; height: 90vh; }
     #controls {
       padding: 10px;
-      background: #f7f7f7;
+      background: #f0f0f0;
       border-bottom: 1px solid #ccc;
     }
     input {
-      width: 280px;
+      width: 300px;
       padding: 6px;
       margin-right: 8px;
     }
@@ -27,7 +27,7 @@
     }
     #error {
       color: red;
-      margin-left: 12px;
+      margin-left: 10px;
     }
   </style>
 </head>
@@ -77,13 +77,13 @@
           body: JSON.stringify({ start, end })
         });
 
-        if (!res.ok) {
-          const errorData = await res.json();
-          errorBox.textContent = `❌ 서버 오류: ${JSON.stringify(errorData)}`;
+        const result = await res.json();
+
+        if (!res.ok || !result || result.error) {
+          errorBox.textContent = result.error || "❌ 경로 탐색 실패";
           return;
         }
 
-        const result = await res.json();
         const format = new ol.format.GeoJSON();
         const features = format.readFeatures(result, {
           featureProjection: "EPSG:3857"
@@ -102,8 +102,8 @@
         });
 
       } catch (err) {
-        console.error("❌ 서버 연결 실패:", err);
-        errorBox.textContent = "❌ 서버 연결 실패 또는 JSON 파싱 실패";
+        console.error("❌ 서버 오류:", err);
+        errorBox.textContent = "❌ 서버 연결 실패 또는 JSON 파싱 오류";
       }
     }
   </script>
