@@ -10,7 +10,7 @@
     #map { width: 100%; height: 90vh; }
     #controls {
       padding: 10px;
-      background: #f0f0f0;
+      background: #f2f2f2;
       border-bottom: 1px solid #ccc;
     }
     input {
@@ -77,22 +77,16 @@
           body: JSON.stringify({ start, end })
         });
 
-        if (!res.ok) {
-          const errData = await res.json();
-          errorBox.textContent = errData.error || "❌ 경로 요청 실패";
+        const result = await res.json();
+        if (!res.ok || result.error) {
+          errorBox.textContent = result.error || "❌ 경로 탐색 실패";
           return;
         }
 
-        const result = await res.json();
         const format = new ol.format.GeoJSON();
         const features = format.readFeatures(result, {
           featureProjection: "EPSG:3857"
         });
-
-        if (!features || features.length === 0) {
-          errorBox.textContent = "❌ 표시할 경로가 없습니다.";
-          return;
-        }
 
         routeLayer.getSource().clear();
         routeLayer.getSource().addFeatures(features);
@@ -103,7 +97,7 @@
 
       } catch (err) {
         console.error("❌ 서버 오류:", err);
-        errorBox.textContent = "❌ 서버 연결 실패 또는 JSON 파싱 오류";
+        errorBox.textContent = "❌ 서버 연결 실패 또는 JSON 파싱 실패";
       }
     }
   </script>
