@@ -1,23 +1,33 @@
 import os
-import requests
 import pandas as pd
+import requests
 from flask import Flask, request, jsonify, render_template
 from math import radians, cos, sin, asin, sqrt
-from dotenv import load_dotenv
 
-load_dotenv()
 app = Flask(__name__)
 
-# 🔑 환경변수 불러오기
+# NAVER API
+NAVER_ID = "4etplzn46c"
+NAVER_SECRET = "mHHltk1um0D09kTbRbbdJLN0MDpA0SXLboPlHx1F"
+NAVER_URL = "https://naveropenapi.apigw.ntruss.com/map-direction-15/v1/driving"
+
+# GOOGLE API
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-NAVER_API_KEY_ID = os.getenv("NAVER_API_KEY_ID")
-NAVER_API_KEY_SECRET = os.getenv("NAVER_API_KEY_SECRET")
 
-# 📂 데이터 경로
+# 도로 끝점 로딩
 ROAD_CSV_PATH = os.path.join(os.path.dirname(__file__), "road_endpoints_reduced.csv")
-road_df = pd.read_csv(ROAD_CSV_PATH, low_memory=False)
+road_points = pd.read_csv(ROAD_CSV_PATH, low_memory=False)
 
-# 🧭 거리 계산 함수
+# 해안선 범위 필터
+def filter_coastal_points(df):
+    east = df[(df['y'] >= 35) & (df['y'] <= 38) & (df['x'] >= 128) & (df['x'] <= 131)]
+    south = df[(df['y'] >= 33) & (df['y'] <= 35) & (df['x'] >= 126) & (df['x'] <= 129)]
+    west = df[(df['y'] >= 34) & (df['y'] <= 38) & (df['x'] >= 124) & (df['x'] <= 126)]
+    return pd.concat([east, south, west]).drop_duplicates()
+
+coastal_points = filter_coastal_points(road_points)
+
+# 거리 계산
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371
     dlat = radians(lat2 - lat1)
@@ -25,75 +35,77 @@ def haversine(lat1, lon1, lat2, lon2):
     a = sin(dlat / 2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2)**2
     return 2 * R * asin(sqrt(a))
 
-# 📍 주소 → 좌표 (Google)
+# 주소 → 좌표
 def geocode_google(address):
     url = "https://maps.googleapis.com/maps/api/geocode/json"
     res = requests.get(url, params={"address": address, "key": GOOGLE_API_KEY})
     try:
         location = res.json()["results"][0]["geometry"]["location"]
-        print("📍 주소 변환 성공:", address, "→", location, flush=True)
+        print("📍 주소 변환 성공:", address, "→", location)
         return location["lat"], location["lng"]
-    except Exception as e:
-        print("❌ 주소 변환 실패:", address, flush=True)
+    except:
+        print("❌ 주소 변환 실패:", address)
         return None
 
-# 📌 방향성과 거리 기준으로 waypoint 탐색
-def find_waypoint(start, end):
+# waypoint 후보 선택
+def find_best_waypoint(start, end):
     start_lat, start_lon = start
     end_lat, end_lon = end
 
+    # 방향 필터
     use_lat = abs(start_lat - end_lat) > abs(start_lon - end_lon)
     rounded_lat = round(start_lat, 2)
     rounded_lon = round(start_lon, 2)
 
     if use_lat:
-        candidates = road_df[road_df["y"].round(2) == rounded_lat]
-        direction_filter = (road_df["x"] - start_lon) * (end_lon - start_lon) > 0
+        candidates = coastal_points[coastal_points["y"].round(2) == rounded_lat]
+        direction = lambda row: (end_lon - start_lon) * (row["x"] - start_lon) > 0
     else:
-        candidates = road_df[road_df["x"].round(2) == rounded_lon]
-        direction_filter = (road_df["y"] - start_lat) * (end_lat - start_lat) > 0
+        candidates = coastal_points[coastal_points["x"].round(2) == rounded_lon]
+        direction = lambda row: (end_lat - start_lat) * (row["y"] - start_lat) > 0
 
-    filtered = candidates[direction_filter]
-    if filtered.empty:
-        print("❌ 방향성 + 거리 조건 만족 도로점 없음", flush=True)
+    candidates = candidates[candidates.apply(direction, axis=1)]
+
+    if candidates.empty:
+        print("❌ 유사한 방향 도로점 없음")
         return None
 
-    filtered["dist_to_end"] = filtered.apply(
+    candidates["dist_to_end"] = candidates.apply(
         lambda row: haversine(row["y"], row["x"], end_lat, end_lon), axis=1
     )
-    selected = filtered.sort_values("dist_to_end").iloc[0]
-    print("📍 선택된 waypoint:", selected["y"], selected["x"], flush=True)
+
+    selected = candidates.sort_values("dist_to_end").iloc[0]
+    print("📍 선택된 waypoint:", selected["y"], selected["x"])
     return selected["y"], selected["x"]
 
-# 🚘 NAVER Directions API 경로 요청
+# NAVER Directions 15 API 호출
 def get_naver_route(start, waypoint, end):
-    url = "https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving"
     headers = {
-        "X-NCP-APIGW-API-KEY-ID": NAVER_API_KEY_ID,
-        "X-NCP-APIGW-API-KEY": NAVER_API_KEY_SECRET
+        "X-NCP-APIGW-API-KEY-ID": NAVER_ID,
+        "X-NCP-APIGW-API-KEY": NAVER_SECRET
     }
     params = {
         "start": f"{start[1]},{start[0]}",
         "goal": f"{end[1]},{end[0]}",
-        "waypoints": f"{waypoint[1]},{waypoint[0]}",
-        "option": "traoptimal",
-        "format": "json"
+        "option": "trafast",
+        "cartype": 1,
+        "fueltype": "gasoline",
+        "mileage": 14,
+        "lang": "ko"
     }
-    print("📡 NAVER 요청 시작:", flush=True)
-    res = requests.get(url, headers=headers, params=params)
-    print("📡 NAVER 응답코드:", res.status_code, flush=True)
+    if waypoint:
+        params["waypoints"] = f"{waypoint[1]},{waypoint[0]}"
 
+    res = requests.get("https://naveropenapi.apigw.ntruss.com/map-direction-15/v1/driving", headers=headers, params=params)
+    print("📡 NAVER 응답코드:", res.status_code)
     try:
-        data = res.json()
-        if res.status_code != 200:
-            return {"error": data}, res.status_code
-        return data, 200
+        return res.json(), res.status_code
     except Exception as e:
         return {"error": str(e)}, 500
 
 @app.route("/")
-def index():
-    return render_template("index.html")
+def home():
+    return "✅ NAVER Directions 15 해안경로 Flask 서버 실행 중"
 
 @app.route("/route", methods=["POST"])
 def route():
@@ -101,28 +113,22 @@ def route():
         data = request.get_json()
         start = geocode_google(data.get("start"))
         end = geocode_google(data.get("end"))
-
         if not start or not end:
             return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
-        waypoint = find_waypoint(start, end)
+        waypoint = find_best_waypoint(start, end)
         if not waypoint:
-            return jsonify({"error": "❌ 해안 경유지 탐색 실패"}), 404
+            return jsonify({"error": "❌ 경유지 선택 실패"}), 500
 
         route_data, status = get_naver_route(start, waypoint, end)
         if "error" in route_data:
-            return jsonify({"error": f"❌ 경로 요청 실패: {route_data['error']}"}), status
-
+            return jsonify({"error": route_data["error"]}), status
         return jsonify(route_data)
 
     except Exception as e:
-        print("❌ 서버 오류:", str(e), flush=True)
-        return jsonify({"error": f"❌ 서버 내부 오류: {str(e)}"}), 500
+        print("❌ 서버 내부 오류:", str(e))
+        return jsonify({"error": f"서버 오류: {str(e)}"}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    print("✅ 실행 포트:", port, flush=True)
-    print("🔑 NAVER KEY ID:", NAVER_API_KEY_ID if NAVER_API_KEY_ID else "❌ 없음", flush=True)
-    print("🔑 NAVER KEY SECRET:", "✅ 있음" if NAVER_API_KEY_SECRET else "❌ 없음", flush=True)
-    print("🔑 GOOGLE KEY:", "✅ 있음" if GOOGLE_API_KEY else "❌ 없음", flush=True)
     app.run(host="0.0.0.0", port=port)
