@@ -1,95 +1,80 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <title>바다따라: 해안도로 감성 드라이브</title>
-  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
-  <style>
-    body { font-family: 'Noto Sans KR', sans-serif; margin: 0; padding: 0; }
-    h2 { padding: 20px; }
-    #map { width: 100%; height: 80vh; }
-    #controls {
-      padding: 20px;
-      display: flex;
-      gap: 10px;
-      align-items: center;
-    }
-    input { padding: 8px; width: 300px; }
-    button { padding: 10px 20px; }
-    #status { padding: 10px 20px; color: red; }
-  </style>
+    <meta charset="UTF-8">
+    <title>바다따라: 해안도로 감성 드라이브</title>
+    <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        #map { width: 100%; height: 500px; margin-top: 20px; }
+    </style>
 </head>
 <body>
-  <h2>🚗 바다따라: 해안도로 감성 드라이브 경로 추천</h2>
-  <div id="controls">
-    <input id="start" type="text" placeholder="출발지 주소 입력" value="세종특별자치시 한누리대로 2130" />
-    <input id="end" type="text" placeholder="도착지 주소 입력" value="강원도 속초시 중앙로 183" />
+    <h1>🚗 바다따라: 해안도로 감성 드라이브 경로 추천</h1>
+
+    <label for="start">출발지:</label>
+    <input type="text" id="start" placeholder="예: 세종특별자치시 한누리대로 2130"><br><br>
+
+    <label for="end">도착지:</label>
+    <input type="text" id="end" placeholder="예: 강원도 속초시 중앙로 183"><br><br>
+
     <button onclick="searchRoute()">경로 검색</button>
-  </div>
-  <div id="status"></div>
-  <div id="map"></div>
 
-  <script>
-    const map = new ol.Map({
-      target: "map",
-      layers: [
-        new ol.layer.Tile({
-          source: new ol.source.OSM(),
-        }),
-      ],
-      view: new ol.View({
-        center: ol.proj.fromLonLat([127.5, 36.5]),
-        zoom: 7,
-      }),
-    });
+    <div id="map"></div>
 
-    let routeLayer;
-    function searchRoute() {
-      const start = document.getElementById("start").value.trim();
-      const end = document.getElementById("end").value.trim();
-      document.getElementById("status").innerText = "⏳ 경로를 계산 중입니다...";
-
-      fetch("/route", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start, end }),
-      })
-        .then((res) => {
-          if (!res.ok) throw new Error("❌ 서버 응답 실패");
-          return res.json();
-        })
-        .then((data) => {
-          if (data.error) {
-            document.getElementById("status").innerText = "❌ " + data.error;
-            return;
-          }
-          drawRoute(data);
-          document.getElementById("status").innerText = "✅ 경로 계산 완료!";
-        })
-        .catch((err) => {
-          console.error(err);
-          document.getElementById("status").innerText = err.message || "❌ 오류 발생";
+    <script>
+        const map = new ol.Map({
+            target: 'map',
+            layers: [
+                new ol.layer.Tile({
+                    source: new ol.source.OSM()
+                })
+            ],
+            view: new ol.View({
+                center: ol.proj.fromLonLat([127.5, 36.5]),
+                zoom: 7
+            })
         });
-    }
 
-    function drawRoute(data) {
-      if (routeLayer) map.removeLayer(routeLayer);
-      const coords = data.route.trafast[0].path.map(coord =>
-        ol.proj.fromLonLat([coord[0], coord[1]])
-      );
-      const feature = new ol.Feature({
-        geometry: new ol.geom.LineString(coords),
-      });
-      routeLayer = new ol.layer.Vector({
-        source: new ol.source.Vector({ features: [feature] }),
-        style: new ol.style.Style({
-          stroke: new ol.style.Stroke({ color: "blue", width: 4 }),
-        }),
-      });
-      map.addLayer(routeLayer);
-      map.getView().fit(feature.getGeometry(), { padding: [50, 50, 50, 50], maxZoom: 12 });
-    }
-  </script>
+        function searchRoute() {
+            const start = document.getElementById("start").value;
+            const end = document.getElementById("end").value;
+
+            fetch("/route", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ start: start, end: end })
+            })
+            .then(response => {
+                if (!response.ok) throw new Error("❌ 서버 응답 실패");
+                return response.json();
+            })
+            .then(data => {
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+
+                const route = new ol.format.GeoJSON().readFeature(data.route?.feature || data.routes[0].geometry, {
+                    dataProjection: "EPSG:4326",
+                    featureProjection: "EPSG:3857"
+                });
+
+                const vectorSource = new ol.source.Vector({ features: [route] });
+                const vectorLayer = new ol.layer.Vector({ source: vectorSource });
+
+                map.getLayers().getArray().splice(1);  // 기존 경로 제거
+                map.addLayer(vectorLayer);
+
+                const extent = vectorSource.getExtent();
+                map.getView().fit(extent, { padding: [50, 50, 50, 50] });
+            })
+            .catch(error => {
+                console.error("❌ 예외 발생:", error);
+                alert(error.message);
+            });
+        }
+    </script>
 </body>
 </html>
