@@ -1,128 +1,109 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <title>바다따라 🌊 | 해안도로 감성 드라이브</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
-  <style>
-    body {
-      font-family: 'Arial', sans-serif;
-      margin: 0;
-      padding: 0;
-    }
-    #map {
-      width: 100%;
-      height: 80vh;
-    }
-    .container {
-      padding: 1em;
-    }
-    input {
-      width: 300px;
-      padding: 8px;
-      margin: 0.5em 0;
-    }
-    button {
-      padding: 8px 16px;
-      font-weight: bold;
-    }
-    #message {
-      color: red;
-      font-weight: bold;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <title>바다따라: 해안도로 감성 드라이브 경로 추천</title>
+    <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
+    <style>
+        body {
+            font-family: sans-serif;
+            text-align: center;
+        }
+        #map {
+            width: 100%;
+            height: 600px;
+            margin-top: 20px;
+        }
+        input {
+            width: 300px;
+            padding: 8px;
+            margin: 5px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 10px;
+            font-size: 16px;
+        }
+        #status {
+            margin-top: 10px;
+            color: red;
+        }
+    </style>
 </head>
 <body>
-  <div class="container">
     <h2>🚗 바다따라: 해안도로 감성 드라이브 경로 추천</h2>
-    <input type="text" id="start" placeholder="출발지 주소를 입력하세요" value="세종특별자치시 한누리대로 2130" />
-    <br />
-    <input type="text" id="end" placeholder="도착지 주소를 입력하세요" value="강원도 속초시 중앙로 183" />
-    <br />
+    <input id="start" type="text" placeholder="출발지 주소 입력" value="세종특별자치시 한누리대로 2130">
+    <br>
+    <input id="end" type="text" placeholder="도착지 주소 입력" value="강원도 속초시 중앙로 183">
+    <br>
     <button onclick="searchRoute()">경로 검색</button>
-    <p id="message"></p>
-  </div>
+    <div id="status"></div>
+    <div id="map"></div>
 
-  <div id="map"></div>
-
-  <script>
-    const map = new ol.Map({
-      target: "map",
-      layers: [
-        new ol.layer.Tile({
-          source: new ol.source.OSM()
-        })
-      ],
-      view: new ol.View({
-        center: ol.proj.fromLonLat([127.5, 36.5]),
-        zoom: 7
-      })
-    });
-
-    let routeLayer;
-
-    async function searchRoute() {
-      const start = document.getElementById("start").value.trim();
-      const end = document.getElementById("end").value.trim();
-      const msg = document.getElementById("message");
-      msg.textContent = "";
-
-      if (!start || !end) {
-        msg.textContent = "❌ 출발지와 목적지를 모두 입력해주세요.";
-        return;
-      }
-
-      try {
-        const response = await fetch("/route", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ start, end })
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-          msg.textContent = data.error || "❌ 서버 응답 실패";
-          return;
-        }
-
-        msg.textContent = "✅ 경로 탐색 성공!";
-
-        const coordinates = data.route.traoptimal[0].path.map(coord =>
-          ol.proj.fromLonLat([coord[0], coord[1]])
-        );
-
-        if (routeLayer) map.removeLayer(routeLayer);
-
-        routeLayer = new ol.layer.Vector({
-          source: new ol.source.Vector({
-            features: [
-              new ol.Feature({
-                geometry: new ol.geom.LineString(coordinates)
-              })
-            ]
-          }),
-          style: new ol.style.Style({
-            stroke: new ol.style.Stroke({
-              color: "blue",
-              width: 4
+    <script>
+        const map = new ol.Map({
+            target: 'map',
+            layers: [
+                new ol.layer.Tile({ source: new ol.source.OSM() })
+            ],
+            view: new ol.View({
+                center: ol.proj.fromLonLat([127.5, 36.5]),
+                zoom: 7
             })
-          })
         });
 
-        map.addLayer(routeLayer);
-        map.getView().fit(new ol.geom.LineString(coordinates), {
-          padding: [50, 50, 50, 50],
-          maxZoom: 14,
-          duration: 1000
-        });
+        let routeLayer = null;
 
-      } catch (error) {
-        msg.textContent = "❌ 예외 발생: " + error;
-      }
-    }
-  </script>
+        function searchRoute() {
+            const start = document.getElementById("start").value;
+            const end = document.getElementById("end").value;
+            const status = document.getElementById("status");
+            status.textContent = "";
+
+            fetch("/route", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ start: start, end: end })
+            })
+            .then(response => {
+                if (!response.ok) throw new Error("❌ 서버 응답 실패");
+                return response.json();
+            })
+            .then(data => {
+                if (data.error) {
+                    status.textContent = data.error;
+                    return;
+                }
+
+                const format = new ol.format.GeoJSON();
+                const route = format.readFeatures(data, {
+                    featureProjection: "EPSG:3857"
+                });
+
+                if (routeLayer) {
+                    map.removeLayer(routeLayer);
+                }
+
+                routeLayer = new ol.layer.Vector({
+                    source: new ol.source.Vector({ features: route }),
+                    style: new ol.style.Style({
+                        stroke: new ol.style.Stroke({
+                            color: 'blue',
+                            width: 4
+                        })
+                    })
+                });
+
+                map.addLayer(routeLayer);
+                const extent = routeLayer.getSource().getExtent();
+                map.getView().fit(extent, { padding: [20, 20, 20, 20] });
+            })
+            .catch(err => {
+                status.textContent = err.message;
+                console.error("❌ 예외 발생:", err);
+            });
+        }
+    </script>
 </body>
 </html>
