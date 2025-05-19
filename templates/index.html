@@ -2,100 +2,99 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>🚗 바다따라: 해안도로 감성 드라이브</title>
+  <title>해안도로 경로 탐색기</title>
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
   <link href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" rel="stylesheet" />
   <style>
-    body {
-      font-family: sans-serif;
-      padding: 20px;
-    }
-    #map {
-      width: 100%;
-      height: 600px;
-      margin-top: 20px;
-      border: 1px solid #ccc;
-    }
-    input {
-      width: 300px;
-      margin-right: 10px;
-    }
-    button {
-      padding: 6px 12px;
-    }
+    body { font-family: sans-serif; margin: 0; }
+    #map { width: 100%; height: 80vh; }
+    #form-container { padding: 1em; background: #f0f0f0; }
+    input, button { padding: 0.5em; margin: 0.2em; width: 250px; }
   </style>
 </head>
 <body>
-  <h1>🚗 바다따라: 해안도로 감성 드라이브 경로 추천</h1>
-  <p>출발지와 목적지를 입력하면 바다를 경유하는 감성 경로를 추천합니다.</p>
-  <input id="start" type="text" placeholder="예: 세종특별자치시 한누리대로 2130" />
-  <input id="end" type="text" placeholder="예: 강원도 속초시 중앙로 183" />
-  <button onclick="searchRoute()">경로 검색</button>
+  <div id="form-container">
+    <input id="start" placeholder="출발지 (예: 세종특별자치시청)" />
+    <input id="end" placeholder="도착지 (예: 속초시청)" />
+    <button onclick="searchRoute()">🚗 경로 검색</button>
+    <span id="status"></span>
+  </div>
   <div id="map"></div>
 
   <script>
-    const map = new ol.Map({
-      target: "map",
-      layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
-      view: new ol.View({
-        center: ol.proj.fromLonLat([127.5, 36.5]),
-        zoom: 7,
-      }),
+    let map = new ol.Map({
+      target: 'map',
+      layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
+      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
     });
 
-    let routeLayer = null;
+    const vectorSource = new ol.source.Vector();
+    const vectorLayer = new ol.layer.Vector({ source: vectorSource });
+    map.addLayer(vectorLayer);
 
-    function drawRoute(geojson) {
-      if (routeLayer) {
-        map.removeLayer(routeLayer);
-      }
-
-      const format = new ol.format.GeoJSON();
-      const routeFeature = format.readFeature(geojson.route?.traoptimal[0].path
-        ? {
-            type: "Feature",
-            geometry: {
-              type: "LineString",
-              coordinates: geojson.route.traoptimal[0].path.map(coord => [coord[0], coord[1]])
-            }
-          }
-        : geojson.features[0],
-        { featureProjection: "EPSG:3857" });
-
-      routeLayer = new ol.layer.Vector({
-        source: new ol.source.Vector({ features: [routeFeature] }),
-        style: new ol.style.Style({
-          stroke: new ol.style.Stroke({
-            color: "blue",
-            width: 4
-          })
-        })
-      });
-
-      map.addLayer(routeLayer);
-      map.getView().fit(routeLayer.getSource().getExtent(), { padding: [50, 50, 50, 50] });
+    function drawRoute(coords) {
+      vectorSource.clear();
+      const route = new ol.geom.LineString(coords.map(c => ol.proj.fromLonLat(c)));
+      const feature = new ol.Feature({ geometry: route });
+      feature.setStyle(new ol.style.Style({
+        stroke: new ol.style.Stroke({ color: 'blue', width: 4 })
+      }));
+      vectorSource.addFeature(feature);
     }
 
-    async function searchRoute() {
+    function addMarker(coord, label) {
+      const feature = new ol.Feature({
+        geometry: new ol.geom.Point(ol.proj.fromLonLat(coord))
+      });
+      feature.setStyle(new ol.style.Style({
+        image: new ol.style.Circle({
+          radius: 6,
+          fill: new ol.style.Fill({ color: 'red' }),
+          stroke: new ol.style.Stroke({ color: 'white', width: 2 })
+        }),
+        text: new ol.style.Text({
+          text: label,
+          offsetY: -15,
+          fill: new ol.style.Fill({ color: '#000' }),
+          stroke: new ol.style.Stroke({ color: '#fff', width: 2 })
+        })
+      }));
+      vectorSource.addFeature(feature);
+    }
+
+    function searchRoute() {
       const start = document.getElementById("start").value;
       const end = document.getElementById("end").value;
+      document.getElementById("status").innerText = "⏳ 경로 계산 중...";
 
-      const res = await fetch("/route", {
+      fetch("/route", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start, end })
-      });
+        body: JSON.stringify({ start: start, end: end })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.route && data.route.trafast) {
+          const coords = data.route.trafast[0].path.map(c => [c[0], c[1]]);
+          drawRoute(coords);
+          addMarker(coords[0], "출발");
+          addMarker(coords.at(-1), "도착");
 
-      try {
-        const result = await res.json();
-        if (!res.ok) {
-          alert("❌ 서버 응답 실패: " + (result?.error || "알 수 없음"));
-          return;
+          if (coords.length > 2) {
+            const mid = coords[Math.floor(coords.length / 2)];
+            addMarker(mid, "경유지");
+          }
+
+          map.getView().fit(vectorSource.getExtent(), { padding: [50, 50, 50, 50] });
+          document.getElementById("status").innerText = "✅ 경로 표시 완료";
+        } else {
+          document.getElementById("status").innerText = "❌ 경로 없음";
         }
-        drawRoute(result);
-      } catch (e) {
-        alert("❌ 예외 발생: " + e.message);
-      }
+      })
+      .catch(err => {
+        console.error("에러:", err);
+        document.getElementById("status").innerText = "❌ 요청 실패";
+      });
     }
   </script>
 </body>
