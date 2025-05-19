@@ -1,74 +1,46 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8">
-  <title>🌊 바다따라: 해안도로 감성 드라이브</title>
+  <meta charset="UTF-8" />
+  <title>바다따라: 해안도로 감성 드라이브</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    #map { width: 100%; height: 500px; margin-top: 20px; border: 1px solid #ccc; }
+    input { margin: 5px; padding: 8px; width: 300px; }
+    button { padding: 10px 15px; margin: 5px; }
+  </style>
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
-  <style>
-    body { margin: 0; font-family: sans-serif; }
-    #map { width: 100%; height: 90vh; }
-    #controls {
-      padding: 10px;
-      background: #f0f0f0;
-      border-bottom: 1px solid #ccc;
-    }
-    input {
-      width: 280px;
-      padding: 6px;
-      margin-right: 10px;
-    }
-    button {
-      padding: 6px 12px;
-      background: #0078ff;
-      color: white;
-      border: none;
-      cursor: pointer;
-    }
-    #error {
-      color: red;
-      margin-left: 12px;
-    }
-  </style>
 </head>
 <body>
-  <div id="controls">
-    <h3>🌊 바다따라: 해안도로 감성 드라이브</h3>
-    <input id="start" placeholder="출발지 주소" value="세종특별자치시 한누리대로 2130" />
-    <input id="end" placeholder="도착지 주소" value="강원도 속초시 중앙로 183" />
-    <button onclick="searchRoute()">🚗 경로 검색</button>
-    <span id="error"></span>
-  </div>
+  <h2>🚗 바다따라: 해안도로 감성 드라이브</h2>
+  <p>출발지와 목적지를 입력하면 바다를 경유한 감성 드라이브 코스를 추천해드립니다.</p>
+  <input id="start" placeholder="예: 세종특별자치시 한누리대로 2130" />
+  <br />
+  <input id="end" placeholder="예: 강원도 속초시 중앙로 183" />
+  <br />
+  <button onclick="searchRoute()">경로 검색</button>
+
   <div id="map"></div>
 
   <script>
     const map = new ol.Map({
       target: "map",
-      layers: [
-        new ol.layer.Tile({ source: new ol.source.OSM() })
-      ],
+      layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
       view: new ol.View({
         center: ol.proj.fromLonLat([127.5, 36.5]),
         zoom: 7
       })
     });
 
-    const routeLayer = new ol.layer.Vector({
-      source: new ol.source.Vector(),
-      style: new ol.style.Style({
-        stroke: new ol.style.Stroke({ color: 'blue', width: 4 })
-      })
-    });
-    map.addLayer(routeLayer);
+    let routeLayer;
 
     async function searchRoute() {
-      const start = document.getElementById("start").value.trim();
-      const end = document.getElementById("end").value.trim();
-      const errorBox = document.getElementById("error");
-      errorBox.textContent = "";
+      const start = document.getElementById("start").value;
+      const end = document.getElementById("end").value;
 
       if (!start || !end) {
-        errorBox.textContent = "⚠ 출발지와 도착지를 입력하세요.";
+        alert("출발지와 목적지를 모두 입력하세요.");
         return;
       }
 
@@ -79,31 +51,34 @@
           body: JSON.stringify({ start, end })
         });
 
-        const result = await res.json();
-        if (!res.ok || result.error) {
-          errorBox.textContent = result.error || "❌ 경로 요청 실패";
-          return;
+        const data = await res.json();
+
+        if (!res.ok) {
+          console.error("❌ 서버 응답 내용:", data);
+          throw new Error(data.error || "❌ 서버 응답 실패");
         }
 
-        const geojson = new ol.format.GeoJSON().readFeatures(result, {
+        const geojson = new ol.format.GeoJSON().readFeatures(data.route?.route?.geometry || data, {
+          dataProjection: "EPSG:4326",
           featureProjection: "EPSG:3857"
         });
 
-        if (!geojson || geojson.length === 0) {
-          errorBox.textContent = "❌ 경로가 없습니다.";
-          return;
-        }
-
-        routeLayer.getSource().clear();
-        routeLayer.getSource().addFeatures(geojson);
-        map.getView().fit(routeLayer.getSource().getExtent(), {
-          padding: [40, 40, 40, 40],
-          duration: 800
+        if (routeLayer) map.removeLayer(routeLayer);
+        routeLayer = new ol.layer.Vector({
+          source: new ol.source.Vector({ features: geojson }),
+          style: new ol.style.Style({
+            stroke: new ol.style.Stroke({ color: "blue", width: 4 })
+          })
         });
 
-      } catch (e) {
-        console.error("❌ 서버 오류:", e);
-        errorBox.textContent = "❌ 서버 연결 실패 또는 응답 오류";
+        map.addLayer(routeLayer);
+
+        const extent = routeLayer.getSource().getExtent();
+        map.getView().fit(extent, { padding: [20, 20, 20, 20] });
+
+      } catch (err) {
+        console.error("❌ 예외 발생:", err);
+        alert(err.message || "❌ 경로 요청 실패");
       }
     }
   </script>
