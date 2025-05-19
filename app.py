@@ -1,107 +1,120 @@
 import os
-import json
 import requests
-import geopandas as gpd
-from shapely.geometry import Point
+import pandas as pd
 from flask import Flask, request, jsonify, render_template
-from flask_cors import CORS
+from math import radians, cos, sin, asin, sqrt
 from dotenv import load_dotenv
 
 load_dotenv()
+app = Flask(__name__)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
-NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
+ORS_API_KEY = os.getenv("ORS_API_KEY")  # ORS 제거할 경우 이 줄도 제거 가능
 
-app = Flask(__name__)
-CORS(app)
+ROAD_CSV_PATH = os.path.join(os.path.dirname(__file__), "road_endpoints_reduced.csv")
+road_points = pd.read_csv(ROAD_CSV_PATH, low_memory=False)
+
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371
+    dlat = radians(lat2 - lat1)
+    dlon = radians(lon2 - lon1)
+    a = sin(dlat / 2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2)**2
+    return 2 * R * asin(sqrt(a))
+
+def geocode_google(address):
+    url = "https://maps.googleapis.com/maps/api/geocode/json"
+    res = requests.get(url, params={"address": address, "key": GOOGLE_API_KEY})
+    try:
+        location = res.json()["results"][0]["geometry"]["location"]
+        print("\U0001f4cd 주소 변환 성공:", address, "→", location, flush=True)
+        return location["lat"], location["lng"]
+    except Exception as e:
+        print("❌ 주소 변환 실패:", address, flush=True)
+        return None
+
+def find_precise_waypoint(start, end):
+    start_lat, start_lon = start
+    end_lat, end_lon = end
+    lat_diff = abs(start_lat - end_lat)
+    lon_diff = abs(start_lon - end_lon)
+    use_lat = lat_diff > lon_diff
+
+    rounded_lat = round(start_lat, 2)
+    rounded_lon = round(start_lon, 2)
+
+    if use_lat:
+        candidates = road_points[road_points["y"].round(2) == rounded_lat].copy()
+        direction_filter = lambda row: (end_lon - start_lon) * (row["x"] - start_lon) > 0
+    else:
+        candidates = road_points[road_points["x"].round(2) == rounded_lon].copy()
+        direction_filter = lambda row: (end_lat - start_lat) * (row["y"] - start_lat) > 0
+
+    candidates = candidates[candidates.apply(direction_filter, axis=1)]
+    candidates["dist_to_start"] = candidates.apply(
+        lambda row: haversine(row["y"], row["x"], start_lat, start_lon), axis=1)
+    candidates = candidates[candidates["dist_to_start"] <= 5]  # 5km 이내
+
+    if candidates.empty:
+        print("❌ 방향성 + 거리 조건 만족 도로점 없음", flush=True)
+        return None
+
+    candidates["dist_to_end"] = candidates.apply(
+        lambda row: haversine(row["y"], row["x"], end_lat, end_lon), axis=1)
+
+    selected = candidates.sort_values("dist_to_end").iloc[0]
+    print("📍 선택된 waypoint:", selected["y"], selected["x"], flush=True)
+    return selected["y"], selected["x"]
+
+def get_ors_route(start, waypoint, end):
+    url = "https://api.openrouteservice.org/v2/directions/driving-car/geojson"
+    headers = {
+        "Authorization": ORS_API_KEY,
+        "Content-Type": "application/json"
+    }
+    body = {
+        "coordinates": [
+            [start[1], start[0]],
+            [waypoint[1], waypoint[0]],
+            [end[1], end[0]]
+        ]
+    }
+    res = requests.post(url, headers=headers, json=body)
+    print("📡 ORS 응답코드:", res.status_code, flush=True)
+    try:
+        geojson = res.json()
+        if "features" not in geojson:
+            return {"error": "GeoJSON features 없음"}, 500
+        return geojson, res.status_code
+    except Exception as e:
+        return {"error": str(e)}, 500
 
 @app.route("/")
 def index():
     return render_template("index.html")
 
-def geocode_address_google(address):
-    url = f"https://maps.googleapis.com/maps/api/geocode/json?address={address}&key={GOOGLE_API_KEY}"
-    res = requests.get(url)
-    if res.status_code == 200:
-        results = res.json().get("results")
-        if results:
-            loc = results[0]["geometry"]["location"]
-            return loc["lat"], loc["lng"]
-    return None, None
-
-def find_nearest_waypoint(start_lat, start_lng, end_lat, end_lng):
-    print("📂 GeoJSON 경유지 파일 불러오는 중...")
-    gdf = gpd.read_file("coastal_route_result.geojson")
-    gdf["centroid"] = gdf.geometry.centroid
-
-    def direction_score(row):
-        lat_diff = abs(row.centroid.y - start_lat)
-        lng_diff = abs(row.centroid.x - start_lng)
-        return lat_diff + lng_diff
-
-    gdf["score"] = gdf.apply(direction_score, axis=1)
-    waypoint = gdf.loc[gdf["score"].idxmin()].centroid
-    print(f"📍 선택된 waypoint: {waypoint.y}, {waypoint.x}")
-    return waypoint.y, waypoint.x
-
-def get_naver_directions(start, waypoint, end):
-    url = "https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving"
-    coords = f"{start[1]},{start[0]};{waypoint[1]},{waypoint[0]};{end[1]},{end[0]}"
-    headers = {
-        "X-NCP-APIGW-API-KEY-ID": NAVER_CLIENT_ID,
-        "X-NCP-APIGW-API-KEY": NAVER_CLIENT_SECRET,
-    }
-    params = {
-        "start": f"{start[1]},{start[0]}",
-        "goal": f"{end[1]},{end[0]}",
-        "waypoints": f"{waypoint[1]},{waypoint[0]}",
-        "option": "trafast"
-    }
-
-    res = requests.get(url, headers=headers, params=params)
-    if res.status_code == 200:
-        print("✅ 경로 탐색 성공 (Naver Directions)")
-        return res.json()
-    else:
-        print("❌ 경로 탐색 실패", res.text)
-        return None
-
 @app.route("/route", methods=["POST"])
 def route():
     try:
         data = request.get_json()
-        start_address = data["start"]
-        end_address = data["end"]
+        start = geocode_google(data.get("start"))
+        end = geocode_google(data.get("end"))
+        if not start or not end:
+            return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
-        print(f"📍 출발지 주소: {start_address}")
-        print(f"📍 목적지 주소: {end_address}")
+        waypoint = find_precise_waypoint(start, end)
+        if not waypoint:
+            return jsonify({"error": "❌ 해안 경유지 탐색 실패"}), 404
 
-        start_lat, start_lng = geocode_address_google(start_address)
-        end_lat, end_lng = geocode_address_google(end_address)
-
-        if not all([start_lat, start_lng, end_lat, end_lng]):
-            return jsonify({"error": "❌ 주소 → 좌표 변환 실패"}), 400
-
-        print(f"✅ 출발 좌표: {start_lat}, {start_lng}")
-        print(f"✅ 도착 좌표: {end_lat}, {end_lng}")
-
-        waypoint_lat, waypoint_lng = find_nearest_waypoint(start_lat, start_lng, end_lat, end_lng)
-
-        route_data = get_naver_directions(
-            start=(start_lat, start_lng),
-            waypoint=(waypoint_lat, waypoint_lng),
-            end=(end_lat, end_lng)
-        )
-
-        if not route_data:
-            return jsonify({"error": "❌ 경로 탐색 실패"}), 500
+        route_data, status = get_ors_route(start, waypoint, end)
+        if "error" in route_data:
+            return jsonify({"error": f"❌ 경로 요청 실패: {route_data.get('error')}"}), status
 
         return jsonify(route_data)
 
     except Exception as e:
-        print("❌ 예외 발생:", e)
-        return jsonify({"error": f"❌ 서버 오류: {str(e)}"}), 500
+        print("❌ 서버 내부 오류:", str(e))
+        return jsonify({"error": f"❌ 서버 내부 오류: {str(e)}"}), 500
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
