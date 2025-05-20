@@ -9,7 +9,6 @@ from math import radians, cos, sin, asin, sqrt
 
 app = Flask(__name__)
 
-# API KEY 설정
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 NAVER_ID = "4etplzn46c"
 NAVER_SECRET = "mHHltk1um0D09kTbRbbdJLN0MDpA0SXLboPlHx1F"
@@ -37,7 +36,7 @@ def geocode_google(address):
         print("🛰️ 응답 상태:", res.status_code)
         data = res.json()
         print("📦 응답 내용:", json.dumps(data, indent=2, ensure_ascii=False))
-        if data["results"]:
+        if data["status"] == "OK" and data["results"]:
             loc = data["results"][0]["geometry"]["location"]
             print(f"✅ 주소 변환 성공: {address} → {loc}")
             return loc["lat"], loc["lng"]
@@ -95,11 +94,12 @@ def get_naver_route(start, waypoint, end):
     if waypoint:
         params["waypoints"] = f"{waypoint[1]},{waypoint[0]}"
     print("📦 NAVER 경로 요청 파라미터:", params)
-    res = requests.get(url, headers=headers, params=params)
-    print("📡 NAVER Directions 응답 코드:", res.status_code)
     try:
+        res = requests.get(url, headers=headers, params=params)
+        print("📡 NAVER Directions 응답 코드:", res.status_code)
         return res.json(), res.status_code
     except Exception as e:
+        print("❌ NAVER API 예외:", str(e))
         return {"error": str(e)}, 500
 
 @app.route("/")
@@ -110,14 +110,21 @@ def index():
 def route():
     try:
         data = request.get_json()
-        start = geocode_google(data.get("start", "").strip())
-        end = geocode_google(data.get("end", "").strip())
+        start_addr = data.get("start", "").strip()
+        end_addr = data.get("end", "").strip()
+
+        start = geocode_google(start_addr)
+        end = geocode_google(end_addr)
+
         if not start or not end:
+            print("❌ 출발지 또는 도착지 좌표 없음")
             return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
         candidates = get_nearby_coastal_waypoints()
         waypoint = select_best_waypoint(start, end, candidates)
+
         if not waypoint:
+            print("❌ 유효한 waypoint 없음")
             return jsonify({"error": "❌ 적절한 해안 waypoint 없음"}), 500
 
         route_data, status = get_naver_route(start, waypoint, end)
@@ -127,8 +134,10 @@ def route():
         }), status
 
     except Exception as e:
-        print("❌ 서버 오류:", str(e))
-        return jsonify({"error": f"서버 오류: {str(e)}"}), 500
+        import traceback
+        print("❌ 서버 예외 발생:", str(e))
+        traceback.print_exc()
+        return jsonify({"error": f"❌ 서버 내부 오류: {str(e)}"}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
