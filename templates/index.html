@@ -43,7 +43,6 @@
             style
         });
         if (clear && routeLayer) map.removeLayer(routeLayer);
-        if (clear && waypointLayer) map.removeLayer(waypointLayer);
         routeLayer = vector;
         map.addLayer(vector);
     }
@@ -60,6 +59,7 @@
                 })
             })
         });
+        if (waypointLayer) map.removeLayer(waypointLayer);
         waypointLayer = vector;
         map.addLayer(vector);
     }
@@ -81,20 +81,20 @@
             return;
         }
 
-        const path = data.route?.traoptimal?.[0]?.path;
-        const waypoint = data.route?.traoptimal?.[0]?.summary?.waypoints?.[0];
+        const path = data.route?.route?.traoptimal?.[0]?.path;
+        const waypoint = data.waypoint;
 
         if (path) {
             const coords = path.map(p => ol.proj.fromLonLat(p));
             const line = new ol.Feature(new ol.geom.LineString(coords));
             const geojson = new ol.format.GeoJSON().writeFeaturesObject([line]);
             drawGeoJSON(geojson, new ol.style.Style({
-                stroke: new ol.style.Stroke({ color: '#00f', width: 4 })
+                stroke: new ol.style.Stroke({ color: '#0077ff', width: 4 })
             }));
         }
 
         if (waypoint) {
-            drawWaypoint(waypoint.location[1], waypoint.location[0]);
+            drawWaypoint(waypoint[0], waypoint[1]);
         }
     }
 </script>
