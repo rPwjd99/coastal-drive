@@ -9,25 +9,21 @@ from math import radians, cos, sin, asin, sqrt
 
 app = Flask(__name__)
 
-# API 키
-GOOGLE_API_KEY = "YOUR_GOOGLE_API_KEY"  # 여기에 본인의 Google 키 입력
+GOOGLE_API_KEY = "YOUR_GOOGLE_API_KEY"
 NAVER_ID = "4etplzn46c"
 NAVER_SECRET = "mHHltk1um0D09kTbRbbdJLN0MDpA0SXLboPlHx1F"
 
-# 데이터 로딩
-ROAD_CSV_PATH = os.path.join(os.path.dirname(__file__), "road_endpoints_reduced.csv")
-COASTLINE_GEOJSON_PATH = os.path.join(os.path.dirname(__file__), "해안선_국가기본도.geojson")
+ROAD_CSV_PATH = "road_endpoints_reduced.csv"
+COASTLINE_GEOJSON_PATH = "해안선_국가기본도.geojson"
 road_points = pd.read_csv(ROAD_CSV_PATH, low_memory=False)
 coastline = gpd.read_file(COASTLINE_GEOJSON_PATH).to_crs(epsg=4326)
 
-# 거리 계산 함수 (km 단위)
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371.0
     dlat, dlon = radians(lat2 - lat1), radians(lon2 - lon1)
     a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
     return 2 * R * asin(sqrt(a))
 
-# 주소 → 좌표 (Google)
 def geocode_google(address):
     url = "https://maps.googleapis.com/maps/api/geocode/json"
     params = {"address": address, "key": GOOGLE_API_KEY}
@@ -45,20 +41,18 @@ def geocode_google(address):
         print(f"❌ 지오코딩 예외: {e}")
     return None
 
-# 도로 꼭점 중 해안선 3km 이내 호분 필터링
 def get_nearby_coastal_waypoints():
     nearby = []
     for idx, row in road_points.iterrows():
         px, py = row["x"], row["y"]
         point = Point(px, py)
         for line in coastline.geometry:
-            if line.distance(point) < 0.027:  # 대량 3km (4326 좌표계에서 1도 ≈ 111km 기준)
+            if line.distance(point) < 0.027:
                 nearby.append((py, px))
                 break
-    print(f"✅ 해안선 3km 이내 waypoint 호분 수: {len(nearby)}")
+    print(f"✅ 해안선 3km 이내 waypoint 후보 수: {len(nearby)}")
     return nearby
 
-# 출발지-동적지 방향성과 일치하는 가장 가까운 waypoint 선택
 def select_best_waypoint(start, end, candidates):
     if not candidates:
         return None
@@ -77,7 +71,6 @@ def select_best_waypoint(start, end, candidates):
     print(f"📍 선택된 waypoint: {direction_filter[0]}")
     return direction_filter[0]
 
-# NAVER Directions API 요청
 def get_naver_route(start, waypoint, end):
     url = "https://naveropenapi.apigw.ntruss.com/map-direction-15/v1/driving"
     headers = {
@@ -97,7 +90,7 @@ def get_naver_route(start, waypoint, end):
         params["waypoints"] = f"{waypoint[1]},{waypoint[0]}"
     print("📦 NAVER 경로 요청 파라미터:", params)
     res = requests.get(url, headers=headers, params=params)
-    print("🛁 NAVER Directions 응답 코드:", res.status_code)
+    print("📡 NAVER Directions 응답 코드:", res.status_code)
     try:
         return res.json(), res.status_code
     except Exception as e:
