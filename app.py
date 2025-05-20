@@ -124,4 +124,23 @@ def route():
         end_addr = data.get("end")
 
         start = geocode_vworld(start_addr)
-        end = geocode
+        end = geocode_vworld(end_addr)
+
+        if not start or not end:
+            return jsonify({"error": "❌ 주소 변환 실패"}), 400
+
+        waypoint = find_best_waypoint(start, end)
+        if not waypoint:
+            return jsonify({"error": "❌ 경유지 탐색 실패"}), 500
+
+        route_data, status = get_naver_route(start, waypoint, end)
+        return jsonify(route_data)
+
+    except Exception as e:
+        print("❌ 서버 오류:", str(e))
+        return jsonify({"error": f"서버 내부 오류: {str(e)}"}), 500
+
+# 실행
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
