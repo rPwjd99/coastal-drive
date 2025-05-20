@@ -32,31 +32,31 @@ def haversine(lat1, lon1, lat2, lon2):
     a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
     return 2 * R * asin(sqrt(a))
 
-# 주소 → 좌표 (VWorld API)
+# 주소 → 좌표 (VWorld 검색 기반)
 def geocode_vworld(address):
-    url = "https://api.vworld.kr/req/address"
+    url = "https://api.vworld.kr/req/search"
     params = {
-        "service": "address",
-        "request": "getcoord",
+        "service": "search",
+        "request": "search",
         "format": "json",
-        "type": "road",
-        "address": address,
+        "size": 1,
+        "query": address,
         "key": VWORLD_KEY
     }
     try:
         res = requests.get(url, params=params, timeout=5)
         data = res.json()
-        if data["response"]["status"] == "OK":
-            point = data["response"]["result"]["point"]
+        if data["response"]["status"] == "OK" and data["response"]["result"]["items"]:
+            point = data["response"]["result"]["items"][0]["point"]
             lat, lon = float(point["y"]), float(point["x"])
             print(f"📍 주소 변환 성공: {address} → ({lat}, {lon})")
             return lat, lon
-    except:
-        pass
+    except Exception as e:
+        print("❌ 주소 변환 예외:", e)
     print(f"❌ 주소 변환 실패: {address}")
     return None
 
-# 해안선 waypoint 선택
+# waypoint 자동 선택
 def find_best_waypoint(start, end):
     start_lat, start_lon = start
     end_lat, end_lon = end
@@ -85,7 +85,7 @@ def find_best_waypoint(start, end):
     print("📍 선택된 waypoint:", selected["y"], selected["x"])
     return selected["y"], selected["x"]
 
-# NAVER Directions 15 경로 요청
+# NAVER 경로 API 호출
 def get_naver_route(start, waypoint, end):
     headers = {
         "X-NCP-APIGW-API-KEY-ID": NAVER_ID,
@@ -115,7 +115,7 @@ def get_naver_route(start, waypoint, end):
 def index():
     return render_template("index.html")
 
-# 주소 기반 경로 요청 처리
+# 주소 기반 경로 계산
 @app.route("/route", methods=["POST"])
 def route():
     try:
@@ -124,23 +124,4 @@ def route():
         end_addr = data.get("end")
 
         start = geocode_vworld(start_addr)
-        end = geocode_vworld(end_addr)
-
-        if not start or not end:
-            return jsonify({"error": "❌ 주소 변환 실패"}), 400
-
-        waypoint = find_best_waypoint(start, end)
-        if not waypoint:
-            return jsonify({"error": "❌ 경유지 탐색 실패"}), 500
-
-        route_data, status = get_naver_route(start, waypoint, end)
-        return jsonify(route_data)
-
-    except Exception as e:
-        print("❌ 서버 오류:", str(e))
-        return jsonify({"error": f"서버 내부 오류: {str(e)}"}), 500
-
-# 실행
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+        end = geocode
