@@ -10,31 +10,33 @@ from math import radians, cos, sin, asin, sqrt
 app = Flask(__name__)
 
 # API KEY 설정
-GOOGLE_API_KEY = "YOUR_GOOGLE_API_KEY"
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 NAVER_ID = "4etplzn46c"
 NAVER_SECRET = "mHHltk1um0D09kTbRbbdJLN0MDpA0SXLboPlHx1F"
 
-# 파일 경로 수정: 실제 해안선 파일명으로 반영
 ROAD_CSV_PATH = "road_endpoints_reduced.csv"
 COASTLINE_GEOJSON_PATH = "coastal_route_result.geojson"
 road_points = pd.read_csv(ROAD_CSV_PATH, low_memory=False)
 coastline = gpd.read_file(COASTLINE_GEOJSON_PATH).to_crs(epsg=4326)
 
-# 위경도 거리 계산 (Haversine 공식)
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371.0
     dlat, dlon = radians(lat2 - lat1), radians(lon2 - lon1)
     a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
     return 2 * R * asin(sqrt(a))
 
-# Google 지오코딩
 def geocode_google(address):
+    if not GOOGLE_API_KEY:
+        print("❌ GOOGLE_API_KEY가 설정되어 있지 않습니다.")
+        return None
     url = "https://maps.googleapis.com/maps/api/geocode/json"
     params = {"address": address, "key": GOOGLE_API_KEY}
     print(f"📤 Google 지오코딩 요청: {address}")
     try:
         res = requests.get(url, params=params)
+        print("🛰️ 응답 상태:", res.status_code)
         data = res.json()
+        print("📦 응답 내용:", json.dumps(data, indent=2, ensure_ascii=False))
         if data["results"]:
             loc = data["results"][0]["geometry"]["location"]
             print(f"✅ 주소 변환 성공: {address} → {loc}")
@@ -45,20 +47,18 @@ def geocode_google(address):
         print(f"❌ 지오코딩 예외: {e}")
     return None
 
-# 해안선 3km 이내 도로점 필터링
 def get_nearby_coastal_waypoints():
     nearby = []
     for idx, row in road_points.iterrows():
         px, py = row["x"], row["y"]
         point = Point(px, py)
         for line in coastline.geometry:
-            if line.distance(point) < 0.027:  # 약 3km
+            if line.distance(point) < 0.027:
                 nearby.append((py, px))
                 break
     print(f"✅ 해안선 3km 이내 waypoint 후보 수: {len(nearby)}")
     return nearby
 
-# 출발지-도착지 방향성과 일치하고 도착지와 가까운 waypoint 선택
 def select_best_waypoint(start, end, candidates):
     if not candidates:
         return None
@@ -77,7 +77,6 @@ def select_best_waypoint(start, end, candidates):
     print(f"📍 선택된 waypoint: {direction_filter[0]}")
     return direction_filter[0]
 
-# NAVER Directions 15 API 요청
 def get_naver_route(start, waypoint, end):
     url = "https://naveropenapi.apigw.ntruss.com/map-direction-15/v1/driving"
     headers = {
@@ -103,12 +102,10 @@ def get_naver_route(start, waypoint, end):
     except Exception as e:
         return {"error": str(e)}, 500
 
-# 기본 페이지
 @app.route("/")
 def index():
     return render_template("index.html")
 
-# 경로 요청 API
 @app.route("/route", methods=["POST"])
 def route():
     try:
@@ -126,7 +123,7 @@ def route():
         route_data, status = get_naver_route(start, waypoint, end)
         return jsonify({
             "route": route_data,
-            "waypoint": waypoint  # 좌표 반환 (index.html에서 지도에 점 표시용)
+            "waypoint": waypoint
         }), status
 
     except Exception as e:
