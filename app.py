@@ -15,8 +15,14 @@ NAVER_SECRET = "mHHltk1um0D09kTbRbbdJLN0MDpA0SXLboPlHx1F"
 
 ROAD_CSV_PATH = "road_endpoints_reduced.csv"
 COASTLINE_GEOJSON_PATH = "coastal_route_result.geojson"
-road_points = pd.read_csv(ROAD_CSV_PATH, low_memory=False)
-coastline = gpd.read_file(COASTLINE_GEOJSON_PATH).to_crs(epsg=4326)
+
+try:
+    road_points = pd.read_csv(ROAD_CSV_PATH, low_memory=False)
+    coastline = gpd.read_file(COASTLINE_GEOJSON_PATH).to_crs(epsg=4326)
+except Exception as e:
+    print("❌ 파일 로딩 오류:", e)
+    road_points = pd.DataFrame()
+    coastline = gpd.GeoDataFrame()
 
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371.0
@@ -48,11 +54,14 @@ def geocode_google(address):
 
 def get_nearby_coastal_waypoints():
     nearby = []
+    if coastline.empty or road_points.empty:
+        print("❌ 데이터셋이 비어 있음")
+        return nearby
     for idx, row in road_points.iterrows():
         px, py = row["x"], row["y"]
         point = Point(px, py)
-        for line in coastline.geometry:
-            if line.distance(point) < 0.027:
+        for geom in coastline.geometry:
+            if geom.distance(point) < 0.027:  # 약 3km
                 nearby.append((py, px))
                 break
     print(f"✅ 해안선 3km 이내 waypoint 후보 수: {len(nearby)}")
@@ -141,4 +150,4 @@ def route():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port
