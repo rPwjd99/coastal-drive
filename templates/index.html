@@ -2,20 +2,22 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>해안도로 경로 탐색기</title>
+  <title>해안도로 경로 탐색기 (좌표입력)</title>
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
   <link href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" rel="stylesheet" />
   <style>
     body { font-family: sans-serif; margin: 0; }
     #map { width: 100%; height: 80vh; }
     #form-container { padding: 1em; background: #f0f0f0; }
-    input, button { padding: 0.5em; margin: 0.2em; width: 250px; }
+    input, button { padding: 0.5em; margin: 0.2em; width: 150px; }
   </style>
 </head>
 <body>
   <div id="form-container">
-    <input id="start" placeholder="출발지 (예: 세종특별자치시청)" />
-    <input id="end" placeholder="도착지 (예: 속초시청)" />
+    <input id="start-lat" placeholder="출발 위도" />
+    <input id="start-lon" placeholder="출발 경도" />
+    <input id="end-lat" placeholder="도착 위도" />
+    <input id="end-lon" placeholder="도착 경도" />
     <button onclick="searchRoute()">🚗 경로 검색</button>
     <span id="status"></span>
   </div>
@@ -63,39 +65,29 @@
     }
 
     function searchRoute() {
-      const start = document.getElementById("start").value;
-      const end = document.getElementById("end").value;
+      const startLat = parseFloat(document.getElementById("start-lat").value);
+      const startLon = parseFloat(document.getElementById("start-lon").value);
+      const endLat = parseFloat(document.getElementById("end-lat").value);
+      const endLon = parseFloat(document.getElementById("end-lon").value);
+
+      if (isNaN(startLat) || isNaN(startLon) || isNaN(endLat) || isNaN(endLon)) {
+        alert("모든 좌표를 정확히 입력하세요.");
+        return;
+      }
+
       document.getElementById("status").innerText = "⏳ 경로 계산 중...";
 
       fetch("/route", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start: start, end: end })
+        body: JSON.stringify({
+          start: [startLat, startLon],
+          end: [endLat, endLon]
+        })
       })
       .then(res => res.json())
       .then(data => {
         if (data.route && data.route.trafast) {
           const coords = data.route.trafast[0].path.map(c => [c[0], c[1]]);
           drawRoute(coords);
-          addMarker(coords[0], "출발");
-          addMarker(coords.at(-1), "도착");
-
-          if (coords.length > 2) {
-            const mid = coords[Math.floor(coords.length / 2)];
-            addMarker(mid, "경유지");
-          }
-
-          map.getView().fit(vectorSource.getExtent(), { padding: [50, 50, 50, 50] });
-          document.getElementById("status").innerText = "✅ 경로 표시 완료";
-        } else {
-          document.getElementById("status").innerText = "❌ 경로 없음";
-        }
-      })
-      .catch(err => {
-        console.error("에러:", err);
-        document.getElementById("status").innerText = "❌ 요청 실패";
-      });
-    }
-  </script>
-</body>
-</html>
+          addMarker(coords[0]()
