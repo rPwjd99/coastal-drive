@@ -84,4 +84,46 @@ def get_naver_route(start, waypoint, end):
     params = {
         "start": f"{start[1]},{start[0]}",
         "goal": f"{end[1]},{end[0]}",
-        "option
+        "option": "trafast",
+        "cartype": 1,
+        "fueltype": "gasoline",
+        "mileage": 14,
+        "lang": "ko"
+    }
+    if waypoint:
+        params["waypoints"] = f"{waypoint[1]},{waypoint[0]}"
+    res = requests.get(NAVER_URL, headers=headers, params=params)
+    try:
+        return res.json(), res.status_code
+    except Exception as e:
+        return {"error": str(e)}, 500
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+@app.route("/route", methods=["POST"])
+def route():
+    try:
+        data = request.get_json()
+        start_addr = data.get("start")
+        end_addr = data.get("end")
+
+        start = geocode_vworld(start_addr)
+        end = geocode_vworld(end_addr)
+        if not start or not end:
+            return jsonify({"error": "❌ 주소 변환 실패"}), 400
+
+        waypoint = find_best_waypoint(start, end)
+        if not waypoint:
+            return jsonify({"error": "❌ 경유지 선택 실패"}), 500
+
+        route_data, status = get_naver_route(start, waypoint, end)
+        return jsonify(route_data)
+
+    except Exception as e:
+        return jsonify({"error": f"서버 오류: {str(e)}"}), 500
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
