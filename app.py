@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 import requests
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 from math import radians, cos, sin, asin, sqrt
 
 app = Flask(__name__)
@@ -11,7 +11,7 @@ NAVER_ID = "4etplzn46c"
 NAVER_SECRET = "mHHltk1um0D09kTbRbbdJLN0MDpA0SXLboPlHx1F"
 NAVER_URL = "https://naveropenapi.apigw.ntruss.com/map-direction-15/v1/driving"
 
-# 도로 끝점 로딩
+# 도로 끝점 데이터 로딩
 ROAD_CSV_PATH = os.path.join(os.path.dirname(__file__), "road_endpoints_reduced.csv")
 road_points = pd.read_csv(ROAD_CSV_PATH, low_memory=False)
 
@@ -32,7 +32,7 @@ def haversine(lat1, lon1, lat2, lon2):
     a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
     return 2 * R * asin(sqrt(a))
 
-# 최적 waypoint 선택
+# 가장 적절한 해안 도로 끝점 찾기
 def find_best_waypoint(start, end):
     start_lat, start_lon = start
     end_lat, end_lon = end
@@ -86,31 +86,34 @@ def get_naver_route(start, waypoint, end):
     except Exception as e:
         return {"error": str(e)}, 500
 
+# 🔹 index.html 렌더링
 @app.route("/")
-def home():
-    return "✅ NAVER Directions 15 API 서버 실행 중"
+def index():
+    return render_template("index.html")
 
+# 🔹 API 엔드포인트 (좌표 → 경로 반환)
 @app.route("/route", methods=["POST"])
 def route():
     try:
         data = request.get_json()
-        start = data.get("start")  # [lat, lon]
-        end = data.get("end")      # [lat, lon]
+        start = data.get("start")
+        end = data.get("end")
 
         if not start or not end:
-            return jsonify({"error": "출발지와 도착지 좌표가 필요합니다."}), 400
+            return jsonify({"error": "출발지/도착지 좌표가 필요합니다."}), 400
 
         waypoint = find_best_waypoint(start, end)
         if not waypoint:
-            return jsonify({"error": "경유지 선택 실패"}), 500
+            return jsonify({"error": "경유지 탐색 실패"}), 500
 
         route_data, status = get_naver_route(start, waypoint, end)
         return jsonify(route_data)
 
     except Exception as e:
-        print("❌ 서버 오류:", str(e))
+        print("❌ 서버 내부 오류:", str(e))
         return jsonify({"error": f"서버 오류: {str(e)}"}), 500
 
+# 실행
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
