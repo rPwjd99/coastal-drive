@@ -6,11 +6,11 @@ from math import radians, cos, sin, asin, sqrt
 
 app = Flask(__name__)
 
-# NAVER API
+# 🔑 NAVER API Key (직접 입력)
 NAVER_ID = "4etplzn46c"
 NAVER_SECRET = "mHHltk1um0D09kTbRbbdJLN0MDpA0SXLboPlHx1F"
 
-# 도로 끝점 로딩
+# 도로 끝점 데이터 로딩
 ROAD_CSV_PATH = os.path.join(os.path.dirname(__file__), "road_endpoints_reduced.csv")
 road_points = pd.read_csv(ROAD_CSV_PATH, low_memory=False)
 
@@ -23,7 +23,7 @@ def filter_coastal_points(df):
 
 coastal_points = filter_coastal_points(road_points)
 
-# 거리 계산 함수
+# 거리 계산
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371
     dlat = radians(lat2 - lat1)
@@ -31,7 +31,7 @@ def haversine(lat1, lon1, lat2, lon2):
     a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
     return 2 * R * asin(sqrt(a))
 
-# 주소 → 좌표 (NAVER Geocoding API)
+# 📍 NAVER 주소 → 좌표 변환
 def geocode_naver(address):
     url = "https://naveropenapi.apigw.ntruss.com/map-geocode/v2/geocode"
     headers = {
@@ -39,24 +39,26 @@ def geocode_naver(address):
         "X-NCP-APIGW-API-KEY": NAVER_SECRET
     }
     params = { "query": address }
+    print(f"📤 NAVER 지오코딩 요청: {address}")
     try:
         res = requests.get(url, headers=headers, params=params, timeout=5)
+        print("📥 응답 코드:", res.status_code)
         data = res.json()
         if data.get("addresses"):
             addr = data["addresses"][0]
             lat, lon = float(addr["y"]), float(addr["x"])
-            print(f"📍 주소 변환 성공: {address} → ({lat}, {lon})")
+            print(f"✅ 주소 변환 성공: {address} → ({lat}, {lon})")
             return lat, lon
+        else:
+            print(f"❌ 주소 변환 실패: {address}", data)
     except Exception as e:
-        print("❌ 주소 변환 예외:", e)
-    print(f"❌ 주소 변환 실패: {address}")
+        print("❌ 예외:", e)
     return None
 
-# 해안 경유지 선택
+# 경유지 선택
 def find_best_waypoint(start, end):
     start_lat, start_lon = start
     end_lat, end_lon = end
-
     use_lat = abs(start_lat - end_lat) > abs(start_lon - end_lon)
     rounded_lat = round(start_lat, 2)
     rounded_lon = round(start_lon, 2)
@@ -81,7 +83,7 @@ def find_best_waypoint(start, end):
     print("📍 선택된 waypoint:", selected["y"], selected["x"])
     return selected["y"], selected["x"]
 
-# NAVER Directions 15 API 호출
+# NAVER Directions 15 API 요청
 def get_naver_route(start, waypoint, end):
     headers = {
         "X-NCP-APIGW-API-KEY-ID": NAVER_ID,
@@ -98,9 +100,10 @@ def get_naver_route(start, waypoint, end):
     }
     if waypoint:
         params["waypoints"] = f"{waypoint[1]},{waypoint[0]}"
+    print("📦 NAVER 경로 요청:", params)
 
     res = requests.get("https://naveropenapi.apigw.ntruss.com/map-direction-15/v1/driving", headers=headers, params=params)
-    print("📡 NAVER 응답코드:", res.status_code)
+    print("📡 NAVER Directions 응답 코드:", res.status_code)
     try:
         return res.json(), res.status_code
     except Exception as e:
@@ -114,8 +117,9 @@ def index():
 def route():
     try:
         data = request.get_json()
-        start_addr = data.get("start")
-        end_addr = data.get("end")
+        start_addr = data.get("start", "").strip()
+        end_addr = data.get("end", "").strip()
+        print("📥 입력된 주소:", start_addr, "→", end_addr)
 
         start = geocode_naver(start_addr)
         end = geocode_naver(end_addr)
@@ -128,7 +132,7 @@ def route():
             return jsonify({"error": "❌ 경유지 탐색 실패"}), 500
 
         route_data, status = get_naver_route(start, waypoint, end)
-        return jsonify(route_data)
+        return jsonify(route_data), status
 
     except Exception as e:
         print("❌ 서버 오류:", str(e))
