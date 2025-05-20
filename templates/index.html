@@ -10,15 +10,15 @@
     #map { width: 100%; height: 90vh; }
     #controls {
       padding: 10px;
-      background: #f9f9f9;
+      background: #f0f0f0;
     }
     input {
       padding: 6px;
-      margin-right: 5px;
-      width: 280px;
+      width: 260px;
+      margin-right: 10px;
     }
     button {
-      padding: 6px 12px;
+      padding: 6px 14px;
     }
   </style>
 </head>
@@ -45,16 +45,13 @@
   let routeLayer = null;
   let waypointLayer = null;
 
-  function drawRouteLine(path) {
+  function drawRoute(path) {
     const coords = path.map(p => ol.proj.fromLonLat(p));
-    const feature = new ol.Feature(new ol.geom.LineString(coords));
+    const line = new ol.Feature(new ol.geom.LineString(coords));
     const vector = new ol.layer.Vector({
-      source: new ol.source.Vector({ features: [feature] }),
+      source: new ol.source.Vector({ features: [line] }),
       style: new ol.style.Style({
-        stroke: new ol.style.Stroke({
-          color: '#0077ff',
-          width: 4
-        })
+        stroke: new ol.style.Stroke({ color: '#0077ff', width: 4 })
       })
     });
     if (routeLayer) map.removeLayer(routeLayer);
@@ -63,7 +60,9 @@
   }
 
   function drawWaypoint(lat, lon) {
-    const feature = new ol.Feature(new ol.geom.Point(ol.proj.fromLonLat([lon, lat])));
+    const feature = new ol.Feature(
+      new ol.geom.Point(ol.proj.fromLonLat([lon, lat]))
+    );
     const vector = new ol.layer.Vector({
       source: new ol.source.Vector({ features: [feature] }),
       style: new ol.style.Style({
@@ -80,8 +79,9 @@
   }
 
   async function fetchRoute() {
-    const start = document.getElementById("start").value.trim();
-    const end = document.getElementById("end").value.trim();
+    const start = document.getElementById('start').value.trim();
+    const end = document.getElementById('end').value.trim();
+
     if (!start || !end) {
       alert("출발지와 도착지를 모두 입력하세요.");
       return;
@@ -95,21 +95,20 @@
       });
 
       const data = await res.json();
+
       if (data.error) {
         alert(data.error);
         return;
       }
 
       const path = data.route?.route?.traoptimal?.[0]?.path;
-      if (path) {
-        drawRouteLine(path);
-      }
+      const waypoint = data.waypoint;
 
-      if (data.waypoint) {
-        drawWaypoint(data.waypoint[0], data.waypoint[1]);
-      }
-    } catch (e) {
-      console.error("❌ fetchRoute 실패:", e);
+      if (path) drawRoute(path);
+      if (waypoint) drawWaypoint(waypoint[0], waypoint[1]);
+
+    } catch (err) {
+      console.error("❌ fetchRoute 실패:", err);
       alert("서버 오류 또는 네트워크 오류가 발생했습니다.");
     }
   }
