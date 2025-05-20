@@ -13,14 +13,17 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 NAVER_ID = "4etplzn46c"
 NAVER_SECRET = "mHHltk1um0D09kTbRbbdJLN0MDpA0SXLboPlHx1F"
 
-ROAD_CSV_PATH = "road_endpoints_reduced.csv"
-COASTLINE_GEOJSON_PATH = "coastal_route_result.geojson"
+BASE_DIR = os.path.dirname(__file__)
+ROAD_CSV_PATH = os.path.join(BASE_DIR, "road_endpoints_reduced.csv")
+COASTLINE_GEOJSON_PATH = os.path.join(BASE_DIR, "coastal_route_result.geojson")
 
 try:
     road_points = pd.read_csv(ROAD_CSV_PATH, low_memory=False)
     coastline = gpd.read_file(COASTLINE_GEOJSON_PATH).to_crs(epsg=4326)
 except Exception as e:
     print("❌ 파일 로딩 오류:", e)
+    import traceback
+    traceback.print_exc()
     road_points = pd.DataFrame()
     coastline = gpd.GeoDataFrame()
 
