@@ -6,10 +6,9 @@ from math import radians, cos, sin, asin, sqrt
 
 app = Flask(__name__)
 
-# API KEY
+# NAVER API
 NAVER_ID = "4etplzn46c"
 NAVER_SECRET = "mHHltk1um0D09kTbRbbdJLN0MDpA0SXLboPlHx1F"
-VWORLD_KEY = "9E77283D-954A-3077-B7C8-9BD5ADB33255"
 
 # 도로 끝점 로딩
 ROAD_CSV_PATH = os.path.join(os.path.dirname(__file__), "road_endpoints_reduced.csv")
@@ -32,23 +31,20 @@ def haversine(lat1, lon1, lat2, lon2):
     a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
     return 2 * R * asin(sqrt(a))
 
-# 주소 → 좌표 (VWorld 검색 기반)
-def geocode_vworld(address):
-    url = "https://api.vworld.kr/req/search"
-    params = {
-        "service": "search",
-        "request": "search",
-        "format": "json",
-        "size": 1,
-        "query": address,
-        "key": VWORLD_KEY
+# 주소 → 좌표 (NAVER Geocoding API)
+def geocode_naver(address):
+    url = "https://naveropenapi.apigw.ntruss.com/map-geocode/v2/geocode"
+    headers = {
+        "X-NCP-APIGW-API-KEY-ID": NAVER_ID,
+        "X-NCP-APIGW-API-KEY": NAVER_SECRET
     }
+    params = { "query": address }
     try:
-        res = requests.get(url, params=params, timeout=5)
+        res = requests.get(url, headers=headers, params=params, timeout=5)
         data = res.json()
-        if data["response"]["status"] == "OK" and data["response"]["result"]["items"]:
-            point = data["response"]["result"]["items"][0]["point"]
-            lat, lon = float(point["y"]), float(point["x"])
+        if data.get("addresses"):
+            addr = data["addresses"][0]
+            lat, lon = float(addr["y"]), float(addr["x"])
             print(f"📍 주소 변환 성공: {address} → ({lat}, {lon})")
             return lat, lon
     except Exception as e:
@@ -56,7 +52,7 @@ def geocode_vworld(address):
     print(f"❌ 주소 변환 실패: {address}")
     return None
 
-# waypoint 자동 선택
+# 해안 경유지 선택
 def find_best_waypoint(start, end):
     start_lat, start_lon = start
     end_lat, end_lon = end
@@ -85,7 +81,7 @@ def find_best_waypoint(start, end):
     print("📍 선택된 waypoint:", selected["y"], selected["x"])
     return selected["y"], selected["x"]
 
-# NAVER 경로 API 호출
+# NAVER Directions 15 API 호출
 def get_naver_route(start, waypoint, end):
     headers = {
         "X-NCP-APIGW-API-KEY-ID": NAVER_ID,
@@ -110,12 +106,10 @@ def get_naver_route(start, waypoint, end):
     except Exception as e:
         return {"error": str(e)}, 500
 
-# index.html 렌더링
 @app.route("/")
 def index():
     return render_template("index.html")
 
-# 주소 기반 경로 계산
 @app.route("/route", methods=["POST"])
 def route():
     try:
@@ -123,8 +117,8 @@ def route():
         start_addr = data.get("start")
         end_addr = data.get("end")
 
-        start = geocode_vworld(start_addr)
-        end = geocode_vworld(end_addr)
+        start = geocode_naver(start_addr)
+        end = geocode_naver(end_addr)
 
         if not start or not end:
             return jsonify({"error": "❌ 주소 변환 실패"}), 400
@@ -140,7 +134,6 @@ def route():
         print("❌ 서버 오류:", str(e))
         return jsonify({"error": f"서버 내부 오류: {str(e)}"}), 500
 
-# 실행
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
