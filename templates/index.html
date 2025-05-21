@@ -10,7 +10,7 @@
     #map { width: 100%; height: 90vh; }
     #controls {
       padding: 10px;
-      background: #f0f0f0;
+      background: #f7f7f7;
       border-bottom: 1px solid #ccc;
     }
     input {
@@ -43,12 +43,9 @@
 
   <script>
     const map = new ol.Map({
-      target: "map",
+      target: 'map',
       layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
-      view: new ol.View({
-        center: ol.proj.fromLonLat([127.5, 36.5]),
-        zoom: 7
-      })
+      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
     });
 
     const routeLayer = new ol.layer.Vector({
@@ -78,7 +75,8 @@
         });
 
         const result = await res.json();
-        if (!res.ok || result.error) {
+        console.log("✅ 서버 응답 데이터:", result);
+        if (!res.ok || result.error || !result.features) {
           errorBox.textContent = result.error || "❌ 경로 탐색 실패";
           return;
         }
@@ -87,11 +85,6 @@
         const features = format.readFeatures(result, {
           featureProjection: "EPSG:3857"
         });
-
-        if (!features || features.length === 0) {
-          errorBox.textContent = "❌ 표시할 경로가 없습니다.";
-          return;
-        }
 
         routeLayer.getSource().clear();
         routeLayer.getSource().addFeatures(features);
@@ -102,7 +95,7 @@
 
       } catch (err) {
         console.error("❌ 서버 오류:", err);
-        errorBox.textContent = "❌ 서버 오류 또는 응답 실패";
+        errorBox.textContent = "❌ 서버 연결 실패 또는 JSON 파싱 오류";
       }
     }
   </script>
