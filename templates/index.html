@@ -1,64 +1,90 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-    <meta charset="UTF-8">
-    <title>해안 경로 추천</title>
-    <style>
-        body { font-family: sans-serif; margin: 0; }
-        #controls { padding: 10px; background: #f8f9fa; }
-        #map { width: 100%; height: 90vh; }
-        input { width: 250px; padding: 6px; margin-right: 8px; }
-        button { padding: 6px 12px; }
-    </style>
+  <meta charset="UTF-8" />
+  <title>해안 도로 경로 추천</title>
+  <style>
+    body { margin: 0; font-family: sans-serif; }
+    #controls {
+      padding: 10px;
+      background: #f1f1f1;
+    }
+    #controls input {
+      padding: 6px;
+      width: 280px;
+      margin-right: 10px;
+    }
+    #controls button {
+      padding: 6px 12px;
+    }
+    #map {
+      height: 90vh;
+      width: 100%;
+    }
+  </style>
 </head>
 <body>
-    <div id="controls">
-        <input id="start" placeholder="출발지 주소" />
-        <input id="end" placeholder="도착지 주소" />
-        <button onclick="fetchRoute()">경로 검색</button>
-    </div>
-    <div id="map"></div>
+  <div id="controls">
+    <input id="start" placeholder="출발지 주소 (예: 세종특별자치시청)" />
+    <input id="end" placeholder="도착지 주소 (예: 속초시청)" />
+    <button onclick="fetchRoute()">경로 검색</button>
+  </div>
+  <div id="map"></div>
 
-    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyC9MSD-WhkqK_Og5YdVYfux21xiRjy2q1M&libraries=places&loading=async" async defer></script>
-    <script>
-        let map, routeLine;
+  <!-- Google Maps JS API -->
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyC9MSD-WhkqK_Og5YdVYfux21xiRjy2q1M&libraries=places&loading=async" async defer></script>
 
-        function initMap() {
-            map = new google.maps.Map(document.getElementById("map"), {
-                center: { lat: 36.3, lng: 127.4 },
-                zoom: 8
-            });
+  <script>
+    let map;
+    let routeLine = null;
+
+    function initMap() {
+      map = new google.maps.Map(document.getElementById("map"), {
+        zoom: 8,
+        center: { lat: 36.3, lng: 127.4 },
+      });
+    }
+
+    async function fetchRoute() {
+      const start = document.getElementById("start").value;
+      const end = document.getElementById("end").value;
+
+      try {
+        const res = await fetch("/route", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ start, end })
+        });
+
+        if (!res.ok) {
+          console.error("❌ 서버 응답 오류", res.status);
+          const errText = await res.text();
+          throw new Error(errText || "서버 오류");
         }
 
-        async function fetchRoute() {
-            const start = document.getElementById("start").value;
-            const end = document.getElementById("end").value;
-
-            const res = await fetch("/route", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ start, end })
-            });
-
-            const data = await res.json();
-            if (!res.ok || !data.path) {
-                alert("❌ 경로 생성 실패: " + (data.error || "서버 오류"));
-                return;
-            }
-
-            const coords = data.path.map(p => ({ lat: p[1], lng: p[0] }));
-            if (routeLine) routeLine.setMap(null);
-            routeLine = new google.maps.Polyline({
-                path: coords,
-                strokeColor: "#007bff",
-                strokeOpacity: 1.0,
-                strokeWeight: 4
-            });
-            routeLine.setMap(map);
-            map.setCenter(coords[0]);
+        const data = await res.json();
+        if (!data.path) {
+          throw new Error("❌ 경로 데이터 없음");
         }
 
-        window.onload = initMap;
-    </script>
+        const coords = data.path.map(p => ({ lat: p[1], lng: p[0] }));
+        if (routeLine) routeLine.setMap(null);
+        routeLine = new google.maps.Polyline({
+          path: coords,
+          strokeColor: "#007bff",
+          strokeOpacity: 1.0,
+          strokeWeight: 4,
+        });
+        routeLine.setMap(map);
+        map.setCenter(coords[0]);
+        console.log("✅ 경로 시각화 성공 (source: " + data.source + ")");
+      } catch (err) {
+        console.error("❌ fetchRoute 실패:", err);
+        alert(err.message || "경로 요청 실패");
+      }
+    }
+
+    window.onload = initMap;
+  </script>
 </body>
 </html>
