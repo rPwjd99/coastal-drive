@@ -45,7 +45,10 @@
     const map = new ol.Map({
       target: 'map',
       layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
-      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
+      view: new ol.View({
+        center: ol.proj.fromLonLat([127.5, 36.5]),
+        zoom: 7
+      })
     });
 
     const routeLayer = new ol.layer.Vector({
@@ -76,8 +79,13 @@
 
         const result = await res.json();
         console.log("✅ 서버 응답 데이터:", result);
-        if (!res.ok || result.error || !result.features) {
+        if (!res.ok || result.error) {
           errorBox.textContent = result.error || "❌ 경로 탐색 실패";
+          return;
+        }
+
+        if (!result.features) {
+          errorBox.textContent = "❌ GeoJSON 데이터 오류";
           return;
         }
 
@@ -85,6 +93,11 @@
         const features = format.readFeatures(result, {
           featureProjection: "EPSG:3857"
         });
+
+        if (!features || features.length === 0) {
+          errorBox.textContent = "❌ 표시할 경로가 없습니다.";
+          return;
+        }
 
         routeLayer.getSource().clear();
         routeLayer.getSource().addFeatures(features);
