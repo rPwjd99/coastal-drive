@@ -15,25 +15,33 @@ NAVER_API_KEY_ID = os.getenv("NAVER_API_KEY_ID")
 NAVER_API_KEY_SECRET = os.getenv("NAVER_API_KEY_SECRET")
 ORS_API_KEY = os.getenv("ORS_API_KEY")
 
-road_points = pd.read_csv("road_endpoints_reduced.csv")
+print("✅ API 키 로딩 확인")
+print("GOOGLE_API_KEY:", bool(GOOGLE_API_KEY))
+print("NAVER_API_KEY_ID:", bool(NAVER_API_KEY_ID))
+print("NAVER_API_KEY_SECRET:", bool(NAVER_API_KEY_SECRET))
+print("ORS_API_KEY:", bool(ORS_API_KEY))
+
+road_points = pd.read_csv("road_endpoints_reduced.csv", low_memory=False)
 coastline = gpd.read_file("coastal_route_result.geojson").to_crs(epsg=4326)
 
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371
     dlat = radians(lat2 - lat1)
-    dlon = radians(lon2 - lon1)
+    dlon = radians(lat2 - lat1)
     a = sin(dlat / 2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2)**2
     return 2 * R * asin(sqrt(a))
 
 def geocode_google(address):
+    print("📍 주소 변환 시도:", address)
     url = "https://maps.googleapis.com/maps/api/geocode/json"
-    res = requests.get(url, params={"address": address, "key": GOOGLE_API_KEY})
     try:
+        res = requests.get(url, params={"address": address, "key": GOOGLE_API_KEY})
+        res.raise_for_status()
         location = res.json()["results"][0]["geometry"]["location"]
-        print("📍 주소 변환:", address, "→", location)
+        print("📍 주소 변환 성공:", location)
         return location["lat"], location["lng"]
-    except:
-        print("❌ 주소 변환 실패:", address)
+    except Exception as e:
+        print("❌ 주소 변환 실패:", address, e)
         return None
 
 def get_coastal_candidates(start):
@@ -43,7 +51,7 @@ def get_coastal_candidates(start):
         point = Point(row["x"], row["y"])
         for geom in coastline.geometry:
             try:
-                if geom.distance(point) < 0.027:
+                if geom.distance(point) < 0.027:  # 약 3km
                     nearby.append((row["y"], row["x"]))
                     break
             except:
@@ -52,6 +60,7 @@ def get_coastal_candidates(start):
     return sorted(nearby, key=lambda c: haversine(start[0], start[1], c[0], c[1]))
 
 def get_naver_route(start, waypoint, end):
+    print("📡 NAVER 경로 요청 중...")
     url = "https://naveropenapi.apigw.ntruss.com/map-direction-15/v1/driving"
     headers = {
         "X-NCP-APIGW-API-KEY-ID": NAVER_API_KEY_ID,
@@ -67,12 +76,13 @@ def get_naver_route(start, waypoint, end):
     print("📡 NAVER 응답코드:", res.status_code)
     try:
         data = res.json()
-        print("📦 NAVER 응답 JSON:", data)
+        print("📦 NAVER 응답 JSON 키:", list(data.keys()))
         return data, res.status_code
     except Exception as e:
         return {"error": str(e)}, 500
 
 def get_ors_route(start, waypoint, end):
+    print("📡 ORS 경로 요청 중...")
     url = "https://api.openrouteservice.org/v2/directions/driving-car/geojson"
     headers = {
         "Authorization": ORS_API_KEY,
@@ -89,7 +99,7 @@ def get_ors_route(start, waypoint, end):
     print("📡 ORS 응답코드:", res.status_code)
     try:
         data = res.json()
-        print("📦 ORS 응답 JSON:", data)
+        print("📦 ORS 응답 JSON 키:", list(data.keys()))
         return data, res.status_code
     except Exception as e:
         return {"error": str(e)}, 500
@@ -101,14 +111,17 @@ def index():
 @app.route("/route", methods=["POST"])
 def route():
     try:
+        print("✅ /route 진입")
         data = request.get_json()
         start = geocode_google(data.get("start"))
         end = geocode_google(data.get("end"))
         if not start or not end:
+            print("❌ 출발지 또는 도착지 좌표 없음")
             return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
         candidates = get_coastal_candidates(start)
         if not candidates:
+            print("❌ 웨이포인트 후보 없음")
             return jsonify({"error": "❌ 웨이포인트 없음"}), 400
 
         for waypoint in candidates:
@@ -123,9 +136,11 @@ def route():
                 print("✅ ORS 경로 성공")
                 return jsonify({"source": "ors", "path": ors_data["features"][0]["geometry"]["coordinates"]})
 
+        print("❌ 모든 경로 API 실패")
         return jsonify({"error": "❌ 모든 경로 API 실패"}), 500
     except Exception as e:
-        print("❌ 서버 오류:", str(e))
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": f"❌ 서버 내부 오류: {str(e)}"}), 500
 
 if __name__ == "__main__":
