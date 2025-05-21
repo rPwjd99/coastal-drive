@@ -28,27 +28,27 @@ def geocode_google(address):
     url = "https://maps.googleapis.com/maps/api/geocode/json"
     res = requests.get(url, params={"address": address, "key": GOOGLE_API_KEY})
     try:
-        result = res.json()["results"][0]["geometry"]["location"]
-        print(f"📍 주소 변환: {address} → {result}")
-        return result["lat"], result["lng"]
-    except Exception as e:
-        print("❌ 주소 변환 실패:", address, e)
+        location = res.json()["results"][0]["geometry"]["location"]
+        print("📍 주소 변환:", address, "→", location)
+        return location["lat"], location["lng"]
+    except:
+        print("❌ 주소 변환 실패:", address)
         return None
 
-def get_coastal_candidates():
-    print("🔍 해안선 3km 이내 웨이포인트 탐색 중...")
+def get_coastal_candidates(start):
+    print("🔍 해안선 3km 이내 도로점 탐색")
     nearby = []
     for _, row in road_points.iterrows():
         point = Point(row["x"], row["y"])
         for geom in coastline.geometry:
             try:
-                if geom.distance(point) < 0.027:
+                if geom.distance(point) < 0.045:  # 약 5km로 확장 가능
                     nearby.append((row["y"], row["x"]))
                     break
             except:
                 continue
     print(f"✅ 후보 수: {len(nearby)}")
-    return nearby
+    return sorted(nearby, key=lambda c: haversine(start[0], start[1], c[0], c[1]))
 
 def get_naver_route(start, waypoint, end):
     url = "https://naveropenapi.apigw.ntruss.com/map-direction-15/v1/driving"
@@ -65,7 +65,9 @@ def get_naver_route(start, waypoint, end):
     res = requests.get(url, headers=headers, params=params)
     print("📡 NAVER 응답코드:", res.status_code)
     try:
-        return res.json(), res.status_code
+        res_json = res.json()
+        print("📦 NAVER 응답 JSON:", res_json)
+        return res_json, res.status_code
     except Exception as e:
         return {"error": str(e)}, 500
 
@@ -75,27 +77,28 @@ def index():
 
 @app.route("/route", methods=["POST"])
 def route():
-    data = request.get_json()
-    start = geocode_google(data.get("start"))
-    end = geocode_google(data.get("end"))
-    if not start or not end:
-        return jsonify({"error": "❌ 주소 변환 실패"}), 400
+    try:
+        data = request.get_json()
+        start = geocode_google(data.get("start"))
+        end = geocode_google(data.get("end"))
+        if not start or not end:
+            return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
-    candidates = get_coastal_candidates()
-    if not candidates:
-        return jsonify({"error": "❌ 웨이포인트 없음"}), 400
+        candidates = get_coastal_candidates(start)
+        if not candidates:
+            return jsonify({"error": "❌ 웨이포인트 없음"}), 400
 
-    lat_closest = min(candidates, key=lambda c: abs(c[0] - start[0]))
-    lon_closest = min(candidates, key=lambda c: abs(c[1] - start[1]))
+        for waypoint in candidates:
+            print("🔁 웨이포인트 시도:", waypoint)
+            route_data, status = get_naver_route(start, waypoint, end)
+            if "route" in route_data:
+                print("✅ 유효한 경로 확보")
+                return jsonify(route_data), status
 
-    d1 = haversine(lat_closest[0], lat_closest[1], end[0], end[1])
-    d2 = haversine(lon_closest[0], lon_closest[1], end[0], end[1])
-
-    selected = lat_closest if d1 < d2 else lon_closest
-    print("📍 선택된 웨이포인트:", selected)
-
-    route_data, status = get_naver_route(start, selected, end)
-    return jsonify(route_data), status
+        return jsonify({"error": "❌ 경로 생성 실패 (모든 웨이포인트 실패)"}), 500
+    except Exception as e:
+        print("❌ 서버 오류:", str(e))
+        return jsonify({"error": f"❌ 서버 내부 오류: {str(e)}"}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
