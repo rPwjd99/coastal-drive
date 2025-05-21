@@ -49,6 +49,11 @@
       const start = document.getElementById("start").value;
       const end = document.getElementById("end").value;
 
+      if (!start || !end) {
+        alert("출발지와 도착지를 모두 입력해주세요.");
+        return;
+      }
+
       try {
         const res = await fetch("/route", {
           method: "POST",
