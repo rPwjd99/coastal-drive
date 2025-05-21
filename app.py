@@ -13,6 +13,7 @@ app = Flask(__name__)
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 NAVER_API_KEY_ID = os.getenv("NAVER_API_KEY_ID")
 NAVER_API_KEY_SECRET = os.getenv("NAVER_API_KEY_SECRET")
+ORS_API_KEY = os.getenv("ORS_API_KEY")
 
 road_points = pd.read_csv("road_endpoints_reduced.csv")
 coastline = gpd.read_file("coastal_route_result.geojson").to_crs(epsg=4326)
@@ -42,7 +43,7 @@ def get_coastal_candidates(start):
         point = Point(row["x"], row["y"])
         for geom in coastline.geometry:
             try:
-                if geom.distance(point) < 0.045:  # 약 5km로 확장 가능
+                if geom.distance(point) < 0.027:
                     nearby.append((row["y"], row["x"]))
                     break
             except:
@@ -65,9 +66,31 @@ def get_naver_route(start, waypoint, end):
     res = requests.get(url, headers=headers, params=params)
     print("📡 NAVER 응답코드:", res.status_code)
     try:
-        res_json = res.json()
-        print("📦 NAVER 응답 JSON:", res_json)
-        return res_json, res.status_code
+        data = res.json()
+        print("📦 NAVER 응답 JSON:", data)
+        return data, res.status_code
+    except Exception as e:
+        return {"error": str(e)}, 500
+
+def get_ors_route(start, waypoint, end):
+    url = "https://api.openrouteservice.org/v2/directions/driving-car/geojson"
+    headers = {
+        "Authorization": ORS_API_KEY,
+        "Content-Type": "application/json"
+    }
+    body = {
+        "coordinates": [
+            [start[1], start[0]],
+            [waypoint[1], waypoint[0]],
+            [end[1], end[0]]
+        ]
+    }
+    res = requests.post(url, headers=headers, json=body)
+    print("📡 ORS 응답코드:", res.status_code)
+    try:
+        data = res.json()
+        print("📦 ORS 응답 JSON:", data)
+        return data, res.status_code
     except Exception as e:
         return {"error": str(e)}, 500
 
@@ -90,12 +113,17 @@ def route():
 
         for waypoint in candidates:
             print("🔁 웨이포인트 시도:", waypoint)
-            route_data, status = get_naver_route(start, waypoint, end)
-            if "route" in route_data:
-                print("✅ 유효한 경로 확보")
-                return jsonify(route_data), status
+            naver_data, _ = get_naver_route(start, waypoint, end)
+            if "route" in naver_data:
+                print("✅ NAVER 경로 성공")
+                return jsonify({"source": "naver", "path": naver_data["route"]["traoptimal"][0]["path"]})
 
-        return jsonify({"error": "❌ 경로 생성 실패 (모든 웨이포인트 실패)"}), 500
+            ors_data, _ = get_ors_route(start, waypoint, end)
+            if "features" in ors_data:
+                print("✅ ORS 경로 성공")
+                return jsonify({"source": "ors", "path": ors_data["features"][0]["geometry"]["coordinates"]})
+
+        return jsonify({"error": "❌ 모든 경로 API 실패"}), 500
     except Exception as e:
         print("❌ 서버 오류:", str(e))
         return jsonify({"error": f"❌ 서버 내부 오류: {str(e)}"}), 500
