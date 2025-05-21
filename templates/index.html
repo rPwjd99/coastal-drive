@@ -1,118 +1,95 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8">
-  <title>해안 경유 경로 추천</title>
-  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-  <link href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" rel="stylesheet">
-  <style>
-    body { margin: 0; font-family: sans-serif; }
-    #map { width: 100%; height: 90vh; }
-    #controls {
-      padding: 10px;
-      background: #f0f0f0;
-    }
-    input {
-      padding: 6px;
-      width: 260px;
-      margin-right: 10px;
-    }
-    button {
-      padding: 6px 14px;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <title>바다따라: 해안도로 경로 추천</title>
+    <script>
+        async function fetchRoute() {
+            const start = document.getElementById("start").value;
+            const end = document.getElementById("end").value;
+
+            if (!start || !end) {
+                alert("출발지와 도착지를 모두 입력하세요.");
+                return;
+            }
+
+            const res = await fetch("/route", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ start, end })
+            });
+
+            try {
+                const data = await res.json();
+                if (res.ok) {
+                    const coords = data.route?.traoptimal?.[0]?.path;
+                    if (!coords) {
+                        alert("❌ 경로 데이터 없음");
+                        return;
+                    }
+                    const route = coords.map(pt => [pt[1], pt[0]]); // lat, lon
+                    drawRoute(route);
+                } else {
+                    alert("❌ 경로 요청 실패: " + (data.error || "오류"));
+                    console.error(data);
+                }
+            } catch (e) {
+                console.error("❌ fetchRoute 실패:", e);
+                alert("서버 오류 또는 네트워크 오류가 발생했습니다.");
+            }
+        }
+
+        function drawRoute(route) {
+            if (window.mapRoute) {
+                window.map.removeLayer(window.mapRoute);
+            }
+            window.mapRoute = new ol.layer.Vector({
+                source: new ol.source.Vector({
+                    features: [new ol.Feature({
+                        geometry: new ol.geom.LineString(route).transform("EPSG:4326", "EPSG:3857")
+                    })]
+                }),
+                style: new ol.style.Style({
+                    stroke: new ol.style.Stroke({
+                        color: "blue",
+                        width: 4
+                    })
+                })
+            });
+            window.map.addLayer(window.mapRoute);
+        }
+
+        window.onload = () => {
+            window.map = new ol.Map({
+                target: 'map',
+                layers: [
+                    new ol.layer.Tile({
+                        source: new ol.source.OSM()
+                    })
+                ],
+                view: new ol.View({
+                    center: ol.proj.fromLonLat([127.5, 36.5]),
+                    zoom: 7
+                })
+            });
+        };
+    </script>
+    <style>
+        body { font-family: sans-serif; margin: 0; padding: 0; }
+        #controls { padding: 10px; background: #f0f0f0; }
+        #map { width: 100%; height: 90vh; }
+        input { width: 200px; margin-right: 10px; }
+        button { padding: 5px 10px; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
 </head>
 <body>
-
-<div id="controls">
-  <input id="start" placeholder="출발지 주소 (예: 세종시청)">
-  <input id="end" placeholder="도착지 주소 (예: 속초시청)">
-  <button onclick="fetchRoute()">🚗 경로 검색</button>
-</div>
-
-<div id="map"></div>
-
-<script>
-  const map = new ol.Map({
-    target: 'map',
-    layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
-    view: new ol.View({
-      center: ol.proj.fromLonLat([127.5, 36.5]),
-      zoom: 7
-    })
-  });
-
-  let routeLayer = null;
-  let waypointLayer = null;
-
-  function drawRoute(path) {
-    const coords = path.map(p => ol.proj.fromLonLat(p));
-    const line = new ol.Feature(new ol.geom.LineString(coords));
-    const vector = new ol.layer.Vector({
-      source: new ol.source.Vector({ features: [line] }),
-      style: new ol.style.Style({
-        stroke: new ol.style.Stroke({ color: '#0077ff', width: 4 })
-      })
-    });
-    if (routeLayer) map.removeLayer(routeLayer);
-    routeLayer = vector;
-    map.addLayer(vector);
-  }
-
-  function drawWaypoint(lat, lon) {
-    const feature = new ol.Feature(
-      new ol.geom.Point(ol.proj.fromLonLat([lon, lat]))
-    );
-    const vector = new ol.layer.Vector({
-      source: new ol.source.Vector({ features: [feature] }),
-      style: new ol.style.Style({
-        image: new ol.style.Circle({
-          radius: 6,
-          fill: new ol.style.Fill({ color: 'red' }),
-          stroke: new ol.style.Stroke({ color: 'white', width: 2 })
-        })
-      })
-    });
-    if (waypointLayer) map.removeLayer(waypointLayer);
-    waypointLayer = vector;
-    map.addLayer(vector);
-  }
-
-  async function fetchRoute() {
-    const start = document.getElementById('start').value.trim();
-    const end = document.getElementById('end').value.trim();
-
-    if (!start || !end) {
-      alert("출발지와 도착지를 모두 입력하세요.");
-      return;
-    }
-
-    try {
-      const res = await fetch("/route", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start, end })
-      });
-
-      const data = await res.json();
-
-      if (data.error) {
-        alert(data.error);
-        return;
-      }
-
-      const path = data.route?.route?.traoptimal?.[0]?.path;
-      const waypoint = data.waypoint;
-
-      if (path) drawRoute(path);
-      if (waypoint) drawWaypoint(waypoint[0], waypoint[1]);
-
-    } catch (err) {
-      console.error("❌ fetchRoute 실패:", err);
-      alert("서버 오류 또는 네트워크 오류가 발생했습니다.");
-    }
-  }
-</script>
-
+    <div id="controls">
+        <input type="text" id="start" placeholder="출발지 주소 입력">
+        <input type="text" id="end" placeholder="도착지 주소 입력">
+        <button onclick="fetchRoute()">경로 검색</button>
+    </div>
+    <div id="map"></div>
 </body>
 </html>
