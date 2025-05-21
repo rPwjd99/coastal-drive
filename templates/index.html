@@ -4,17 +4,17 @@
     <meta charset="UTF-8">
     <title>해안 경로 추천</title>
     <style>
-        body { font-family: sans-serif; margin: 0; padding: 0; }
-        #controls { padding: 10px; background: #f0f0f0; }
+        body { font-family: sans-serif; margin: 0; }
+        #controls { padding: 10px; background: #f8f9fa; }
         #map { width: 100%; height: 90vh; }
-        input { width: 300px; margin-right: 10px; }
-        button { padding: 5px 10px; }
+        input { width: 250px; padding: 6px; margin-right: 8px; }
+        button { padding: 6px 12px; }
     </style>
 </head>
 <body>
     <div id="controls">
-        <input type="text" id="start" placeholder="출발지 주소 입력">
-        <input type="text" id="end" placeholder="도착지 주소 입력">
+        <input id="start" placeholder="출발지 주소" />
+        <input id="end" placeholder="도착지 주소" />
         <button onclick="fetchRoute()">경로 검색</button>
     </div>
     <div id="map"></div>
@@ -25,8 +25,8 @@
 
         function initMap() {
             map = new google.maps.Map(document.getElementById("map"), {
-                zoom: 7,
-                center: { lat: 36.5, lng: 127.5 }
+                center: { lat: 36.3, lng: 127.4 },
+                zoom: 8
             });
         }
 
@@ -40,32 +40,20 @@
                 body: JSON.stringify({ start, end })
             });
 
-            let data;
-            try {
-                data = await res.json();
-            } catch (e) {
-                alert("❌ 서버 응답 오류 (JSON 변환 실패)");
+            const data = await res.json();
+            if (!res.ok || !data.path) {
+                alert("❌ 경로 생성 실패: " + (data.error || "서버 오류"));
                 return;
             }
 
-            if (!res.ok || !data.route || !data.route.traoptimal || !data.route.traoptimal[0].path) {
-                alert("❌ 경로 없음 또는 오류: " + (data.error || "서버 오류"));
-                console.error(data);
-                return;
-            }
-
-            const path = data.route.traoptimal[0].path;
-            const coords = path.map(p => ({ lat: p[1], lng: p[0] }));
-
+            const coords = data.path.map(p => ({ lat: p[1], lng: p[0] }));
             if (routeLine) routeLine.setMap(null);
             routeLine = new google.maps.Polyline({
                 path: coords,
-                geodesic: true,
                 strokeColor: "#007bff",
                 strokeOpacity: 1.0,
                 strokeWeight: 4
             });
-
             routeLine.setMap(map);
             map.setCenter(coords[0]);
         }
