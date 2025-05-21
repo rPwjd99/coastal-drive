@@ -3,88 +3,89 @@ import json
 import requests
 import pandas as pd
 import geopandas as gpd
+import numpy as np
 from flask import Flask, request, jsonify, render_template
 from shapely.geometry import Point
+from shapely.ops import unary_union
+from scipy.spatial import KDTree
 from dotenv import load_dotenv
-from math import radians, cos, sin, asin, sqrt
 
 load_dotenv()
-
 app = Flask(__name__)
 
+# API Keys
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 NAVER_API_KEY_ID = os.getenv("NAVER_API_KEY_ID")
 NAVER_API_KEY_SECRET = os.getenv("NAVER_API_KEY_SECRET")
 
-CSV_PATH = "road_endpoints_reduced.csv"
-GEOJSON_PATH = "coastal_route_result.geojson"
+# Load data
+road_points = pd.read_csv("road_endpoints_reduced.csv", low_memory=False)
+coastline = gpd.read_file("coastal_route_result.geojson").to_crs(epsg=4326)
 
-road_points = pd.read_csv(CSV_PATH, low_memory=False)
-coastline = gpd.read_file(GEOJSON_PATH).to_crs(epsg=4326)
+# Build KDTree
+coast_coords = np.array([(pt.x, pt.y) for geom in coastline.geometry for pt in geom.coords])
+coast_tree = KDTree(coast_coords)
 
-
-def haversine(lat1, lon1, lat2, lon2):
-    R = 6371
-    dlat = radians(lat2 - lat1)
-    dlon = radians(lon2 - lon1)
-    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
-    return 2 * R * asin(sqrt(a))
+road_coords = np.array(list(zip(road_points["x"], road_points["y"])))
+road_tree = KDTree(road_coords)
 
 
 def geocode_google(address):
     url = "https://maps.googleapis.com/maps/api/geocode/json"
-    params = {"address": address, "key": GOOGLE_API_KEY}
-    res = requests.get(url, params=params)
+    res = requests.get(url, params={"address": address, "key": GOOGLE_API_KEY})
     try:
-        loc = res.json()["results"][0]["geometry"]["location"]
-        print("📍 주소 변환 성공:", address, "→", loc)
-        return loc["lat"], loc["lng"]
+        location = res.json()["results"][0]["geometry"]["location"]
+        print("📍 주소 변환 성공:", address, "→", location)
+        return location["lat"], location["lng"]
     except:
         print("❌ 주소 변환 실패:", address)
         return None
 
 
-def filter_points_near_coast():
-    print("🌊 해안선 근처 필터링 시작")
-    near_coast = []
-    for _, row in road_points.iterrows():
-        pt = Point(row["x"], row["y"])
-        for geom in coastline.geometry:
-            if geom.distance(pt) < 0.027:  # 3km
-                near_coast.append(row)
-                break
-    return pd.DataFrame(near_coast)
+def find_coastal_waypoints():
+    near_points = []
+    for idx, row in road_points.iterrows():
+        pt = np.array([row["x"], row["y"]])
+        dist = coast_tree.query(pt)[0]
+        if dist < 3 / 111:  # 3km 내 (1° = 111km)
+            near_points.append(row)
+    return pd.DataFrame(near_points)
 
 
-def pick_best_waypoint(candidates, start, end):
-    use_lat = abs(start[0] - end[0]) > abs(start[1] - end[1])
+def pick_directional_waypoint(start, end, candidates):
+    start_lat, start_lon = start
+    end_lat, end_lon = end
+    use_lat = abs(start_lat - end_lat) > abs(start_lon - end_lon)
+
     if use_lat:
-        directional = candidates[candidates["y"] > start[0]] if end[0] > start[0] else candidates[candidates["y"] < start[0]]
+        candidates["dist"] = (candidates["y"] - start_lat).abs()
     else:
-        directional = candidates[candidates["x"] > start[1]] if end[1] > start[1] else candidates[candidates["x"] < start[1]]
+        candidates["dist"] = (candidates["x"] - start_lon).abs()
 
-    directional["dist_to_end"] = directional.apply(lambda row: haversine(row["y"], row["x"], end[0], end[1]), axis=1)
-    return directional.sort_values("dist_to_end").head(1)[["y", "x"]].values[0]
+    sorted_candidates = candidates.sort_values("dist")
+    for _, row in sorted_candidates.iterrows():
+        return row["y"], row["x"]  # 위도, 경도
+    return None
 
 
 def get_naver_route(start, waypoint, end):
     url = "https://naveropenapi.apigw.ntruss.com/map-direction-15/v1/driving"
     headers = {
         "X-NCP-APIGW-API-KEY-ID": NAVER_API_KEY_ID,
-        "X-NCP-APIGW-API-KEY": NAVER_API_KEY_SECRET
+        "X-NCP-APIGW-API-KEY": NAVER_API_KEY_SECRET,
     }
     params = {
         "start": f"{start[1]},{start[0]}",
         "goal": f"{end[1]},{end[0]}",
         "waypoints": f"{waypoint[1]},{waypoint[0]}",
-        "option": "traoptimal"
+        "option": "traoptimal",
     }
     res = requests.get(url, headers=headers, params=params)
-    print("📦 NAVER 응답 상태코드:", res.status_code)
-    try:
+    print("📡 NAVER 응답코드:", res.status_code)
+    if res.status_code == 200:
         return res.json()
-    except:
-        return {"error": "Invalid JSON from NAVER"}
+    else:
+        return {"error": res.text}
 
 
 @app.route("/")
@@ -96,28 +97,24 @@ def index():
 def route():
     try:
         data = request.get_json()
-        print("📨 입력 데이터:", data)
-
         start = geocode_google(data.get("start"))
         end = geocode_google(data.get("end"))
         if not start or not end:
             return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
-        candidates = filter_points_near_coast()
-        if candidates.empty:
-            return jsonify({"error": "❌ 해안 근처 웨이포인트 없음"}), 500
-
-        waypoint = pick_best_waypoint(candidates, start, end)
-        print("📍 선택된 waypoint:", waypoint)
+        candidates = find_coastal_waypoints()
+        waypoint = pick_directional_waypoint(start, end, candidates)
+        if not waypoint:
+            return jsonify({"error": "❌ 웨이포인트 없음"}), 400
 
         route_data = get_naver_route(start, waypoint, end)
-        if "route" not in route_data:
-            return jsonify({"error": "❌ NAVER 경로 실패"}), 502
-
-        return jsonify(route_data)
+        if "route" in route_data:
+            return jsonify(route_data)
+        else:
+            return jsonify({"error": f"❌ 경로 요청 실패: {route_data.get('error')}"}), 500
 
     except Exception as e:
-        print("❌ 서버 내부 오류:", str(e))
+        print("❌ 서버 오류:", str(e))
         return jsonify({"error": f"❌ 서버 내부 오류: {str(e)}"}), 500
 
 
