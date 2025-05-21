@@ -1,110 +1,99 @@
 import os
+import requests
 import pandas as pd
-import geopandas as gpd
 import numpy as np
 from flask import Flask, request, jsonify, render_template
-from shapely.geometry import Point, LineString
+from shapely.geometry import Point, LineString, MultiLineString
 from scipy.spatial import KDTree
+import geopandas as gpd
 from dotenv import load_dotenv
 
 load_dotenv()
+
 app = Flask(__name__)
 
-# API Keys
+# Load API keys
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-NAVER_API_KEY_ID = os.getenv("NAVER_API_KEY_ID")
-NAVER_API_KEY_SECRET = os.getenv("NAVER_API_KEY_SECRET")
 
-# Load data
+# Load road endpoint data
+road_points = pd.read_csv("road_endpoints_reduced.csv", low_memory=False)
+print("[✅ 도로 끝점 데이터]")
+print(road_points.head())
+print("칼럼:", road_points.columns)
+print(road_points.dtypes)
+
+# Ensure coordinate types are numeric
+road_points["x"] = pd.to_numeric(road_points["x"], errors="coerce")
+road_points["y"] = pd.to_numeric(road_points["y"], errors="coerce")
+
+# Load coastal geojson
 coastline = gpd.read_file("coastal_route_result.geojson")
 print("[✅ 해안선 데이터]")
 print(coastline.head())
 print("CRS:", coastline.crs)
 
-road_points = pd.read_csv("road_endpoints_reduced.csv")
-print("[✅ 도로 끝점 데이터]")
-print(road_points.head())
-print("칼럼:", road_points.columns)
-
-# Prepare KDTree
+# Convert coastline geometry to coordinate array
 coast_coords = []
 for geom in coastline.geometry:
     if isinstance(geom, LineString):
         coast_coords.extend(list(geom.coords))
-coast_tree = KDTree(np.array(coast_coords))
+    elif isinstance(geom, MultiLineString):
+        for part in geom.geoms:
+            coast_coords.extend(list(part.coords))
 
-# 거리 검증용 함수
-def validate_kdtree_distance(point, coastline):
-    pt = Point(point)
-    min_distance = float("inf")
-    for geom in coastline.geometry:
-        if isinstance(geom, LineString):
-            dist = geom.distance(pt)
-            min_distance = min(min_distance, dist)
-    return min_distance
+coast_coords = np.array(coast_coords)
+print(f"✅ 변환된 coast_coords.shape: {coast_coords.shape}")
+coast_tree = KDTree(coast_coords)
 
-# Google Geocoding
-import requests
+
 def geocode_google(address):
     url = "https://maps.googleapis.com/maps/api/geocode/json"
-    params = {"address": address, "key": GOOGLE_API_KEY}
+    res = requests.get(url, params={"address": address, "key": GOOGLE_API_KEY})
     try:
-        res = requests.get(url, params=params)
         location = res.json()["results"][0]["geometry"]["location"]
+        print("📍 주소 변환 성공:", address, "→", location)
         return location["lat"], location["lng"]
-    except Exception as e:
-        print("❌ 주소 변환 실패:", address, e)
+    except:
+        print("❌ 주소 변환 실패:", address)
         return None
 
-# 웨이포인트 탐색
-def find_waypoint_near_coast(start, end, radius_km=10):
-    start_lat, start_lon = start
-    end_lat, end_lon = end
-    candidates = []
 
-    for _, row in road_points.iterrows():
-        px, py = row["x"], row["y"]
-        # KDTree 거리 (위경도 1도 = 약 111km)
-        kd_dist, _ = coast_tree.query([px, py])
-        if kd_dist < radius_km / 111:  # 약 10km 이내
-            # Shapely 거리로 재검증
-            shapely_dist = validate_kdtree_distance((px, py), coastline)
-            if shapely_dist < radius_km / 111:
-                candidates.append(((py, px), shapely_dist))
+def find_coastal_waypoint(start, end):
+    lat1, lon1 = start
+    lat2, lon2 = end
+    use_lat = abs(lat1 - lat2) > abs(lon1 - lon2)
 
-    if not candidates:
+    rounded = round(lat1, 2) if use_lat else round(lon1, 2)
+    candidates = road_points[road_points["y"].round(2) == rounded] if use_lat else road_points[road_points["x"].round(2) == rounded]
+
+    # 해안과의 거리 조건 추가
+    nearby = []
+    for _, row in candidates.iterrows():
+        pt = np.array([row["x"], row["y"]])
+        dist, _ = coast_tree.query(pt)
+        if dist < 0.027:  # 약 3km
+            nearby.append((row["y"], row["x"]))
+
+    if not nearby:
         print("❌ 해안 웨이포인트 없음")
         return None
 
-    candidates.sort(key=lambda x: x[1])
-    return candidates[0][0]  # (lat, lon)
+    def haversine(lat1, lon1, lat2, lon2):
+        R = 6371
+        dlat = np.radians(lat2 - lat1)
+        dlon = np.radians(lon2 - lon1)
+        a = np.sin(dlat / 2)**2 + np.cos(np.radians(lat1)) * np.cos(np.radians(lat2)) * np.sin(dlon / 2)**2
+        return 2 * R * np.arcsin(np.sqrt(a))
 
-# NAVER Directions
-def get_naver_route(start, waypoint, end):
-    url = "https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving"
-    headers = {
-        "X-NCP-APIGW-API-KEY-ID": NAVER_API_KEY_ID,
-        "X-NCP-APIGW-API-KEY": NAVER_API_KEY_SECRET
-    }
-    params = {
-        "start": f"{start[1]},{start[0]}",
-        "goal": f"{end[1]},{end[0]}",
-        "waypoints": f"{waypoint[1]},{waypoint[0]}",
-        "option": "trafast",
-        "format": "json"
-    }
-    res = requests.get(url, headers=headers, params=params)
-    try:
-        data = res.json()
-        print("✅ NAVER 응답 전체 JSON:", data)
-        return data
-    except Exception as e:
-        print("❌ NAVER 경로 요청 실패:", e)
-        return {"error": str(e)}
+    waypoint = sorted(nearby, key=lambda pt: haversine(pt[0], pt[1], lat2, lon2))[0]
+    print("✅ 선택된 waypoint:", waypoint)
+    return waypoint
+
 
 @app.route("/")
 def index():
     return render_template("index.html")
+
 
 @app.route("/route", methods=["POST"])
 def route():
@@ -115,14 +104,20 @@ def route():
         if not start or not end:
             return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
-        waypoint = find_waypoint_near_coast(start, end)
+        waypoint = find_coastal_waypoint(start, end)
         if not waypoint:
-            return jsonify({"error": "❌ 해안 웨이포인트 없음"}), 500
+            return jsonify({"error": "❌ 해안 경유지 없음"}), 500
 
-        route_data = get_naver_route(start, waypoint, end)
-        return jsonify(route_data)
+        return jsonify({
+            "start": start,
+            "waypoint": waypoint,
+            "end": end
+        })
+
     except Exception as e:
-        return jsonify({"error": f"❌ 서버 오류: {str(e)}"}), 500
+        print("❌ 서버 오류:", str(e))
+        return jsonify({"error": f"❌ 서버 내부 오류: {str(e)}"}), 500
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
