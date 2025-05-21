@@ -19,7 +19,7 @@
     </div>
     <div id="map"></div>
 
-    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyC9MSD-WhkqK_Og5YdVYfux21xiRjy2q1M&libraries=places"></script>
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyC9MSD-WhkqK_Og5YdVYfux21xiRjy2q1M&libraries=places&loading=async" async defer></script>
     <script>
         let map, routeLine;
 
@@ -40,21 +40,24 @@
                 body: JSON.stringify({ start, end })
             });
 
-            const data = await res.json();
-            if (!res.ok) {
-                alert("❌ 오류: " + (data.error || "서버 오류"));
+            let data;
+            try {
+                data = await res.json();
+            } catch (e) {
+                alert("❌ 서버 응답 오류 (JSON 변환 실패)");
                 return;
             }
 
-            const path = data.route?.traoptimal?.[0]?.path;
-            if (!path) {
-                alert("❌ 경로 데이터 없음");
+            if (!res.ok || !data.route || !data.route.traoptimal || !data.route.traoptimal[0].path) {
+                alert("❌ 경로 없음 또는 오류: " + (data.error || "서버 오류"));
+                console.error(data);
                 return;
             }
 
+            const path = data.route.traoptimal[0].path;
             const coords = path.map(p => ({ lat: p[1], lng: p[0] }));
-            if (routeLine) routeLine.setMap(null);
 
+            if (routeLine) routeLine.setMap(null);
             routeLine = new google.maps.Polyline({
                 path: coords,
                 geodesic: true,
