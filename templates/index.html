@@ -2,73 +2,37 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>🌊 바다따라: 해안도로 감성 드라이브</title>
-  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>해안도로 감성 드라이브</title>
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyC9MSD-WhkqK_Og5YdVYfux21xiRjy2q1M&libraries=places"></script>
   <style>
-    body { margin: 0; font-family: sans-serif; }
-    #map { width: 100%; height: 90vh; }
-    #controls {
-      padding: 10px;
-      background: #f7f7f7;
-      border-bottom: 1px solid #ccc;
-    }
-    input {
-      width: 300px;
-      padding: 6px;
-      margin-right: 8px;
-    }
-    button {
-      padding: 6px 12px;
-      background: #0078ff;
-      color: white;
-      border: none;
-      cursor: pointer;
-    }
-    #error {
-      color: red;
-      margin-left: 12px;
-    }
+    #map { height: 80vh; width: 100%; }
+    body { font-family: sans-serif; text-align: center; }
+    input { margin: 10px; padding: 5px; width: 300px; }
+    button { padding: 6px 20px; }
   </style>
 </head>
 <body>
-  <div id="controls">
-    <h3>🌊 바다따라: 해안도로 감성 드라이브</h3>
-    <input type="text" id="start" placeholder="출발지 주소" value="세종특별자치시 한누리대로 2130" />
-    <input type="text" id="end" placeholder="도착지 주소" value="강원도 속초시 중앙로 183" />
-    <button onclick="searchRoute()">🚗 경로 검색</button>
-    <span id="error"></span>
-  </div>
+  <h2>🚘 해안도로 감성 드라이브 코스</h2>
+  <input id="start" placeholder="출발지 주소" />
+  <input id="end" placeholder="도착지 주소" />
+  <button onclick="fetchRoute()">경로 검색</button>
   <div id="map"></div>
 
   <script>
-    const map = new ol.Map({
-      target: 'map',
-      layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
-      view: new ol.View({
-        center: ol.proj.fromLonLat([127.5, 36.5]),
-        zoom: 7
-      })
-    });
+    let map, directionsRenderer;
 
-    const routeLayer = new ol.layer.Vector({
-      source: new ol.source.Vector(),
-      style: new ol.style.Style({
-        stroke: new ol.style.Stroke({ color: 'blue', width: 4 })
-      })
-    });
-    map.addLayer(routeLayer);
+    function initMap() {
+      map = new google.maps.Map(document.getElementById("map"), {
+        center: { lat: 36.5, lng: 127.5 },
+        zoom: 7,
+      });
+      directionsRenderer = new google.maps.DirectionsRenderer({ map });
+    }
 
-    async function searchRoute() {
-      const start = document.getElementById("start").value.trim();
-      const end = document.getElementById("end").value.trim();
-      const errorBox = document.getElementById("error");
-      errorBox.textContent = "";
-
-      if (!start || !end) {
-        errorBox.textContent = "⚠ 출발지와 도착지를 모두 입력하세요.";
-        return;
-      }
+    async function fetchRoute() {
+      const start = document.getElementById("start").value;
+      const end = document.getElementById("end").value;
 
       try {
         const res = await fetch("/route", {
@@ -77,34 +41,27 @@
           body: JSON.stringify({ start, end })
         });
 
-        const result = await res.json();
-        if (!res.ok || result.error) {
-          errorBox.textContent = result.error || "❌ 경로 탐색 실패";
-          return;
-        }
+        if (!res.ok) throw new Error("서버 오류");
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
 
-        const format = new ol.format.GeoJSON();
-        const features = format.readFeatures(result, {
-          featureProjection: "EPSG:3857"
+        const coords = data.route.traoptimal[0].path.map(p => ({ lat: p[1], lng: p[0] }));
+        const routePath = new google.maps.Polyline({
+          path: coords,
+          geodesic: true,
+          strokeColor: "#0077ff",
+          strokeOpacity: 0.8,
+          strokeWeight: 5,
         });
-
-        if (!features || features.length === 0) {
-          errorBox.textContent = "❌ 표시할 경로가 없습니다.";
-          return;
-        }
-
-        routeLayer.getSource().clear();
-        routeLayer.getSource().addFeatures(features);
-        map.getView().fit(routeLayer.getSource().getExtent(), {
-          padding: [30, 30, 30, 30],
-          duration: 1000
-        });
-
-      } catch (err) {
-        console.error("❌ 서버 오류:", err);
-        errorBox.textContent = "❌ 서버 연결 실패 또는 JSON 파싱 오류";
+        routePath.setMap(map);
+        map.setCenter(coords[0]);
+      } catch (e) {
+        console.error("❌ fetchRoute 실패:", e);
+        alert("경로 검색 실패: " + e.message);
       }
     }
+
+    window.onload = initMap;
   </script>
 </body>
 </html>
