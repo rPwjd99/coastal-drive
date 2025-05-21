@@ -27,7 +27,7 @@ coastline = gpd.read_file("coastal_route_result.geojson").to_crs(epsg=4326)
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371
     dlat = radians(lat2 - lat1)
-    dlon = radians(lat2 - lat1)
+    dlon = radians(lon2 - lon1)
     a = sin(dlat / 2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2)**2
     return 2 * R * asin(sqrt(a))
 
@@ -51,7 +51,7 @@ def get_coastal_candidates(start):
         point = Point(row["x"], row["y"])
         for geom in coastline.geometry:
             try:
-                if geom.distance(point) < 0.027:  # 약 3km
+                if geom.distance(point) < 0.027:
                     nearby.append((row["y"], row["x"]))
                     break
             except:
@@ -79,6 +79,7 @@ def get_naver_route(start, waypoint, end):
         print("📦 NAVER 응답 JSON 키:", list(data.keys()))
         return data, res.status_code
     except Exception as e:
+        print("❌ NAVER 응답 JSON 오류:", e)
         return {"error": str(e)}, 500
 
 def get_ors_route(start, waypoint, end):
@@ -102,6 +103,7 @@ def get_ors_route(start, waypoint, end):
         print("📦 ORS 응답 JSON 키:", list(data.keys()))
         return data, res.status_code
     except Exception as e:
+        print("❌ ORS 응답 JSON 오류:", e)
         return {"error": str(e)}, 500
 
 @app.route("/")
@@ -113,31 +115,42 @@ def route():
     try:
         print("✅ /route 진입")
         data = request.get_json()
+        print("📨 입력 데이터:", data)
+
         start = geocode_google(data.get("start"))
         end = geocode_google(data.get("end"))
+        print("📌 start:", start, "end:", end)
+
         if not start or not end:
             print("❌ 출발지 또는 도착지 좌표 없음")
             return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
         candidates = get_coastal_candidates(start)
+        print("📌 후보 웨이포인트 수:", len(candidates))
         if not candidates:
-            print("❌ 웨이포인트 후보 없음")
             return jsonify({"error": "❌ 웨이포인트 없음"}), 400
 
         for waypoint in candidates:
             print("🔁 웨이포인트 시도:", waypoint)
             naver_data, _ = get_naver_route(start, waypoint, end)
-            if "route" in naver_data:
+            if isinstance(naver_data, dict) and "route" in naver_data:
                 print("✅ NAVER 경로 성공")
-                return jsonify({"source": "naver", "path": naver_data["route"]["traoptimal"][0]["path"]})
+                return jsonify({
+                    "source": "naver",
+                    "path": naver_data["route"]["traoptimal"][0]["path"]
+                })
 
             ors_data, _ = get_ors_route(start, waypoint, end)
-            if "features" in ors_data:
+            if isinstance(ors_data, dict) and "features" in ors_data:
                 print("✅ ORS 경로 성공")
-                return jsonify({"source": "ors", "path": ors_data["features"][0]["geometry"]["coordinates"]})
+                return jsonify({
+                    "source": "ors",
+                    "path": ors_data["features"][0]["geometry"]["coordinates"]
+                })
 
         print("❌ 모든 경로 API 실패")
         return jsonify({"error": "❌ 모든 경로 API 실패"}), 500
+
     except Exception as e:
         import traceback
         traceback.print_exc()
