@@ -2,96 +2,109 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>파란색 건너 길: Google Maps 구현</title>
+  <title>🌊 바다따라: 해안도로 감성 드라이브</title>
+  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
   <style>
-    html, body, #map {
-      height: 100%;
-      margin: 0;
-      padding: 0;
-    }
+    body { margin: 0; font-family: sans-serif; }
+    #map { width: 100%; height: 90vh; }
     #controls {
-      position: absolute;
-      top: 10px;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 5;
-      background: white;
       padding: 10px;
-      box-shadow: 0px 0px 6px rgba(0,0,0,0.3);
-      border-radius: 8px;
+      background: #f0f0f0;
+      border-bottom: 1px solid #ccc;
     }
     input {
-      width: 220px;
-      padding: 4px;
+      width: 300px;
+      padding: 6px;
+      margin-right: 8px;
     }
     button {
-      padding: 5px 10px;
-      background: #007bff;
+      padding: 6px 12px;
+      background: #0078ff;
       color: white;
       border: none;
       cursor: pointer;
-      border-radius: 4px;
+    }
+    #error {
+      color: red;
+      margin-left: 12px;
     }
   </style>
-  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyC9MSD-WhkqK_Og5YdVYfux21xiRjy2q1M&libraries=places"></script>
 </head>
 <body>
   <div id="controls">
-    <input id="start" type="text" placeholder="출복지" value="세종특별자치시 한누리대로 2130" />
-    <input id="end" type="text" placeholder="동적지" value="강원도 속초시 중앙로 183" />
-    <button onclick="searchRoute()">건너기</button>
+    <h3>🌊 바다따라: 해안도로 감성 드라이브</h3>
+    <input type="text" id="start" placeholder="출발지 주소" value="세종특별자치시 한누리대로 2130" />
+    <input type="text" id="end" placeholder="도착지 주소" value="강원도 속초시 중앙로 183" />
+    <button onclick="searchRoute()">🚗 경로 검색</button>
+    <span id="error"></span>
   </div>
   <div id="map"></div>
 
   <script>
-    let map, directionsService, directionsRenderer;
+    const map = new ol.Map({
+      target: "map",
+      layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
+      view: new ol.View({
+        center: ol.proj.fromLonLat([127.5, 36.5]),
+        zoom: 7
+      })
+    });
 
-    function initMap() {
-      map = new google.maps.Map(document.getElementById("map"), {
-        center: { lat: 36.5, lng: 127.5 },
-        zoom: 7,
-      });
-      directionsService = new google.maps.DirectionsService();
-      directionsRenderer = new google.maps.DirectionsRenderer({ map });
-    }
-
-    async function geocodeAddress(address) {
-      const res = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=AIzaSyC9MSD-WhkqK_Og5YdVYfux21xiRjy2q1M`);
-      const data = await res.json();
-      if (data.status === "OK") {
-        const loc = data.results[0].geometry.location;
-        return { lat: loc.lat, lng: loc.lng };
-      } else {
-        throw new Error("주소 발견 실패");
-      }
-    }
+    const routeLayer = new ol.layer.Vector({
+      source: new ol.source.Vector(),
+      style: new ol.style.Style({
+        stroke: new ol.style.Stroke({ color: 'blue', width: 4 })
+      })
+    });
+    map.addLayer(routeLayer);
 
     async function searchRoute() {
-      const startAddr = document.getElementById("start").value;
-      const endAddr = document.getElementById("end").value;
+      const start = document.getElementById("start").value.trim();
+      const end = document.getElementById("end").value.trim();
+      const errorBox = document.getElementById("error");
+      errorBox.textContent = "";
+
+      if (!start || !end) {
+        errorBox.textContent = "⚠ 출발지와 도착지를 모두 입력하세요.";
+        return;
+      }
+
       try {
-        const startLoc = await geocodeAddress(startAddr);
-        const endLoc = await geocodeAddress(endAddr);
-
-        const request = {
-          origin: startLoc,
-          destination: endLoc,
-          travelMode: google.maps.TravelMode.DRIVING,
-        };
-
-        directionsService.route(request, (result, status) => {
-          if (status === google.maps.DirectionsStatus.OK) {
-            directionsRenderer.setDirections(result);
-          } else {
-            alert("건너기 실패: " + status);
-          }
+        const res = await fetch("/route", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ start, end })
         });
+
+        const result = await res.json();
+        if (!res.ok || result.error) {
+          errorBox.textContent = result.error || "❌ 경로 탐색 실패";
+          return;
+        }
+
+        const format = new ol.format.GeoJSON();
+        const features = format.readFeatures(result, {
+          featureProjection: "EPSG:3857"
+        });
+
+        if (!features || features.length === 0) {
+          errorBox.textContent = "❌ 표시할 경로가 없습니다.";
+          return;
+        }
+
+        routeLayer.getSource().clear();
+        routeLayer.getSource().addFeatures(features);
+        map.getView().fit(routeLayer.getSource().getExtent(), {
+          padding: [30, 30, 30, 30],
+          duration: 1000
+        });
+
       } catch (err) {
-        alert("❌ 건너기 오류: " + err.message);
+        console.error("❌ 서버 오류:", err);
+        errorBox.textContent = "❌ 서버 오류 또는 응답 실패";
       }
     }
-
-    window.onload = initMap;
   </script>
 </body>
 </html>
