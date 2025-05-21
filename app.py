@@ -6,6 +6,7 @@ from flask import Flask, request, jsonify, render_template
 from shapely.geometry import Point
 from math import radians, cos, sin, asin, sqrt
 from dotenv import load_dotenv
+from pathlib import Path  # ✅ 필수 import
 
 load_dotenv()
 app = Flask(__name__)
@@ -14,7 +15,7 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 NAVER_API_KEY_ID = os.getenv("NAVER_API_KEY_ID")
 NAVER_API_KEY_SECRET = os.getenv("NAVER_API_KEY_SECRET")
 
-# 파일 경로 (절대 경로)
+# 절대 경로 기준 파일 위치 설정
 BASE_DIR = Path(__file__).resolve().parent
 CSV_PATH = BASE_DIR / "road_endpoints_reduced.csv"
 GEOJSON_PATH = BASE_DIR / "coastal_route_result.geojson"
@@ -23,7 +24,7 @@ road_points = pd.read_csv(CSV_PATH)
 coastline = gpd.read_file(GEOJSON_PATH).to_crs(epsg=4326)
 
 def haversine(lat1, lon1, lat2, lon2):
-    R = 6371  # km
+    R = 6371
     dlat = radians(lat2 - lat1)
     dlon = radians(lon2 - lon1)
     a = sin(dlat / 2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2)**2
