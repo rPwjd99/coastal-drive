@@ -44,7 +44,11 @@
   <script>
     const map = new ol.Map({
       target: 'map',
-      layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
+      layers: [
+        new ol.layer.Tile({
+          source: new ol.source.OSM()
+        })
+      ],
       view: new ol.View({
         center: ol.proj.fromLonLat([127.5, 36.5]),
         zoom: 7
@@ -54,9 +58,13 @@
     const routeLayer = new ol.layer.Vector({
       source: new ol.source.Vector(),
       style: new ol.style.Style({
-        stroke: new ol.style.Stroke({ color: 'blue', width: 4 })
+        stroke: new ol.style.Stroke({
+          color: '#0078ff',
+          width: 4
+        })
       })
     });
+
     map.addLayer(routeLayer);
 
     async function searchRoute() {
@@ -77,30 +85,27 @@
           body: JSON.stringify({ start, end })
         });
 
-        const result = await res.json();
-        console.log("✅ 서버 응답 데이터:", result);
-        if (!res.ok || result.error) {
-          errorBox.textContent = result.error || "❌ 경로 탐색 실패";
+        const data = await res.json();
+        console.log("✅ 서버 응답 데이터:", data);
+
+        if (!res.ok || data.error) {
+          errorBox.textContent = data.error || "❌ 경로 탐색 실패";
           return;
         }
 
-        if (!result.features) {
-          errorBox.textContent = "❌ GeoJSON 데이터 오류";
+        if (!data.features) {
+          errorBox.textContent = "❌ GeoJSON 형식 오류 또는 features 없음";
           return;
         }
 
         const format = new ol.format.GeoJSON();
-        const features = format.readFeatures(result, {
+        const features = format.readFeatures(data, {
           featureProjection: "EPSG:3857"
         });
 
-        if (!features || features.length === 0) {
-          errorBox.textContent = "❌ 표시할 경로가 없습니다.";
-          return;
-        }
-
         routeLayer.getSource().clear();
         routeLayer.getSource().addFeatures(features);
+
         map.getView().fit(routeLayer.getSource().getExtent(), {
           padding: [30, 30, 30, 30],
           duration: 1000
