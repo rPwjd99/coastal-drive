@@ -19,7 +19,6 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 # File paths
 BASE_DIR = os.path.dirname(__file__)
 CSV_PATH = os.path.join(BASE_DIR, "road_endpoints_reduced.csv")
-GEOJSON_PATH = os.path.join(BASE_DIR, "coastal_route_result.geojson")
 
 # Load road endpoints
 try:
@@ -29,14 +28,6 @@ try:
 except Exception as e:
     print("❌ CSV 로딩 오류:", str(e))
     road_points = pd.DataFrame(columns=['x', 'y'])
-
-# Load coastline geojson
-try:
-    coast_gdf = gpd.read_file(GEOJSON_PATH).to_crs(epsg=5181)
-    print("✅ GeoJSON 파일 로딩 성공: coastal_route_result.geojson")
-except Exception as e:
-    print("❌ GeoJSON 파일 로딩 오류:", str(e))
-    coast_gdf = gpd.GeoDataFrame()
 
 poi_aliases = {
     "세종시청": "세종특별자치시 한누리대로 2130",
@@ -90,11 +81,7 @@ def geocode(address):
     print("➡️ NAVER 실패, Google 시도 중...")
     return geocode_google(address)
 
-def is_within_3km_of_coast(lat, lon):
-    point = gpd.GeoSeries([Point(lon, lat)], crs="EPSG:4326").to_crs(epsg=5181)
-    return coast_gdf.buffer(3000).contains(point.iloc[0]).any()
-
-def find_nearest_road_point(start, end):
+def find_valid_waypoint(start, end):
     start_lat, start_lon = start
     end_lat, end_lon = end
     use_lat = abs(start_lat - end_lat) > abs(start_lon - end_lon)
@@ -115,11 +102,14 @@ def find_nearest_road_point(start, end):
 
     candidates = candidates.sort_values("dist_to_end")
     for _, row in candidates.iterrows():
-        if is_within_3km_of_coast(row["y"], row["x"]):
-            print("📍 선택된 waypoint:", row["y"], row["x"])
-            return row["y"], row["x"]
+        waypoint = (row["y"], row["x"])
+        route_data, status = get_naver_route(start, waypoint, end)
+        if status == 200:
+            print("✅ 연결 가능한 웨이포인트:", waypoint)
+            return waypoint
+        else:
+            print("❌ 연결 불가 웨이포인트:", waypoint)
 
-    print("❌ 조건 만족하는 waypoint 없음")
     return None
 
 def get_naver_route(start, waypoint, end):
@@ -179,9 +169,9 @@ def route():
         if not start or not end:
             return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
-        waypoint = find_nearest_road_point(start, end)
+        waypoint = find_valid_waypoint(start, end)
         if not waypoint:
-            return jsonify({"error": "❌ 경유지 탐색 실패"}), 500
+            return jsonify({"error": "❌ 연결 가능한 웨이포인트 탐색 실패"}), 500
 
         route_data, status = get_naver_route(start, waypoint, end)
         if "error" in route_data:
