@@ -14,6 +14,7 @@ app = Flask(__name__)
 # API keys
 NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 # File paths
 BASE_DIR = os.path.dirname(__file__)
@@ -37,6 +38,13 @@ except Exception as e:
     print("❌ GeoJSON 파일 로딩 오류:", str(e))
     coast_gdf = gpd.GeoDataFrame()
 
+poi_aliases = {
+    "세종시청": "세종특별자치시 한누리대로 2130",
+    "속초시청": "강원도 속초시 중앙로 183",
+    "서울역": "서울특별시 중구 한강대로 405",
+    "대전역": "대전광역시 동구 중앙로 215"
+}
+
 def haversine(lat1, lon1, lat2, lon2):
     from math import radians, cos, sin, asin, sqrt
     R = 6371
@@ -46,6 +54,7 @@ def haversine(lat1, lon1, lat2, lon2):
     return 2 * R * asin(sqrt(a))
 
 def geocode_naver(address):
+    address = poi_aliases.get(address, address)
     url = "https://naveropenapi.apigw.ntruss.com/map-geocode/v2/geocode"
     headers = {
         "X-NCP-APIGW-API-KEY-ID": NAVER_CLIENT_ID,
@@ -62,6 +71,24 @@ def geocode_naver(address):
     except:
         print("❌ NAVER 주소 변환 실패:", address)
         return None
+
+def geocode_google(address):
+    url = "https://maps.googleapis.com/maps/api/geocode/json"
+    res = requests.get(url, params={"address": address, "key": GOOGLE_API_KEY})
+    try:
+        location = res.json()["results"][0]["geometry"]["location"]
+        print("📍 Google 주소 변환 성공:", address, "→", location)
+        return location["lat"], location["lng"]
+    except:
+        print("❌ Google 주소 변환 실패:", address)
+        return None
+
+def geocode(address):
+    result = geocode_naver(address)
+    if result:
+        return result
+    print("➡️ NAVER 실패, Google 시도 중...")
+    return geocode_google(address)
 
 def is_within_3km_of_coast(lat, lon):
     point = gpd.GeoSeries([Point(lon, lat)], crs="EPSG:4326").to_crs(epsg=5181)
@@ -82,7 +109,6 @@ def find_nearest_road_point(start, end):
         direction = lambda row: (end_lat - start_lat) * (row["y"] - start_lat) > 0
 
     candidates = candidates[candidates.apply(direction, axis=1)]
-
     candidates["dist_to_end"] = candidates.apply(
         lambda row: haversine(row["y"], row["x"], end_lat, end_lon), axis=1
     )
@@ -97,7 +123,6 @@ def find_nearest_road_point(start, end):
     return None
 
 def get_naver_route(start, waypoint, end):
-    # 이 부분은 필요시 Naver Directions API로 대체 가능
     return {"message": "경로 계산은 구현 필요"}, 501
 
 @app.route("/")
@@ -108,8 +133,8 @@ def index():
 def route():
     try:
         data = request.get_json()
-        start = geocode_naver(data.get("start"))
-        end = geocode_naver(data.get("end"))
+        start = geocode(data.get("start"))
+        end = geocode(data.get("end"))
         if not start or not end:
             return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
