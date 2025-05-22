@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import pandas as pd
 import requests
@@ -11,8 +11,12 @@ CORS(app)
 NAVER_CLIENT_ID = "vsdzf1f4n5"
 NAVER_CLIENT_SECRET = "0gzctO51PUTVv0gUZU025JYNHPTmVzLS9sGbfYBM"
 
-# 해안도로 종점 데이터 불러오기
+# 해안 도로 종점 데이터 로딩
 road_df = pd.read_csv("road_endpoints_reduced.csv", encoding="utf-8-sig")
+
+@app.route("/", methods=["GET"])
+def home():
+    return "<h2>✅ Coastal Drive Flask 서버 작동 중</h2><p>POST /route 엔드포인트를 사용하세요.</p>"
 
 # NAVER 주소 → 좌표 변환
 def geocode_naver(address):
@@ -26,12 +30,12 @@ def geocode_naver(address):
     if res.status_code == 200:
         data = res.json()
         if data["addresses"]:
-            x = float(data["addresses"][0]["x"])
-            y = float(data["addresses"][0]["y"])
+            x = float(data["addresses"][0]["x"])  # 경도
+            y = float(data["addresses"][0]["y"])  # 위도
             return y, x
     return None
 
-# NAVER Directions API 호출
+# NAVER 경로 탐색 API
 def get_route(start, waypoint, end):
     url = "https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving"
     headers = {
@@ -45,20 +49,23 @@ def get_route(start, waypoint, end):
         "option": "trafast"
     }
     res = requests.get(url, headers=headers, params=params)
-    if res.status_code == 200:
+    if res.status_code == 200 and "route" in res.json():
         return res.json()
     return None
 
-# 가장 가까운 종점 찾기 (1km 이내)
-def find_nearest_road_point(origin):
-    origin_point = (origin[0], origin[1])
-    road_df["dist"] = road_df.apply(lambda row: geodesic(origin_point, (row["y"], row["x"])).meters, axis=1)
-    candidates = road_df[road_df["dist"] <= 1000].sort_values(by="dist")
+# 웨이포인트 후보 중 도로 연결 가능하고 해안 3km 이내인 가장 가까운 지점 찾기
+def find_nearest_coastal_waypoint(origin):
+    origin_point = (origin[0], origin[1])  # (lat, lon)
+    road_df["distance"] = road_df.apply(
+        lambda row: geodesic(origin_point, (row["y"], row["x"])).meters, axis=1
+    )
+    candidates = road_df[road_df["distance"] <= 3000].sort_values(by="distance")
+
     for _, row in candidates.iterrows():
-        candidate_point = (row["y"], row["x"])
-        test_route = get_route(origin, candidate_point, origin)  # 출발지→해안→출발지 (테스트용)
-        if test_route is not None and test_route.get("route"):
-            return candidate_point
+        waypoint = (row["y"], row["x"])
+        test = get_route(origin, waypoint, origin)
+        if test and "route" in test:
+            return waypoint
     return None
 
 @app.route("/route", methods=["POST"])
@@ -73,12 +80,12 @@ def route():
     if not start_coord or not end_coord:
         return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
-    coast_point = find_nearest_road_point(start_coord)
-    if not coast_point:
-        return jsonify({"error": "❌ 해안지점 찾기 실패"}), 400
+    waypoint = find_nearest_coastal_waypoint(start_coord)
+    if not waypoint:
+        return jsonify({"error": "❌ 웨이포인트 탐색 실패"}), 400
 
-    result = get_route(start_coord, coast_point, end_coord)
-    if not result or not result.get("route"):
+    result = get_route(start_coord, waypoint, end_coord)
+    if not result:
         return jsonify({"error": "❌ 경로 요청 실패"}), 500
 
     return jsonify(result)
