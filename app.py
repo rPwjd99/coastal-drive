@@ -123,7 +123,48 @@ def find_nearest_road_point(start, end):
     return None
 
 def get_naver_route(start, waypoint, end):
-    return {"message": "경로 계산은 구현 필요"}, 501
+    def build_route(api_version):
+        url = f"https://naveropenapi.apigw.ntruss.com/map-direction/v{api_version}/driving"
+        headers = {
+            "X-NCP-APIGW-API-KEY-ID": NAVER_CLIENT_ID,
+            "X-NCP-APIGW-API-KEY": NAVER_CLIENT_SECRET
+        }
+        params = {
+            "start": f"{start[1]},{start[0]}",
+            "goal": f"{end[1]},{end[0]}",
+            "waypoints": f"{waypoint[1]},{waypoint[0]}",
+            "option": "trafast"
+        }
+        return requests.get(url, headers=headers, params=params)
+
+    res = build_route(1)
+    if res.status_code != 200:
+        print("⚠️ Directions v1 실패, v15 시도 중...")
+        res = build_route(15)
+
+    print("📡 NAVER 응답코드:", res.status_code)
+    try:
+        data = res.json()
+        if "route" in data and "trafast" in data["route"]:
+            path = data["route"]["trafast"][0]["path"]
+            geojson = {
+                "type": "FeatureCollection",
+                "features": [{
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": [[lon, lat] for lat, lon in path]
+                    },
+                    "properties": {
+                        "summary": data["route"]["trafast"][0]["summary"]
+                    }
+                }]
+            }
+            return geojson, 200
+        else:
+            return {"error": "NAVER 응답에 route 데이터 없음"}, 500
+    except Exception as e:
+        return {"error": str(e)}, 500
 
 @app.route("/")
 def index():
