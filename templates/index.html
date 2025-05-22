@@ -1,97 +1,108 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8">
   <title>바다따라: 해안도로 감성 드라이브</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
   <style>
-    body { font-family: sans-serif; margin: 0; padding: 0; }
+    body { margin: 0; font-family: Arial, sans-serif; }
     #map { width: 100vw; height: 90vh; }
     #controls {
-      display: flex;
       padding: 10px;
+      background: #f9f9f9;
+      display: flex;
       gap: 10px;
-      background: #f4f4f4;
       align-items: center;
+      border-bottom: 1px solid #ddd;
     }
     input[type="text"] {
-      padding: 5px;
+      padding: 8px;
       width: 250px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
     }
     button {
-      padding: 6px 14px;
-      background: #0078d4;
+      padding: 8px 14px;
+      background-color: #0078d4;
       color: white;
       border: none;
+      border-radius: 4px;
       cursor: pointer;
-      border-radius: 5px;
     }
     button:hover {
-      background: #005fa3;
+      background-color: #005fa3;
     }
   </style>
 </head>
 <body>
-  <div id="controls">
-    <input id="start" type="text" placeholder="출발지 주소 입력" />
-    <input id="end" type="text" placeholder="도착지 주소 입력" />
-    <button onclick="getRoute()">🚗 경로 검색</button>
-  </div>
-  <div id="map"></div>
 
-  <script>
-    const map = new ol.Map({
-      target: 'map',
-      layers: [
-        new ol.layer.Tile({
-          source: new ol.source.OSM()
-        })
-      ],
-      view: new ol.View({
-        center: ol.proj.fromLonLat([127.7669, 35.9078]), // 한국 중심
-        zoom: 7
-      })
+<div id="controls">
+  <input type="text" id="start" placeholder="출발지 주소 (예: 세종시청)">
+  <input type="text" id="end" placeholder="도착지 주소 (예: 속초시청)">
+  <button onclick="getRoute()">🚗 경로 검색</button>
+</div>
+
+<div id="map"></div>
+
+<script>
+  const map = new ol.Map({
+    target: 'map',
+    layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
+    view: new ol.View({
+      center: ol.proj.fromLonLat([127.7669, 35.9078]), // 대한민국 중심
+      zoom: 7
+    })
+  });
+
+  let routeLayer = null;
+
+  async function getRoute() {
+    const start = document.getElementById("start").value.trim();
+    const end = document.getElementById("end").value.trim();
+
+    if (!start || !end) {
+      alert("출발지와 도착지를 모두 입력해주세요.");
+      return;
+    }
+
+    const res = await fetch("https://coastal-drive.onrender.com/route", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ start, end })
     });
 
-    let routeLayer = null;
+    if (!res.ok) {
+      const err = await res.json();
+      alert("❌ 경로 요청 실패: " + (err.error || "알 수 없는 오류"));
+      return;
+    }
 
-    async function getRoute() {
-      const start = document.getElementById('start').value.trim();
-      const end = document.getElementById('end').value.trim();
+    const data = await res.json();
+    const path = data.route.trafast[0].path;
 
-      if (!start || !end) {
-        alert('출발지와 도착지를 모두 입력해주세요.');
-        return;
-      }
+    const coords = path.map(p => ol.proj.fromLonLat([p[0], p[1]]));
+    const line = new ol.geom.LineString(coords);
 
-      const res = await fetch("http://localhost:10000/route", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start, end })
-      });
+    const feature = new ol.Feature({ geometry: line });
+    feature.setStyle(new ol.style.Style({
+      stroke: new ol.style.Stroke({
+        color: '#ff6600',
+        width: 4
+      })
+    }));
 
-      if (!res.ok) {
-        const error = await res.json();
-        alert(error.error || "경로 계산 실패");
-        return;
-      }
+    if (routeLayer) map.removeLayer(routeLayer);
 
-      const data = await res.json();
-      const route = data.route.trafast[0].path;
+    routeLayer = new ol.layer.Vector({
+      source: new ol.source.Vector({ features: [feature] })
+    });
 
-      const coords = route.map(pt => ol.proj.fromLonLat([pt[0], pt[1]]));
+    map.addLayer(routeLayer);
+    map.getView().fit(line, { padding: [50, 50, 50, 50] });
+  }
+</script>
 
-      const routeFeature = new ol.Feature({
-        geometry: new ol.geom.LineString(coords),
-      });
-
-      routeFeature.setStyle(new ol.style.Style({
-        stroke: new ol.style.Stroke({
-          color: '#ff6600',
-          width: 4
-        })
-      }));
-
-      if (routeLayer) map.removeLayer(routeLayer);
+</body>
+</html>
