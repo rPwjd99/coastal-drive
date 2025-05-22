@@ -160,5 +160,5 @@ def route():
         return jsonify({"error": f"❌ 서버 내부 오류: {str(e)}"}), 500
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
+    port = int(os.environ.get("PORT", 5000))  # Render 환경에 맞게 수정
     app.run(host="0.0.0.0", port=port)
