@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <title>🌊 바다따라: 해안도로 감성 드라이브</title>
+  <meta charset="UTF-8">
+  <title>✨ 바다따라: 해안도로 감성 드라이브</title>
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
   <style>
@@ -25,86 +25,53 @@
       border: none;
       cursor: pointer;
     }
-    #error {
-      color: red;
-      margin-left: 12px;
-    }
   </style>
 </head>
 <body>
   <div id="controls">
-    <h3>🌊 바다따라: 해안도로 감성 드라이브</h3>
-    <input type="text" id="start" placeholder="출발지 주소" value="세종특별자치시 한누리대로 2130" />
-    <input type="text" id="end" placeholder="도착지 주소" value="강원도 속초시 중앙로 183" />
-    <button onclick="searchRoute()">🚗 경로 검색</button>
-    <span id="error"></span>
+    <input id="start" type="text" placeholder="출발지 입력 (예: 세종시청)" />
+    <input id="end" type="text" placeholder="도착지 입력 (예: 속초시청)" />
+    <button onclick="calculateRoute()">경로 검색</button>
   </div>
   <div id="map"></div>
 
   <script>
     const map = new ol.Map({
       target: 'map',
-      layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
-      view: new ol.View({
-        center: ol.proj.fromLonLat([127.5, 36.5]),
-        zoom: 7
-      })
+      layers: [
+        new ol.layer.Tile({ source: new ol.source.OSM() })
+      ],
+      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
     });
 
-    const routeLayer = new ol.layer.Vector({
-      source: new ol.source.Vector(),
-      style: new ol.style.Style({
-        stroke: new ol.style.Stroke({ color: 'blue', width: 4 })
+    let routeLayer;
+
+    function drawGeoJSON(geojson) {
+      if (routeLayer) map.removeLayer(routeLayer);
+      const format = new ol.format.GeoJSON();
+      const features = format.readFeatures(geojson, {
+        featureProjection: 'EPSG:3857'
+      });
+      routeLayer = new ol.layer.Vector({
+        source: new ol.source.Vector({ features })
+      });
+      map.addLayer(routeLayer);
+    }
+
+    function calculateRoute() {
+      const start = document.getElementById('start').value;
+      const end = document.getElementById('end').value;
+      fetch('/route', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start, end })
       })
-    });
-    map.addLayer(routeLayer);
-
-    async function searchRoute() {
-      const start = document.getElementById("start").value.trim();
-      const end = document.getElementById("end").value.trim();
-      const errorBox = document.getElementById("error");
-      errorBox.textContent = "";
-
-      if (!start || !end) {
-        errorBox.textContent = "⚠ 출발지와 도착지를 모두 입력하세요.";
-        return;
-      }
-
-      try {
-        const res = await fetch("/route", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ start, end })
-        });
-
-        const result = await res.json();
-
-        if (!res.ok || result.error) {
-          errorBox.textContent = result.error || "❌ 경로 탐색 실패";
-          return;
-        }
-
-        const geojson = new ol.format.GeoJSON();
-        const features = geojson.readFeatures(result, {
-          featureProjection: "EPSG:3857"
-        });
-
-        if (!features || features.length === 0) {
-          errorBox.textContent = "❌ 표시할 경로가 없습니다.";
-          return;
-        }
-
-        routeLayer.getSource().clear();
-        routeLayer.getSource().addFeatures(features);
-        map.getView().fit(routeLayer.getSource().getExtent(), {
-          padding: [30, 30, 30, 30],
-          duration: 1000
-        });
-
-      } catch (err) {
-        console.error("❌ 서버 오류:", err);
-        errorBox.textContent = "❌ 서버 연결 실패 또는 JSON 파싱 오류";
-      }
+      .then(res => res.json())
+      .then(data => {
+        if (data.features) drawGeoJSON(data);
+        else alert(data.error || '경로 계산 실패');
+      })
+      .catch(err => alert('서버 오류: ' + err));
     }
   </script>
 </body>
