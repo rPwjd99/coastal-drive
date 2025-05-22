@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>✨ 바다따라: 해안도로 감성 드라이브</title>
+  <title>🌊 바다따라: 해안도로 감성 드라이브</title>
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
   <style>
@@ -29,8 +29,8 @@
 </head>
 <body>
   <div id="controls">
-    <input id="start" type="text" placeholder="출발지 입력 (예: 세종시청)" />
-    <input id="end" type="text" placeholder="도착지 입력 (예: 속초시청)" />
+    <input id="start" type="text" placeholder="출발지 (도로명, 지번, 기관명 가능)" />
+    <input id="end" type="text" placeholder="도착지 (예: 속초시청, 서울역)" />
     <button onclick="calculateRoute()">경로 검색</button>
   </div>
   <div id="map"></div>
@@ -59,8 +59,14 @@
     }
 
     function calculateRoute() {
-      const start = document.getElementById('start').value;
-      const end = document.getElementById('end').value;
+      const start = document.getElementById('start').value.trim();
+      const end = document.getElementById('end').value.trim();
+
+      if (!start || !end) {
+        alert("출발지와 도착지를 모두 입력하세요.");
+        return;
+      }
+
       fetch('/route', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -69,9 +75,12 @@
       .then(res => res.json())
       .then(data => {
         if (data.features) drawGeoJSON(data);
-        else alert(data.error || '경로 계산 실패');
+        else alert(data.error || '경로 계산 실패. 도로가 연결되지 않았을 수 있습니다.');
       })
-      .catch(err => alert('서버 오류: ' + err));
+      .catch(err => {
+        alert('❌ 서버 오류 발생: ' + err.message);
+        console.error(err);
+      });
     }
   </script>
 </body>
