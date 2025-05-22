@@ -29,8 +29,8 @@
 </head>
 <body>
   <div id="controls">
-    <input id="start" type="text" placeholder="출발지 (도로명, 지번, 기관명 가능)" />
-    <input id="end" type="text" placeholder="도착지 (예: 속초시청, 서울역)" />
+    <input id="start" type="text" placeholder="출발지 (도로명/지번/기관명 가능)" />
+    <input id="end" type="text" placeholder="도착지 (예: 속초시청, 서울역 등)" />
     <button onclick="calculateRoute()">경로 검색</button>
   </div>
   <div id="map"></div>
@@ -56,6 +56,16 @@
         source: new ol.source.Vector({ features })
       });
       map.addLayer(routeLayer);
+
+      // 중심을 첫 좌표로 이동
+      if (features.length > 0) {
+        const coords = features[0].getGeometry().getCoordinates();
+        if (coords.length > 0) {
+          const center = ol.proj.fromLonLat(coords[0]);
+          map.getView().setCenter(center);
+          map.getView().setZoom(11);
+        }
+      }
     }
 
     function calculateRoute() {
