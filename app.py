@@ -8,9 +8,10 @@ load_dotenv()
 
 app = Flask(__name__)
 
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
-OCEANS_API_KEY = os.getenv("OCEANS_API_KEY")  # 해양수산부 API 인증키 (Decoding 형태)
+OCEANS_API_KEY = os.getenv("OCEANS_API_KEY")
 
 poi_aliases = {
     "세종시청": "세종특별자치시 한누리대로 2130",
@@ -26,23 +27,17 @@ def haversine(lat1, lon1, lat2, lon2):
     a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
     return 2 * R * asin(sqrt(a))
 
-def geocode_naver(address):
+def geocode_google(address):
     address = poi_aliases.get(address, address)
-    url = "https://naveropenapi.apigw.ntruss.com/map-geocode/v2/geocode"
-    headers = {
-        "X-NCP-APIGW-API-KEY-ID": NAVER_CLIENT_ID,
-        "X-NCP-APIGW-API-KEY": NAVER_CLIENT_SECRET
-    }
-    params = {"query": address}
-    res = requests.get(url, headers=headers, params=params)
+    url = "https://maps.googleapis.com/maps/api/geocode/json"
+    params = {"address": address, "key": GOOGLE_API_KEY}
+    res = requests.get(url, params=params)
     try:
-        item = res.json()["addresses"][0]
-        lat = float(item["y"])
-        lon = float(item["x"])
-        print("📍 NAVER 주소 변환 성공:", address, "→", lat, lon)
-        return lat, lon
+        location = res.json()["results"][0]["geometry"]["location"]
+        print("📍 Google 주소 변환 성공:", address, "→", location)
+        return location["lat"], location["lng"]
     except:
-        print("❌ NAVER 주소 변환 실패:", address)
+        print("❌ Google 주소 변환 실패:", address)
         return None
 
 def get_beaches():
@@ -140,8 +135,8 @@ def index():
 def route():
     try:
         data = request.get_json()
-        start = geocode_naver(data.get("start"))
-        end = geocode_naver(data.get("end"))
+        start = geocode_google(data.get("start"))
+        end = geocode_google(data.get("end"))
         if not start or not end:
             return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
@@ -160,5 +155,5 @@ def route():
         return jsonify({"error": f"❌ 서버 내부 오류: {str(e)}"}), 500
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))  # Render 환경에 맞게 수정
+    port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
