@@ -57,7 +57,7 @@
       });
       map.addLayer(routeLayer);
 
-      // 중심을 첫 좌표로 이동
+      // 중심 이동
       if (features.length > 0) {
         const coords = features[0].getGeometry().getCoordinates();
         if (coords.length > 0) {
@@ -85,10 +85,10 @@
       .then(res => res.json())
       .then(data => {
         if (data.features) drawGeoJSON(data);
-        else alert(data.error || '경로 계산 실패. 도로가 연결되지 않았을 수 있습니다.');
+        else alert(data.error || '경로 계산 실패. 도로 연결이 안되었을 수 있습니다.');
       })
       .catch(err => {
-        alert('❌ 서버 오류 발생: ' + err.message);
+        alert('❌ 서버 오류: ' + err.message);
         console.error(err);
       });
     }
