@@ -25,13 +25,16 @@
       border: none;
       cursor: pointer;
     }
+    button:hover {
+      background: #005fcc;
+    }
   </style>
 </head>
 <body>
   <div id="controls">
-    <input id="start" type="text" placeholder="출발지 (도로명/지번/기관명)" />
-    <input id="end" type="text" placeholder="도착지 (예: 속초시청, 강릉역 등)" />
-    <button onclick="calculateRoute()">경로 검색</button>
+    <input type="text" id="start" placeholder="출발지 (예: 세종시청)" />
+    <input type="text" id="end" placeholder="도착지 (예: 속초시청)" />
+    <button onclick="searchRoute()">🚗 경로 검색</button>
   </div>
   <div id="map"></div>
 
@@ -41,53 +44,57 @@
       layers: [
         new ol.layer.Tile({ source: new ol.source.OSM() })
       ],
-      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
+      view: new ol.View({
+        center: ol.proj.fromLonLat([127.5, 36.2]),
+        zoom: 7
+      })
     });
 
     let routeLayer;
 
-    function drawGeoJSON(geojson) {
-      if (routeLayer) map.removeLayer(routeLayer);
-      const format = new ol.format.GeoJSON();
-      const features = format.readFeatures(geojson, {
-        featureProjection: 'EPSG:3857'
-      });
-      routeLayer = new ol.layer.Vector({
-        source: new ol.source.Vector({ features })
-      });
-      map.addLayer(routeLayer);
-
-      if (features.length > 0) {
-        const coords = features[0].getGeometry().getCoordinates();
-        if (coords.length > 0) {
-          const center = coords[Math.floor(coords.length / 2)];
-          map.getView().setCenter(center);
-          map.getView().setZoom(11);
-        }
-      }
-    }
-
-    function calculateRoute() {
-      const start = document.getElementById('start').value.trim();
-      const end = document.getElementById('end').value.trim();
-
+    function searchRoute() {
+      const start = document.getElementById("start").value;
+      const end = document.getElementById("end").value;
       if (!start || !end) {
-        alert("출발지와 도착지를 모두 입력하세요.");
+        alert("출발지와 도착지를 입력해주세요.");
         return;
       }
 
-      fetch('/route', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      fetch("/route", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ start, end })
       })
       .then(res => res.json())
       .then(data => {
-        if (data.features) drawGeoJSON(data);
-        else alert(data.error || '경로 계산 실패. 도로 연결이 불가능할 수 있습니다.');
+        if (data.error) {
+          alert(data.error);
+          return;
+        }
+
+        if (routeLayer) map.removeLayer(routeLayer);
+
+        const route = new ol.format.GeoJSON().readFeatures(data, {
+          featureProjection: "EPSG:3857"
+        });
+
+        routeLayer = new ol.layer.Vector({
+          source: new ol.source.Vector({ features: route }),
+          style: new ol.style.Style({
+            stroke: new ol.style.Stroke({
+              color: '#0078ff',
+              width: 4
+            })
+          })
+        });
+
+        map.addLayer(routeLayer);
+
+        const extent = routeLayer.getSource().getExtent();
+        map.getView().fit(extent, { padding: [40, 40, 40, 40] });
       })
       .catch(err => {
-        alert('❌ 서버 오류 발생: ' + err.message);
+        alert("❌ 경로 요청 실패");
         console.error(err);
       });
     }
