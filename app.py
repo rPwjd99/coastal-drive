@@ -36,8 +36,8 @@ def geocode_google(address):
         location = res.json()["results"][0]["geometry"]["location"]
         print("📍 Google 주소 변환 성공:", address, "→", location)
         return location["lat"], location["lng"]
-    except:
-        print("❌ Google 주소 변환 실패:", address)
+    except Exception as e:
+        print(f"❌ Google 주소 변환 실패: {address} / {e}")
         return None
 
 def get_beaches():
@@ -133,27 +133,34 @@ def index():
 
 @app.route("/route", methods=["POST"])
 def route():
+    print("✅ /route 요청 수신됨")
     try:
         data = request.get_json()
+        print("📦 받은 데이터:", data)
+
         start = geocode_google(data.get("start"))
         end = geocode_google(data.get("end"))
         if not start or not end:
+            print("❌ 주소 변환 실패")
             return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
         beaches = get_beaches()
         waypoint = find_waypoint_from_beaches(start, end, beaches)
         if not waypoint:
+            print("❌ 연결 가능한 해수욕장 없음")
             return jsonify({"error": "❌ 연결 가능한 해수욕장 없음"}), 500
 
         route_data, status = get_naver_route(start, waypoint, end)
         if "error" in route_data:
+            print("❌ 경로 요청 실패:", route_data.get("error"))
             return jsonify({"error": f"❌ 경로 요청 실패: {route_data.get('error')}" }), status
 
+        print("✅ 경로 계산 성공")
         return jsonify(route_data)
     except Exception as e:
-        print("❌ 서버 오류:", str(e))
+        print("❌ 서버 내부 오류:", str(e))
         return jsonify({"error": f"❌ 서버 내부 오류: {str(e)}"}), 500
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))  # Railway에서는 기본값 5000이 일반적
+    port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
