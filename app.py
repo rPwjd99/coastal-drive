@@ -9,8 +9,8 @@ load_dotenv()
 app = Flask(__name__)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
-NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
+NAVER_CLIENT_ID = os.getenv("NAVER_API_KEY_ID")  # railway 환경변수명에 맞춤
+NAVER_CLIENT_SECRET = os.getenv("NAVER_API_KEY_SECRET")
 OCEANS_API_KEY = os.getenv("OCEANS_API_KEY")
 
 poi_aliases = {
