@@ -9,7 +9,7 @@ load_dotenv()
 app = Flask(__name__)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-NAVER_CLIENT_ID = os.getenv("NAVER_API_KEY_ID")  # railway 환경변수명에 맞춤
+NAVER_CLIENT_ID = os.getenv("NAVER_API_KEY_ID")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_API_KEY_SECRET")
 OCEANS_API_KEY = os.getenv("OCEANS_API_KEY")
 
@@ -155,5 +155,5 @@ def route():
         return jsonify({"error": f"❌ 서버 내부 오류: {str(e)}"}), 500
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 5000))  # Railway에서는 기본값 5000이 일반적
     app.run(host="0.0.0.0", port=port)
