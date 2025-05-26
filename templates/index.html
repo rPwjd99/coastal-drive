@@ -1,40 +1,43 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8">
-  <title>🌊 바다따라: 해안도로 감성 드라이브</title>
+  <meta charset="UTF-8" />
+  <title>🌊 바다따라 Coastal Drive</title>
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
   <style>
-    body { margin: 0; font-family: sans-serif; }
-    #map { width: 100%; height: 90vh; }
+    body {
+      margin: 0;
+      font-family: sans-serif;
+    }
     #controls {
       padding: 10px;
-      background: #f7f7f7;
+      background: #f0f0f0;
       border-bottom: 1px solid #ccc;
     }
     input {
       width: 300px;
-      padding: 6px;
+      padding: 8px;
       margin-right: 8px;
     }
     button {
-      padding: 6px 12px;
-      background: #0078ff;
+      padding: 8px 16px;
+      background: #0077cc;
       color: white;
       border: none;
       cursor: pointer;
     }
-    button:hover {
-      background: #005fcc;
+    #map {
+      width: 100%;
+      height: 90vh;
     }
   </style>
 </head>
 <body>
   <div id="controls">
-    <input type="text" id="start" placeholder="출발지 (예: 세종시청)" />
-    <input type="text" id="end" placeholder="도착지 (예: 속초시청)" />
-    <button onclick="searchRoute()">🚗 경로 검색</button>
+    <input id="start" placeholder="출발지 예: 세종시청" />
+    <input id="end" placeholder="도착지 예: 속초시청" />
+    <button onclick="getRoute()">경로 탐색</button>
   </div>
   <div id="map"></div>
 
@@ -45,20 +48,16 @@
         new ol.layer.Tile({ source: new ol.source.OSM() })
       ],
       view: new ol.View({
-        center: ol.proj.fromLonLat([127.5, 36.2]),
+        center: ol.proj.fromLonLat([127.5, 36.3]),
         zoom: 7
       })
     });
 
-    let routeLayer;
+    let routeLayer = null;
 
-    function searchRoute() {
+    function getRoute() {
       const start = document.getElementById("start").value;
       const end = document.getElementById("end").value;
-      if (!start || !end) {
-        alert("출발지와 도착지를 입력해주세요.");
-        return;
-      }
 
       fetch("/route", {
         method: "POST",
@@ -74,24 +73,23 @@
 
         if (routeLayer) map.removeLayer(routeLayer);
 
-        const route = new ol.format.GeoJSON().readFeatures(data, {
-          featureProjection: "EPSG:3857"
+        const format = new ol.format.GeoJSON();
+        const features = format.readFeatures(data, {
+          featureProjection: 'EPSG:3857'
         });
 
         routeLayer = new ol.layer.Vector({
-          source: new ol.source.Vector({ features: route }),
+          source: new ol.source.Vector({ features }),
           style: new ol.style.Style({
             stroke: new ol.style.Stroke({
-              color: '#0078ff',
+              color: 'blue',
               width: 4
             })
           })
         });
 
         map.addLayer(routeLayer);
-
-        const extent = routeLayer.getSource().getExtent();
-        map.getView().fit(extent, { padding: [40, 40, 40, 40] });
+        map.getView().fit(routeLayer.getSource().getExtent(), { padding: [30, 30, 30, 30] });
       })
       .catch(err => {
         alert("❌ 경로 요청 실패");
