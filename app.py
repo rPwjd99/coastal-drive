@@ -54,7 +54,7 @@ def get_beaches():
         "resultType": "json"
     }
 
-    res = None  # 초기화
+    res = None
     try:
         res = requests.get(url, params=params, timeout=10)
         res.raise_for_status()
@@ -98,10 +98,18 @@ def find_waypoint_from_beaches(start, end, beaches):
     start_lat, start_lon = start
     end_lat, end_lon = end
     use_lat = abs(start_lat - end_lat) > abs(start_lon - end_lon)
+
+    # 1차 필터: ±0.1도 (약 11km)
     filtered = [b for b in beaches if abs((b['lat'] if use_lat else b['lon']) - (start_lat if use_lat else start_lon)) <= 0.1]
+
     if not filtered:
-        print("❌ 유사 해수욕장 없음")
+        print("⚠️ 유사 해수욕장 없음 → 전체 탐색으로 전환")
+        filtered = beaches
+
+    if not filtered:
+        print("❌ 해수욕장 데이터 자체 없음")
         return None
+
     filtered.sort(key=lambda b: haversine(start_lat, start_lon, b['lat'], b['lon']))
     wp = filtered[0]
     print("✅ 선택된 waypoint:", wp['name'], wp['lat'], wp['lon'])
@@ -175,7 +183,7 @@ def route():
         beaches = get_beaches()
         waypoint = find_waypoint_from_beaches(start, end, beaches)
         if not waypoint:
-            return jsonify({"error": "❌ 연결 가능한 해수욕장 없음"}), 500
+            return jsonify({"error": "❌ 해수욕장 검색 실패"}), 500
 
         route_data, status = get_naver_route(start, waypoint, end)
         if "error" in route_data:
