@@ -5,7 +5,6 @@ from math import radians, cos, sin, asin, sqrt
 from dotenv import load_dotenv
 
 load_dotenv()
-
 app = Flask(__name__)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -15,9 +14,7 @@ OCEANS_API_KEY = os.getenv("OCEANS_API_KEY")
 
 poi_aliases = {
     "세종시청": "세종특별자치시 한누리대로 2130",
-    "속초시청": "강원도 속초시 중앙로 183",
-    "서울역": "서울특별시 중구 한강대로 405",
-    "대전역": "대전광역시 동구 중앙로 215"
+    "속초시청": "강원도 속초시 중앙로 183"
 }
 
 def haversine(lat1, lon1, lat2, lon2):
@@ -33,11 +30,11 @@ def geocode_google(address):
     params = {"address": address, "key": GOOGLE_API_KEY}
     res = requests.get(url, params=params)
     try:
-        location = res.json()["results"][0]["geometry"]["location"]
-        print("📍 Google 주소 변환 성공:", address, "→", location)
-        return location["lat"], location["lng"]
+        result = res.json()["results"][0]["geometry"]["location"]
+        print("📍 주소 변환 성공:", result)
+        return result["lat"], result["lng"]
     except Exception as e:
-        print(f"❌ Google 주소 변환 실패: {address} / {e}")
+        print("❌ 주소 변환 실패:", res.text)
         return None
 
 def get_beaches():
@@ -61,7 +58,7 @@ def get_beaches():
         print(f"✅ 해수욕장 {len(beaches)}개 로딩 완료")
         return beaches
     except Exception as e:
-        print("❌ 해수욕장 데이터 로딩 실패:", e)
+        print("❌ 해수욕장 로딩 실패:", res.text)
         return []
 
 def find_waypoint_from_beaches(start, end, beaches):
@@ -75,17 +72,17 @@ def find_waypoint_from_beaches(start, end, beaches):
         filtered = [b for b in beaches if abs(b['lon'] - start_lon) <= 0.1]
 
     if not filtered:
-        print("❌ 유사 위도/경도 해수욕장 없음")
+        print("❌ 유사 해수욕장 없음")
         return None
 
     filtered.sort(key=lambda b: haversine(start_lat, start_lon, b['lat'], b['lon']))
     wp = filtered[0]
-    print("✅ 선택된 해수욕장 웨이포인트:", wp['name'], wp['lat'], wp['lon'])
+    print("✅ 선택된 waypoint:", wp['name'], wp['lat'], wp['lon'])
     return (wp['lat'], wp['lon'])
 
 def get_naver_route(start, waypoint, end):
-    def build_route(api_version):
-        url = f"https://naveropenapi.apigw.ntruss.com/map-direction/v{api_version}/driving"
+    def build(version):
+        url = f"https://naveropenapi.apigw.ntruss.com/map-direction/v{version}/driving"
         headers = {
             "X-NCP-APIGW-API-KEY-ID": NAVER_CLIENT_ID,
             "X-NCP-APIGW-API-KEY": NAVER_CLIENT_SECRET
@@ -98,17 +95,17 @@ def get_naver_route(start, waypoint, end):
         }
         return requests.get(url, headers=headers, params=params)
 
-    res = build_route(1)
+    res = build(1)
     if res.status_code != 200:
-        print("⚠️ v1 실패, v15 시도 중...")
-        res = build_route(15)
+        print("⚠️ NAVER v1 실패 → v15 시도")
+        res = build(15)
 
     print("📡 NAVER 응답코드:", res.status_code)
     try:
         data = res.json()
         if "route" in data and "trafast" in data["route"]:
             path = data["route"]["trafast"][0]["path"]
-            geojson = {
+            return {
                 "type": "FeatureCollection",
                 "features": [{
                     "type": "Feature",
@@ -116,12 +113,9 @@ def get_naver_route(start, waypoint, end):
                         "type": "LineString",
                         "coordinates": [[lon, lat] for lat, lon in path]
                     },
-                    "properties": {
-                        "summary": data["route"]["trafast"][0]["summary"]
-                    }
+                    "properties": {}
                 }]
-            }
-            return geojson, 200
+            }, 200
         else:
             return {"error": "NAVER 응답에 route 없음"}, 500
     except Exception as e:
@@ -136,31 +130,29 @@ def route():
     print("✅ /route 요청 수신됨")
     try:
         data = request.get_json()
-        print("📦 받은 데이터:", data)
+        print("📦 입력 데이터:", data)
 
         start = geocode_google(data.get("start"))
         end = geocode_google(data.get("end"))
         if not start or not end:
-            print("❌ 주소 변환 실패")
             return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
         beaches = get_beaches()
         waypoint = find_waypoint_from_beaches(start, end, beaches)
         if not waypoint:
-            print("❌ 연결 가능한 해수욕장 없음")
             return jsonify({"error": "❌ 연결 가능한 해수욕장 없음"}), 500
 
         route_data, status = get_naver_route(start, waypoint, end)
         if "error" in route_data:
-            print("❌ 경로 요청 실패:", route_data.get("error"))
-            return jsonify({"error": f"❌ 경로 요청 실패: {route_data.get('error')}" }), status
+            return jsonify({"error": f"❌ 경로 요청 실패: {route_data['error']}" }), status
 
-        print("✅ 경로 계산 성공")
+        print("✅ 경로 계산 완료")
         return jsonify(route_data)
+
     except Exception as e:
-        print("❌ 서버 내부 오류:", str(e))
+        print("❌ 서버 내부 오류 발생:", str(e))
         return jsonify({"error": f"❌ 서버 내부 오류: {str(e)}"}), 500
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
