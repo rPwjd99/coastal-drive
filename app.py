@@ -54,13 +54,13 @@ def get_beaches():
         "resultType": "json"
     }
 
+    res = None  # 초기화
     try:
-        res = requests.get(url, params=params)
+        res = requests.get(url, params=params, timeout=10)
         res.raise_for_status()
         json_data = res.json()
         print("🌊 해수욕장 응답 미리보기:", json_data)
 
-        # 구조 안전하게 접근
         items = (
             json_data.get("response", {})
             .get("body", {})
@@ -82,9 +82,16 @@ def get_beaches():
         print(f"✅ 해수욕장 {len(beaches)}개 로딩 완료")
         return beaches
 
+    except requests.exceptions.SSLError as ssl_err:
+        print("❌ SSL 오류 발생: 해수욕장 API 연결 불가:", ssl_err)
+        return []
     except Exception as e:
         print("❌ 해수욕장 API 실패:", str(e))
-        print("🔻 응답 내용:", res.text)
+        if res:
+            try:
+                print("🔻 응답 내용:", res.text)
+            except:
+                pass
         return []
 
 def find_waypoint_from_beaches(start, end, beaches):
