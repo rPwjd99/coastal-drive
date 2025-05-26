@@ -8,24 +8,30 @@
   <style>
     body {
       margin: 0;
-      font-family: sans-serif;
+      font-family: 'Noto Sans KR', sans-serif;
+      background: #ffffff;
     }
     #controls {
-      padding: 10px;
-      background: #f0f0f0;
+      padding: 12px;
+      background: #f9f9f9;
       border-bottom: 1px solid #ccc;
     }
     input {
-      width: 300px;
+      width: 280px;
       padding: 8px;
-      margin-right: 8px;
+      margin-right: 6px;
+      font-size: 14px;
     }
     button {
       padding: 8px 16px;
-      background: #0077cc;
+      background: #0078ff;
       color: white;
+      font-weight: bold;
       border: none;
       cursor: pointer;
+    }
+    button:hover {
+      background: #005ecb;
     }
     #map {
       width: 100%;
@@ -37,7 +43,7 @@
   <div id="controls">
     <input id="start" placeholder="출발지 예: 세종시청" />
     <input id="end" placeholder="도착지 예: 속초시청" />
-    <button onclick="getRoute()">경로 탐색</button>
+    <button onclick="getRoute()">🚗 경로 탐색</button>
   </div>
   <div id="map"></div>
 
@@ -48,7 +54,7 @@
         new ol.layer.Tile({ source: new ol.source.OSM() })
       ],
       view: new ol.View({
-        center: ol.proj.fromLonLat([127.5, 36.3]),
+        center: ol.proj.fromLonLat([127.5, 36.0]),
         zoom: 7
       })
     });
@@ -56,8 +62,13 @@
     let routeLayer = null;
 
     function getRoute() {
-      const start = document.getElementById("start").value;
-      const end = document.getElementById("end").value;
+      const start = document.getElementById("start").value.trim();
+      const end = document.getElementById("end").value.trim();
+
+      if (!start || !end) {
+        alert("출발지와 도착지를 모두 입력해주세요.");
+        return;
+      }
 
       fetch("/route", {
         method: "POST",
@@ -82,20 +93,30 @@
           source: new ol.source.Vector({ features }),
           style: new ol.style.Style({
             stroke: new ol.style.Stroke({
-              color: 'blue',
+              color: '#0077cc',
               width: 4
             })
           })
         });
 
         map.addLayer(routeLayer);
-        map.getView().fit(routeLayer.getSource().getExtent(), { padding: [30, 30, 30, 30] });
+        map.getView().fit(routeLayer.getSource().getExtent(), {
+          padding: [30, 30, 30, 30],
+          duration: 500
+        });
       })
       .catch(err => {
-        alert("❌ 경로 요청 실패");
+        alert("❌ 경로 요청 중 오류가 발생했습니다.");
         console.error(err);
       });
     }
+
+    // Enter 키로도 요청 가능하게
+    document.querySelectorAll('input').forEach(input => {
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') getRoute();
+      });
+    });
   </script>
 </body>
 </html>
