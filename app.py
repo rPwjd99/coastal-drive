@@ -4,19 +4,23 @@ from flask import Flask, request, jsonify, render_template
 from math import radians, cos, sin, asin, sqrt
 from dotenv import load_dotenv
 
+# 환경변수 로딩
 load_dotenv()
 app = Flask(__name__)
 
+# API 키
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 NAVER_CLIENT_ID = os.getenv("NAVER_API_KEY_ID")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_API_KEY_SECRET")
 OCEANS_API_KEY = os.getenv("OCEANS_API_KEY")
 
+# 별칭 처리
 poi_aliases = {
     "세종시청": "세종특별자치시 한누리대로 2130",
     "속초시청": "강원도 속초시 중앙로 183"
 }
 
+# 거리 계산
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371
     dlat = radians(lat2 - lat1)
@@ -24,6 +28,7 @@ def haversine(lat1, lon1, lat2, lon2):
     a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
     return 2 * R * asin(sqrt(a))
 
+# Google 주소 → 좌표
 def geocode_google(address):
     address = poi_aliases.get(address, address)
     url = "https://maps.googleapis.com/maps/api/geocode/json"
@@ -37,6 +42,7 @@ def geocode_google(address):
         print("❌ 주소 변환 실패:", res.text)
         return None
 
+# 해수욕장 좌표 로딩
 def get_beaches():
     url = "https://apis.data.go.kr/1192000/service/OceansBeachInfoService1/getOceansBeachInfo1"
     params = {
@@ -61,6 +67,7 @@ def get_beaches():
         print("❌ 해수욕장 로딩 실패:", res.text)
         return []
 
+# 시작지~도착지 기준 가장 가까운 해수욕장 계산
 def find_waypoint_from_beaches(start, end, beaches):
     start_lat, start_lon = start
     end_lat, end_lon = end
@@ -80,6 +87,7 @@ def find_waypoint_from_beaches(start, end, beaches):
     print("✅ 선택된 waypoint:", wp['name'], wp['lat'], wp['lon'])
     return (wp['lat'], wp['lon'])
 
+# 네이버 경로 API 호출
 def get_naver_route(start, waypoint, end):
     def build(version):
         url = f"https://naveropenapi.apigw.ntruss.com/map-direction/v{version}/driving"
@@ -107,24 +115,26 @@ def get_naver_route(start, waypoint, end):
             path = data["route"]["trafast"][0]["path"]
             return {
                 "type": "FeatureCollection",
-                "features": [{
+                "features": [ {
                     "type": "Feature",
                     "geometry": {
                         "type": "LineString",
                         "coordinates": [[lon, lat] for lat, lon in path]
                     },
                     "properties": {}
-                }]
+                } ]
             }, 200
         else:
             return {"error": "NAVER 응답에 route 없음"}, 500
     except Exception as e:
         return {"error": str(e)}, 500
 
+# 홈페이지 렌더링
 @app.route("/")
 def index():
     return render_template("index.html")
 
+# 경로 계산 요청
 @app.route("/route", methods=["POST"])
 def route():
     print("✅ /route 요청 수신됨")
@@ -153,6 +163,7 @@ def route():
         print("❌ 서버 내부 오류 발생:", str(e))
         return jsonify({"error": f"❌ 서버 내부 오류: {str(e)}"}), 500
 
+# 실행
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
