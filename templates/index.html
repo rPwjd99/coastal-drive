@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8">
-  <title>✨ 바다따라: 해안도로 감성 드라이브</title>
+  <meta charset="UTF-8" />
+  <title>🌊 바다따라: 해안도로 감성 드라이브</title>
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
   <style>
@@ -10,7 +10,7 @@
     #map { width: 100%; height: 90vh; }
     #controls {
       padding: 10px;
-      background: #f0f0f0;
+      background: #f7f7f7;
       border-bottom: 1px solid #ccc;
     }
     input {
@@ -25,66 +25,91 @@
       border: none;
       cursor: pointer;
     }
-    button:hover {
-      background: #005fcc;
-    }
   </style>
 </head>
 <body>
   <div id="controls">
-    <input type="text" id="origin" placeholder="출복지 (예: 세종시청)" />
-    <input type="text" id="destination" placeholder="목적지 (예: 속초시청)" />
-    <button onclick="getRoute()">경로 계산</button>
+    <input id="origin" placeholder="출발지 주소 (예: 세종시청)" />
+    <input id="destination" placeholder="도착지 주소 (예: 속초시청)" />
+    <button onclick="calculateRoute()">경로 계산</button>
   </div>
   <div id="map"></div>
 
+  <!-- Google Places Autocomplete API -->
+  <script src="https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_API_KEY&libraries=places"></script>
+
   <script>
+    const originInput = document.getElementById("origin");
+    const destinationInput = document.getElementById("destination");
+
+    new google.maps.places.Autocomplete(originInput);
+    new google.maps.places.Autocomplete(destinationInput);
+
     const map = new ol.Map({
-      target: 'map',
+      target: "map",
       layers: [
         new ol.layer.Tile({
-          source: new ol.source.OSM(),
+          source: new ol.source.OSM()
         })
       ],
       view: new ol.View({
-        center: ol.proj.fromLonLat([127.7669, 35.9078]),
+        center: ol.proj.fromLonLat([127.5, 36.4]),
         zoom: 7
       })
     });
 
-    let routeLayer;
+    let routeLayer = null;
 
-    function getRoute() {
-      const origin = document.getElementById('origin').value;
-      const destination = document.getElementById('destination').value;
+    async function calculateRoute() {
+      const origin = originInput.value.trim();
+      const destination = destinationInput.value.trim();
 
-      fetch('/route', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ origin, destination })
-      })
-      .then(response => response.json())
-      .then(data => {
-        if (routeLayer) map.removeLayer(routeLayer);
+      if (!origin || !destination) {
+        alert("🚧 출발지와 도착지를 모두 입력해주세요!");
+        return;
+      }
 
-        const coords = data.route.map(([lng, lat]) => ol.proj.fromLonLat([lng, lat]));
-
-        const feature = new ol.Feature({
-          geometry: new ol.geom.LineString(coords)
+      try {
+        const res = await fetch("http://127.0.0.1:5000/route", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ origin, destination })
         });
 
+        const result = await res.json();
+        if (!res.ok) {
+          throw new Error(result.error || "서버 오류");
+        }
+
+        const path = result.route.route.traoptimal[0].path;
+        const coords = path.map(([lon, lat]) => ol.proj.fromLonLat([lon, lat]));
+
+        if (routeLayer) map.removeLayer(routeLayer);
+
         routeLayer = new ol.layer.Vector({
-          source: new ol.source.Vector({ features: [feature] }),
+          source: new ol.source.Vector({
+            features: [new ol.Feature({ geometry: new ol.geom.LineString(coords) })]
+          }),
           style: new ol.style.Style({
-            stroke: new ol.style.Stroke({ color: 'blue', width: 4 })
+            stroke: new ol.style.Stroke({
+              color: "blue",
+              width: 4
+            })
           })
         });
 
         map.addLayer(routeLayer);
-        map.getView().fit(new ol.geom.LineString(coords), { padding: [50, 50, 50, 50] });
-      })
-      .catch(err => alert('경로 요청 중 오류가 발생했습니다.'));
+        map.getView().fit(new ol.geom.LineString(coords), {
+          padding: [50, 50, 50, 50],
+          maxZoom: 12
+        });
+
+        alert(`✅ ${result.waypoint.name} 해안 경유 경로가 생성되었습니다!`);
+      } catch (err) {
+        alert("❌ 경로 요청 실패: " + err.message);
+        console.error(err);
+      }
     }
   </script>
 </body>
-</html>
+</html
