@@ -21,10 +21,12 @@ def haversine(lat1, lon1, lat2, lon2):
 
 def geocode_google(address):
     url = "https://maps.googleapis.com/maps/api/geocode/json"
-    res = requests.get(url, params={"address": address, "key": GOOGLE_API_KEY})
+    params = {"address": address, "key": GOOGLE_API_KEY}
+    res = requests.get(url, params=params)
     try:
-        location = res.json()["results"][0]["geometry"]["location"]
-        return location["lat"], location["lng"]
+        result = res.json()["results"][0]
+        location = result["geometry"]["location"]
+        return round(location["lat"], 6), round(location["lng"], 6)
     except:
         return None
 
@@ -43,6 +45,10 @@ def find_best_beach_waypoint(start, end):
 
     for name, (lon, lat) in beach_coords.items():
         if not is_in_coastal_bounds(lat, lon):
+            continue
+
+        # 좌표 정밀도 오류 방지 및 중복 필터링: 동일 위경도 무시
+        if abs(start_lat - lat) < 0.0001 and abs(start_lon - lon) < 0.0001:
             continue
 
         # 위도 유사 + 목적지 방향
