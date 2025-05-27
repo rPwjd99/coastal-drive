@@ -1,49 +1,40 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <title>🌊 바다따라 Coastal Drive</title>
+  <meta charset="UTF-8">
+  <title>✨ 바다따라: 해안도로 감성 드라이브</title>
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
   <style>
-    body {
-      margin: 0;
-      font-family: 'Noto Sans KR', sans-serif;
-      background: #ffffff;
-    }
+    body { margin: 0; font-family: sans-serif; }
+    #map { width: 100%; height: 90vh; }
     #controls {
-      padding: 12px;
-      background: #f9f9f9;
+      padding: 10px;
+      background: #f0f0f0;
       border-bottom: 1px solid #ccc;
     }
     input {
       width: 280px;
-      padding: 8px;
-      margin-right: 6px;
-      font-size: 14px;
+      padding: 6px;
+      margin-right: 8px;
     }
     button {
-      padding: 8px 16px;
+      padding: 6px 12px;
       background: #0078ff;
       color: white;
-      font-weight: bold;
       border: none;
       cursor: pointer;
     }
     button:hover {
-      background: #005ecb;
-    }
-    #map {
-      width: 100%;
-      height: 90vh;
+      background: #005fcc;
     }
   </style>
 </head>
 <body>
   <div id="controls">
-    <input id="start" placeholder="출발지 예: 세종시청" />
-    <input id="end" placeholder="도착지 예: 속초시청" />
-    <button onclick="getRoute()">🚗 경로 탐색</button>
+    <input type="text" id="origin" placeholder="출복지 (예: 세종시청)" />
+    <input type="text" id="destination" placeholder="목적지 (예: 속초시청)" />
+    <button onclick="getRoute()">경로 계산</button>
   </div>
   <div id="map"></div>
 
@@ -51,72 +42,49 @@
     const map = new ol.Map({
       target: 'map',
       layers: [
-        new ol.layer.Tile({ source: new ol.source.OSM() })
+        new ol.layer.Tile({
+          source: new ol.source.OSM(),
+        })
       ],
       view: new ol.View({
-        center: ol.proj.fromLonLat([127.5, 36.0]),
+        center: ol.proj.fromLonLat([127.7669, 35.9078]),
         zoom: 7
       })
     });
 
-    let routeLayer = null;
+    let routeLayer;
 
     function getRoute() {
-      const start = document.getElementById("start").value.trim();
-      const end = document.getElementById("end").value.trim();
+      const origin = document.getElementById('origin').value;
+      const destination = document.getElementById('destination').value;
 
-      if (!start || !end) {
-        alert("출발지와 도착지를 모두 입력해주세요.");
-        return;
-      }
-
-      fetch("/route", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start, end })
+      fetch('/route', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ origin, destination })
       })
-      .then(res => res.json())
+      .then(response => response.json())
       .then(data => {
-        if (data.error) {
-          alert(data.error);
-          return;
-        }
-
         if (routeLayer) map.removeLayer(routeLayer);
 
-        const format = new ol.format.GeoJSON();
-        const features = format.readFeatures(data, {
-          featureProjection: 'EPSG:3857'
+        const coords = data.route.map(([lng, lat]) => ol.proj.fromLonLat([lng, lat]));
+
+        const feature = new ol.Feature({
+          geometry: new ol.geom.LineString(coords)
         });
 
         routeLayer = new ol.layer.Vector({
-          source: new ol.source.Vector({ features }),
+          source: new ol.source.Vector({ features: [feature] }),
           style: new ol.style.Style({
-            stroke: new ol.style.Stroke({
-              color: '#0077cc',
-              width: 4
-            })
+            stroke: new ol.style.Stroke({ color: 'blue', width: 4 })
           })
         });
 
         map.addLayer(routeLayer);
-        map.getView().fit(routeLayer.getSource().getExtent(), {
-          padding: [30, 30, 30, 30],
-          duration: 500
-        });
+        map.getView().fit(new ol.geom.LineString(coords), { padding: [50, 50, 50, 50] });
       })
-      .catch(err => {
-        alert("❌ 경로 요청 중 오류가 발생했습니다.");
-        console.error(err);
-      });
+      .catch(err => alert('경로 요청 중 오류가 발생했습니다.'));
     }
-
-    // Enter 키로도 요청 가능하게
-    document.querySelectorAll('input').forEach(input => {
-      input.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') getRoute();
-      });
-    });
   </script>
 </body>
 </html>
