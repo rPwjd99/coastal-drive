@@ -11,6 +11,7 @@ app = Flask(__name__)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 ORS_API_KEY = os.getenv("ORS_API_KEY")
+TOURAPI_KEY = "e1tU33wjMx2nynKjH8yDBm/S4YNne6B8mpCOWtzMH9TSONF71XG/xAwPqyv1fANpgeOvbPY+Le+gM6cYCnWV8w=="
 
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371
@@ -82,6 +83,37 @@ def get_ors_route(start, waypoint, end):
     except Exception as e:
         return {"error": str(e)}, 500
 
+def search_tour_spots_along_route(geojson):
+    coords = geojson['features'][0]['geometry']['coordinates']
+    spots = []
+    seen_ids = set()
+    for lon, lat in coords[::10]:  # 간격을 두고 요청 수 줄이기
+        try:
+            url = "http://apis.data.go.kr/B551011/KorService1/locationBasedList1"
+            params = {
+                "serviceKey": TOURAPI_KEY,
+                "mapX": lon,
+                "mapY": lat,
+                "radius": 5000,
+                "listYN": "Y",
+                "arrange": "E",
+                "numOfRows": 10,
+                "pageNo": 1,
+                "MobileOS": "ETC",
+                "MobileApp": "SeaRoute",
+                "_type": "json"
+            }
+            res = requests.get(url, params=params)
+            items = res.json().get("response", {}).get("body", {}).get("items", {}).get("item", [])
+            for item in items:
+                content_id = item.get("contentid")
+                if content_id and content_id not in seen_ids:
+                    seen_ids.add(content_id)
+                    spots.append(item)
+        except:
+            continue
+    return spots
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -103,13 +135,16 @@ def route():
         if "error" in route_data:
             return jsonify({"error": route_data["error"]}), status
 
+        spots = search_tour_spots_along_route(route_data)
+
         return jsonify({
             "route": route_data,
             "waypoint": {
                 "name": waypoint[0],
                 "lat": waypoint[1],
                 "lon": waypoint[2]
-            }
+            },
+            "spots": spots or []
         })
     except Exception as e:
         return jsonify({"error": f"❌ 서버 오류: {str(e)}"}), 500
