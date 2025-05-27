@@ -35,16 +35,17 @@ def find_best_beach_waypoint(start, end):
     lon_candidates = []
 
     for name, (lon, lat) in beach_coords.items():
-        # 위도 기준 후보: 출발지와 위도 유사 + 목적지 방향
+        # 위도 유사 + 목적지 쪽 방향
         if abs(lat - start_lat) < 0.2 and (end_lon - start_lon) * (lon - start_lon) > 0:
             lat_candidates.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
-        # 경도 기준 후보: 출발지와 경도 유사 + 목적지 방향
+        # 경도 유사 + 목적지 쪽 방향
         if abs(lon - start_lon) < 0.2 and (end_lat - start_lat) * (lat - start_lat) > 0:
             lon_candidates.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
 
     if not lat_candidates and not lon_candidates:
         return None
 
+    # 도착지로부터 더 가까운 해수욕장 선택
     best_lat = min(lat_candidates, key=lambda x: x[3]) if lat_candidates else None
     best_lon = min(lon_candidates, key=lambda x: x[3]) if lon_candidates else None
 
