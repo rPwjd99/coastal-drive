@@ -1,8 +1,6 @@
 from flask import Flask, request, jsonify, render_template
 import os
 import requests
-import pandas as pd
-from math import radians, cos, sin, asin, sqrt
 from dotenv import load_dotenv
 from beaches_coordinates import beach_coords
 
@@ -14,6 +12,7 @@ ORS_API_KEY = os.getenv("ORS_API_KEY")
 TOURAPI_KEY = "e1tU33wjMx2nynKjH8yDBm/S4YNne6B8mpCOWtzMH9TSONF71XG/xAwPqyv1fANpgeOvbPY+Le+gM6cYCnWV8w=="
 
 def haversine(lat1, lon1, lat2, lon2):
+    from math import radians, cos, sin, asin, sqrt
     R = 6371
     dlat = radians(lat2 - lat1)
     dlon = radians(lon2 - lon1)
@@ -22,13 +21,20 @@ def haversine(lat1, lon1, lat2, lon2):
 
 def geocode_google(address):
     url = "https://maps.googleapis.com/maps/api/geocode/json"
-    params = {"address": address, "key": GOOGLE_API_KEY}
-    res = requests.get(url, params=params)
+    res = requests.get(url, params={"address": address, "key": GOOGLE_API_KEY})
     try:
         location = res.json()["results"][0]["geometry"]["location"]
         return location["lat"], location["lng"]
     except:
         return None
+
+def reverse_geocode_google(lat, lon):
+    url = "https://maps.googleapis.com/maps/api/geocode/json"
+    res = requests.get(url, params={"latlng": f"{lat},{lon}", "key": GOOGLE_API_KEY})
+    try:
+        return res.json()["results"][0]["formatted_address"]
+    except:
+        return "주소 불러오기 실패"
 
 def is_in_coastal_bounds(lat, lon):
     return (
@@ -40,17 +46,13 @@ def is_in_coastal_bounds(lat, lon):
 def find_best_beach_waypoint(start, end):
     start_lat, start_lon = start
     end_lat, end_lon = end
-    lat_candidates = []
-    lon_candidates = []
+    lat_candidates, lon_candidates = [], []
     for name, (lon, lat) in beach_coords.items():
-        if not is_in_coastal_bounds(lat, lon):
-            continue
+        if not is_in_coastal_bounds(lat, lon): continue
         if abs(lat - start_lat) < 0.2 and (end_lon - start_lon) * (lon - start_lon) > 0:
             lat_candidates.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
         if abs(lon - start_lon) < 0.2 and (end_lat - start_lat) * (lat - start_lat) > 0:
             lon_candidates.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
-    if not lat_candidates and not lon_candidates:
-        return None
     best_lat = min(lat_candidates, key=lambda x: x[3]) if lat_candidates else None
     best_lon = min(lon_candidates, key=lambda x: x[3]) if lon_candidates else None
     return best_lat if best_lat and (not best_lon or best_lat[3] < best_lon[3]) else best_lon
@@ -73,8 +75,7 @@ def get_ors_route(start, waypoint, end):
 
 def search_tour_spots_along_route(geojson):
     coords = geojson['features'][0]['geometry']['coordinates']
-    spots = []
-    seen_ids = set()
+    spots, seen_ids = [], set()
     for lon, lat in coords[::10]:
         try:
             url = "http://apis.data.go.kr/B551011/KorService1/locationBasedList1"
@@ -97,7 +98,14 @@ def search_tour_spots_along_route(geojson):
                 cid = item.get("contentid")
                 if cid and cid not in seen_ids:
                     seen_ids.add(cid)
-                    spots.append(item)
+                    spots.append({
+                        "title": item.get("title"),
+                        "addr1": item.get("addr1"),
+                        "mapx": item.get("mapx"),
+                        "mapy": item.get("mapy"),
+                        "firstimage": item.get("firstimage"),
+                        "homepage": item.get("homepage", "")
+                    })
         except:
             continue
     return spots
@@ -121,12 +129,14 @@ def route():
         if "error" in route_data:
             return jsonify({"error": route_data["error"]}), status
         spots = search_tour_spots_along_route(route_data)
+        waypoint_addr = reverse_geocode_google(waypoint[1], waypoint[2])
         return jsonify({
             "route": route_data,
             "waypoint": {
                 "name": waypoint[0],
                 "lat": waypoint[1],
-                "lon": waypoint[2]
+                "lon": waypoint[2],
+                "address": waypoint_addr
             },
             "spots": spots or []
         })
