@@ -46,6 +46,7 @@
     });
 
     let routeLayer = null;
+    let spotLayer = null;
 
     async function calculateRoute() {
       const start = document.getElementById("start").value.trim();
@@ -68,13 +69,12 @@
           throw new Error(result.error || "서버 오류 발생");
         }
 
-        const geojson = result.route;
-        const coords = geojson.features[0].geometry.coordinates.map(
+        // 경로 표시
+        const coords = result.route.features[0].geometry.coordinates.map(
           ([lon, lat]) => ol.proj.fromLonLat([lon, lat])
         );
 
         if (routeLayer) map.removeLayer(routeLayer);
-
         routeLayer = new ol.layer.Vector({
           source: new ol.source.Vector({
             features: [new ol.Feature({
@@ -85,14 +85,59 @@
             stroke: new ol.style.Stroke({ color: "blue", width: 4 })
           })
         });
-
         map.addLayer(routeLayer);
         map.getView().fit(new ol.geom.LineString(coords), {
           padding: [50, 50, 50, 50],
           maxZoom: 12
         });
 
-        alert(`✅ 경유 해안지점: ${result.waypoint.name} (${result.waypoint.lat}, ${result.waypoint.lon})`);
+        alert(`✅ 경유 해안지점: ${result.waypoint.name}`);
+
+        // 관광지 마커
+        if (spotLayer) map.removeLayer(spotLayer);
+        const features = result.spots.map(spot => {
+          const coord = ol.proj.fromLonLat([parseFloat(spot.mapx), parseFloat(spot.mapy)]);
+          const feature = new ol.Feature({ geometry: new ol.geom.Point(coord) });
+          feature.set("desc", `<b>${spot.title}</b><br>${spot.addr1 || "주소 없음"}`);
+          return feature;
+        });
+
+        const vectorSource = new ol.source.Vector({ features });
+        spotLayer = new ol.layer.Vector({
+          source: vectorSource,
+          style: new ol.style.Style({
+            image: new ol.style.Circle({
+              radius: 6,
+              fill: new ol.style.Fill({ color: "red" }),
+              stroke: new ol.style.Stroke({ color: "white", width: 1 })
+            })
+          })
+        });
+        map.addLayer(spotLayer);
+
+        // 팝업 설정
+        const overlay = new ol.Overlay({
+          element: document.createElement("div"),
+          autoPan: true,
+          offset: [0, -10]
+        });
+        map.addOverlay(overlay);
+
+        map.on("pointermove", function (evt) {
+          const feature = map.forEachFeatureAtPixel(evt.pixel, f => f);
+          const element = overlay.getElement();
+          if (feature && feature.get("desc")) {
+            element.innerHTML = feature.get("desc");
+            element.style.background = "white";
+            element.style.padding = "4px 8px";
+            element.style.border = "1px solid gray";
+            overlay.setPosition(evt.coordinate);
+            element.style.display = "block";
+            document.body.appendChild(element);
+          } else {
+            element.style.display = "none";
+          }
+        });
 
       } catch (err) {
         alert("❌ 경로 요청 실패: " + err.message);
