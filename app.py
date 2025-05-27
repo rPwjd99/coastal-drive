@@ -23,18 +23,18 @@ def geocode_google(address):
     url = "https://maps.googleapis.com/maps/api/geocode/json"
     params = {"address": address, "key": GOOGLE_API_KEY}
     res = requests.get(url, params=params)
+    result = res.json()
     try:
-        result = res.json()["results"][0]
-        location = result["geometry"]["location"]
-        return round(location["lat"], 6), round(location["lng"], 6)
+        location = result["results"][0]["geometry"]["location"]
+        return location["lat"], location["lng"]
     except:
         return None
 
 def is_in_coastal_bounds(lat, lon):
     return (
-        (35 <= lat <= 38 and 128 <= lon <= 131) or  # 동해
-        (33 <= lat <= 35 and 126 <= lon <= 129) or  # 남해
-        (34 <= lat <= 38 and 124 <= lon <= 126)     # 서해
+        (35 <= lat <= 38 and 128 <= lon <= 131) or  # 동해안
+        (33 <= lat <= 35 and 126 <= lon <= 129) or  # 남해안
+        (34 <= lat <= 38 and 124 <= lon <= 126)     # 서해안
     )
 
 def find_best_beach_waypoint(start, end):
@@ -46,16 +46,8 @@ def find_best_beach_waypoint(start, end):
     for name, (lon, lat) in beach_coords.items():
         if not is_in_coastal_bounds(lat, lon):
             continue
-
-        # 좌표 정밀도 오류 방지 및 중복 필터링: 동일 위경도 무시
-        if abs(start_lat - lat) < 0.0001 and abs(start_lon - lon) < 0.0001:
-            continue
-
-        # 위도 유사 + 목적지 방향
         if abs(lat - start_lat) < 0.2 and (end_lon - start_lon) * (lon - start_lon) > 0:
             lat_candidates.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
-
-        # 경도 유사 + 목적지 방향
         if abs(lon - start_lon) < 0.2 and (end_lat - start_lat) * (lat - start_lat) > 0:
             lon_candidates.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
 
@@ -70,6 +62,8 @@ def find_best_beach_waypoint(start, end):
     return best_lat or best_lon
 
 def get_ors_route(start, waypoint, end):
+    if not waypoint:
+        return {"error": "유효한 해안 경유지가 없습니다."}, 500
     url = "https://api.openrouteservice.org/v2/directions/driving-car/geojson"
     headers = {
         "Authorization": ORS_API_KEY,
@@ -103,7 +97,7 @@ def route():
 
         waypoint = find_best_beach_waypoint(start, end)
         if not waypoint:
-            return jsonify({"error": "❌ 해안 경유지 탐색 실패"}), 500
+            return jsonify({"error": "❌ 경유지 탐색 실패 - 유효한 해수욕장 없음"}), 500
 
         route_data, status = get_ors_route(start, waypoint, end)
         if "error" in route_data:
