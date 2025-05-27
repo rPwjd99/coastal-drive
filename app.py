@@ -12,7 +12,6 @@ app = Flask(__name__)
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 ORS_API_KEY = os.getenv("ORS_API_KEY")
 
-# Haversine distance
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371
     dlat = radians(lat2 - lat1)
@@ -20,7 +19,6 @@ def haversine(lat1, lon1, lat2, lon2):
     a = sin(dlat / 2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2)**2
     return 2 * R * asin(sqrt(a))
 
-# Google geocoding
 def geocode_google(address):
     url = "https://maps.googleapis.com/maps/api/geocode/json"
     res = requests.get(url, params={"address": address, "key": GOOGLE_API_KEY})
@@ -30,7 +28,6 @@ def geocode_google(address):
     except:
         return None
 
-# Find closest coastal waypoint
 def find_best_beach_waypoint(start, end):
     start_lat, start_lon = start
     end_lat, end_lon = end
@@ -38,10 +35,12 @@ def find_best_beach_waypoint(start, end):
     lon_candidates = []
 
     for name, (lon, lat) in beach_coords.items():
-        if abs(lat - start_lat) < 0.2:
-            lat_candidates.append((name, lat, lon, haversine(start_lat, start_lon, lat, lon)))
-        if abs(lon - start_lon) < 0.2:
-            lon_candidates.append((name, lat, lon, haversine(start_lat, start_lon, lat, lon)))
+        # 위도 기준 후보: 출발지와 위도 유사 + 목적지 방향
+        if abs(lat - start_lat) < 0.2 and (end_lon - start_lon) * (lon - start_lon) > 0:
+            lat_candidates.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
+        # 경도 기준 후보: 출발지와 경도 유사 + 목적지 방향
+        if abs(lon - start_lon) < 0.2 and (end_lat - start_lat) * (lat - start_lat) > 0:
+            lon_candidates.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
 
     if not lat_candidates and not lon_candidates:
         return None
@@ -53,7 +52,6 @@ def find_best_beach_waypoint(start, end):
         return best_lat if best_lat[3] < best_lon[3] else best_lon
     return best_lat or best_lon
 
-# ORS route
 def get_ors_route(start, waypoint, end):
     url = "https://api.openrouteservice.org/v2/directions/driving-car/geojson"
     headers = {
