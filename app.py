@@ -1,7 +1,7 @@
+from flask import Flask, request, jsonify, render_template
 import os
 import requests
 import pandas as pd
-from flask import Flask, request, jsonify, render_template
 from math import radians, cos, sin, asin, sqrt
 from dotenv import load_dotenv
 from beaches_coordinates import beach_coords
@@ -24,18 +24,17 @@ def geocode_google(address):
     url = "https://maps.googleapis.com/maps/api/geocode/json"
     params = {"address": address, "key": GOOGLE_API_KEY}
     res = requests.get(url, params=params)
-    result = res.json()
     try:
-        location = result["results"][0]["geometry"]["location"]
+        location = res.json()["results"][0]["geometry"]["location"]
         return location["lat"], location["lng"]
     except:
         return None
 
 def is_in_coastal_bounds(lat, lon):
     return (
-        (35 <= lat <= 38 and 128 <= lon <= 131) or  # 동해안
-        (33 <= lat <= 35 and 126 <= lon <= 129) or  # 남해안
-        (34 <= lat <= 38 and 124 <= lon <= 126)     # 서해안
+        (35 <= lat <= 38 and 128 <= lon <= 131) or
+        (33 <= lat <= 35 and 126 <= lon <= 129) or
+        (34 <= lat <= 38 and 124 <= lon <= 126)
     )
 
 def find_best_beach_waypoint(start, end):
@@ -43,7 +42,6 @@ def find_best_beach_waypoint(start, end):
     end_lat, end_lon = end
     lat_candidates = []
     lon_candidates = []
-
     for name, (lon, lat) in beach_coords.items():
         if not is_in_coastal_bounds(lat, lon):
             continue
@@ -51,25 +49,15 @@ def find_best_beach_waypoint(start, end):
             lat_candidates.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
         if abs(lon - start_lon) < 0.2 and (end_lat - start_lat) * (lat - start_lat) > 0:
             lon_candidates.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
-
     if not lat_candidates and not lon_candidates:
         return None
-
     best_lat = min(lat_candidates, key=lambda x: x[3]) if lat_candidates else None
     best_lon = min(lon_candidates, key=lambda x: x[3]) if lon_candidates else None
-
-    if best_lat and best_lon:
-        return best_lat if best_lat[3] < best_lon[3] else best_lon
-    return best_lat or best_lon
+    return best_lat if best_lat and (not best_lon or best_lat[3] < best_lon[3]) else best_lon
 
 def get_ors_route(start, waypoint, end):
-    if not waypoint:
-        return {"error": "유효한 해안 경유지가 없습니다."}, 500
     url = "https://api.openrouteservice.org/v2/directions/driving-car/geojson"
-    headers = {
-        "Authorization": ORS_API_KEY,
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": ORS_API_KEY, "Content-Type": "application/json"}
     body = {
         "coordinates": [
             [start[1], start[0]],
@@ -87,7 +75,7 @@ def search_tour_spots_along_route(geojson):
     coords = geojson['features'][0]['geometry']['coordinates']
     spots = []
     seen_ids = set()
-    for lon, lat in coords[::10]:  # 간격을 두고 요청 수 줄이기
+    for lon, lat in coords[::10]:
         try:
             url = "http://apis.data.go.kr/B551011/KorService1/locationBasedList1"
             params = {
@@ -106,9 +94,9 @@ def search_tour_spots_along_route(geojson):
             res = requests.get(url, params=params)
             items = res.json().get("response", {}).get("body", {}).get("items", {}).get("item", [])
             for item in items:
-                content_id = item.get("contentid")
-                if content_id and content_id not in seen_ids:
-                    seen_ids.add(content_id)
+                cid = item.get("contentid")
+                if cid and cid not in seen_ids:
+                    seen_ids.add(cid)
                     spots.append(item)
         except:
             continue
@@ -126,17 +114,13 @@ def route():
         end = geocode_google(data.get("end"))
         if not start or not end:
             return jsonify({"error": "❌ 주소 변환 실패"}), 400
-
         waypoint = find_best_beach_waypoint(start, end)
         if not waypoint:
-            return jsonify({"error": "❌ 경유지 탐색 실패 - 유효한 해수욕장 없음"}), 500
-
+            return jsonify({"error": "❌ 경유지 탐색 실패"}), 500
         route_data, status = get_ors_route(start, waypoint, end)
         if "error" in route_data:
             return jsonify({"error": route_data["error"]}), status
-
         spots = search_tour_spots_along_route(route_data)
-
         return jsonify({
             "route": route_data,
             "waypoint": {
