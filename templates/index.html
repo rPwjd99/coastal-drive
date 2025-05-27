@@ -1,25 +1,25 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8">
   <title>🌊 바다따라: 해안도로 감성 드라이브</title>
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
   <style>
     body { margin: 0; font-family: sans-serif; }
     #map { width: 100%; height: 90vh; }
     #controls {
       padding: 10px;
-      background: #f0f0f0;
+      background: #f7f7f7;
       border-bottom: 1px solid #ccc;
     }
     input {
-      width: 280px;
+      width: 300px;
       padding: 6px;
-      margin-right: 8px;
+      margin-right: 10px;
     }
     button {
-      padding: 6px 12px;
+      padding: 6px 14px;
       background: #0078ff;
       color: white;
       border: none;
@@ -29,27 +29,18 @@
 </head>
 <body>
   <div id="controls">
-    <input id="origin" placeholder="출발지 주소 (예: 세종시청)" />
-    <input id="destination" placeholder="도착지 주소 (예: 속초시청)" />
+    <input id="start" placeholder="출발지 (예: 세종시청)">
+    <input id="end" placeholder="도착지 (예: 속초시청)">
     <button onclick="calculateRoute()">경로 계산</button>
   </div>
   <div id="map"></div>
 
-  <!-- Google Places Autocomplete API -->
-  <script src="https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_API_KEY&libraries=places"></script>
-
   <script>
-    const originInput = document.getElementById("origin");
-    const destinationInput = document.getElementById("destination");
-
-    new google.maps.places.Autocomplete(originInput);
-    new google.maps.places.Autocomplete(destinationInput);
-
     const map = new ol.Map({
       target: "map",
       layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
       view: new ol.View({
-        center: ol.proj.fromLonLat([127.5, 36.4]),
+        center: ol.proj.fromLonLat([127.5, 36.5]),
         zoom: 7
       })
     });
@@ -57,11 +48,11 @@
     let routeLayer = null;
 
     async function calculateRoute() {
-      const origin = originInput.value.trim();
-      const destination = destinationInput.value.trim();
+      const start = document.getElementById("start").value.trim();
+      const end = document.getElementById("end").value.trim();
 
-      if (!origin || !destination) {
-        alert("🚧 출발지와 도착지를 모두 입력해주세요!");
+      if (!start || !end) {
+        alert("출발지와 도착지를 모두 입력하세요.");
         return;
       }
 
@@ -69,22 +60,26 @@
         const response = await fetch("/route", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ origin, destination })
+          body: JSON.stringify({ start, end })
         });
 
         const result = await response.json();
         if (!response.ok) {
-          throw new Error(result.error || "서버 오류");
+          throw new Error(result.error || "서버 오류 발생");
         }
 
-        const path = result.route.route.traoptimal[0].path;
-        const coords = path.map(([lon, lat]) => ol.proj.fromLonLat([lon, lat]));
+        const geojson = result.route;
+        const coords = geojson.features[0].geometry.coordinates.map(
+          ([lon, lat]) => ol.proj.fromLonLat([lon, lat])
+        );
 
         if (routeLayer) map.removeLayer(routeLayer);
 
         routeLayer = new ol.layer.Vector({
           source: new ol.source.Vector({
-            features: [new ol.Feature({ geometry: new ol.geom.LineString(coords) })]
+            features: [new ol.Feature({
+              geometry: new ol.geom.LineString(coords)
+            })]
           }),
           style: new ol.style.Style({
             stroke: new ol.style.Stroke({ color: "blue", width: 4 })
@@ -97,10 +92,11 @@
           maxZoom: 12
         });
 
-        alert(`✅ 경로 생성 완료\n🧭 해안지점: ${result.waypoint.name}`);
+        alert(`✅ 경유 해안지점: ${result.waypoint.name} (${result.waypoint.lat}, ${result.waypoint.lon})`);
+
       } catch (err) {
         alert("❌ 경로 요청 실패: " + err.message);
-        console.error("경로 오류:", err);
+        console.error(err);
       }
     }
   </script>
