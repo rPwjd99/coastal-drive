@@ -10,7 +10,7 @@
     #map { width: 100%; height: 90vh; }
     #controls {
       padding: 10px;
-      background: #f7f7f7;
+      background: #f0f0f0;
       border-bottom: 1px solid #ccc;
     }
     input {
@@ -47,11 +47,7 @@
 
     const map = new ol.Map({
       target: "map",
-      layers: [
-        new ol.layer.Tile({
-          source: new ol.source.OSM()
-        })
-      ],
+      layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
       view: new ol.View({
         center: ol.proj.fromLonLat([127.5, 36.4]),
         zoom: 7
@@ -70,14 +66,14 @@
       }
 
       try {
-        const res = await fetch("http://127.0.0.1:5000/route", {
+        const response = await fetch("/route", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ origin, destination })
         });
 
-        const result = await res.json();
-        if (!res.ok) {
+        const result = await response.json();
+        if (!response.ok) {
           throw new Error(result.error || "서버 오류");
         }
 
@@ -91,10 +87,7 @@
             features: [new ol.Feature({ geometry: new ol.geom.LineString(coords) })]
           }),
           style: new ol.style.Style({
-            stroke: new ol.style.Stroke({
-              color: "blue",
-              width: 4
-            })
+            stroke: new ol.style.Stroke({ color: "blue", width: 4 })
           })
         });
 
@@ -104,12 +97,12 @@
           maxZoom: 12
         });
 
-        alert(`✅ ${result.waypoint.name} 해안 경유 경로가 생성되었습니다!`);
+        alert(`✅ 경로 생성 완료\n🧭 해안지점: ${result.waypoint.name}`);
       } catch (err) {
         alert("❌ 경로 요청 실패: " + err.message);
-        console.error(err);
+        console.error("경로 오류:", err);
       }
     }
   </script>
 </body>
-</html
+</html>
