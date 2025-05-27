@@ -28,6 +28,13 @@ def geocode_google(address):
     except:
         return None
 
+def is_in_coastal_bounds(lat, lon):
+    return (
+        (35 <= lat <= 38 and 128 <= lon <= 131) or  # 동해
+        (33 <= lat <= 35 and 126 <= lon <= 129) or  # 남해
+        (34 <= lat <= 38 and 124 <= lon <= 126)     # 서해
+    )
+
 def find_best_beach_waypoint(start, end):
     start_lat, start_lon = start
     end_lat, end_lon = end
@@ -35,17 +42,20 @@ def find_best_beach_waypoint(start, end):
     lon_candidates = []
 
     for name, (lon, lat) in beach_coords.items():
-        # 위도 유사 + 목적지 쪽 방향
+        if not is_in_coastal_bounds(lat, lon):
+            continue
+
+        # 위도 유사 + 목적지 방향
         if abs(lat - start_lat) < 0.2 and (end_lon - start_lon) * (lon - start_lon) > 0:
             lat_candidates.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
-        # 경도 유사 + 목적지 쪽 방향
+
+        # 경도 유사 + 목적지 방향
         if abs(lon - start_lon) < 0.2 and (end_lat - start_lat) * (lat - start_lat) > 0:
             lon_candidates.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
 
     if not lat_candidates and not lon_candidates:
         return None
 
-    # 도착지로부터 더 가까운 해수욕장 선택
     best_lat = min(lat_candidates, key=lambda x: x[3]) if lat_candidates else None
     best_lon = min(lon_candidates, key=lambda x: x[3]) if lon_candidates else None
 
