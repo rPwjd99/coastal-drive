@@ -39,10 +39,7 @@
     const map = new ol.Map({
       target: "map",
       layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
-      view: new ol.View({
-        center: ol.proj.fromLonLat([127.5, 36.5]),
-        zoom: 7
-      })
+      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
     });
 
     let routeLayer = null;
@@ -52,7 +49,6 @@
     async function calculateRoute() {
       const start = document.getElementById("start").value.trim();
       const end = document.getElementById("end").value.trim();
-
       if (!start || !end) {
         alert("출발지와 도착지를 모두 입력하세요.");
         return;
@@ -70,7 +66,6 @@
           throw new Error(result.error || "서버 오류 발생");
         }
 
-        // 경로 표시
         const coords = result.route.features[0].geometry.coordinates.map(
           ([lon, lat]) => ol.proj.fromLonLat([lon, lat])
         );
@@ -78,51 +73,42 @@
         if (routeLayer) map.removeLayer(routeLayer);
         routeLayer = new ol.layer.Vector({
           source: new ol.source.Vector({
-            features: [new ol.Feature({
-              geometry: new ol.geom.LineString(coords)
-            })]
+            features: [new ol.Feature({ geometry: new ol.geom.LineString(coords) })]
           }),
           style: new ol.style.Style({
             stroke: new ol.style.Stroke({ color: "blue", width: 4 })
           })
         });
         map.addLayer(routeLayer);
-        map.getView().fit(new ol.geom.LineString(coords), {
-          padding: [50, 50, 50, 50],
-          maxZoom: 12
-        });
+        map.getView().fit(new ol.geom.LineString(coords), { padding: [50, 50, 50, 50], maxZoom: 12 });
 
-        alert(`✅ 경유 해안지점: ${result.waypoint.name}`);
+        alert(`✅ 경유 해안지점: ${result.waypoint.name}\n📍 ${result.waypoint.address}`);
 
-        // 관광지 마커 처리
         const spots = result.spots || [];
         if (spotLayer) map.removeLayer(spotLayer);
 
         const features = spots.map(spot => {
           const coord = ol.proj.fromLonLat([parseFloat(spot.mapx), parseFloat(spot.mapy)]);
           const feature = new ol.Feature({ geometry: new ol.geom.Point(coord) });
-          feature.set("desc", `<b>${spot.title}</b><br>${spot.addr1 || "주소 없음"}`);
+          const image = spot.firstimage ? `<img src="${spot.firstimage}" width="160"><br>` : "";
+          const homepage = spot.homepage ? `<br><a href='${spot.homepage}' target='_blank'>자세히 보기</a>` : "";
+          feature.set("desc", `
+            <b>${spot.title}</b><br>
+            ${image}
+            ${spot.addr1 || "주소 없음"}${homepage}`);
           return feature;
         });
 
         spotLayer = new ol.layer.Vector({
           source: new ol.source.Vector({ features }),
           style: new ol.style.Style({
-            image: new ol.style.Circle({
-              radius: 6,
-              fill: new ol.style.Fill({ color: "red" }),
-              stroke: new ol.style.Stroke({ color: "white", width: 1 })
-            })
+            image: new ol.style.Circle({ radius: 6, fill: new ol.style.Fill({ color: "red" }), stroke: new ol.style.Stroke({ color: "white", width: 1 }) })
           })
         });
         map.addLayer(spotLayer);
 
         if (!overlay) {
-          overlay = new ol.Overlay({
-            element: document.createElement("div"),
-            autoPan: true,
-            offset: [0, -10]
-          });
+          overlay = new ol.Overlay({ element: document.createElement("div"), autoPan: true, offset: [0, -10] });
           map.addOverlay(overlay);
         }
 
@@ -132,8 +118,10 @@
           if (feature && feature.get("desc")) {
             element.innerHTML = feature.get("desc");
             element.style.background = "white";
-            element.style.padding = "4px 8px";
+            element.style.padding = "6px 10px";
             element.style.border = "1px solid gray";
+            element.style.borderRadius = "6px";
+            element.style.boxShadow = "0 2px 5px rgba(0,0,0,0.3)";
             overlay.setPosition(evt.coordinate);
             element.style.display = "block";
             document.body.appendChild(element);
