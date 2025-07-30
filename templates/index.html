@@ -1,73 +1,34 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <title>바다따라: 해안도로 감성 드라이브 코스 추천</title>
+  <meta charset="UTF-8">
+  <title>해안도로 경로 안내</title>
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
   <style>
-    html, body { margin: 0; height: 100%; }
     #map { width: 100%; height: 90vh; }
-    #form { padding: 10px; }
-    .popup { background: white; padding: 5px; border: 1px solid gray; max-width: 300px; }
-    .popup img { max-width: 100%; height: auto; }
+    body { font-family: sans-serif; margin: 0; padding: 0; }
+    .search-bar { display: flex; padding: 10px; gap: 5px; }
+    input, button { padding: 8px; font-size: 14px; }
   </style>
 </head>
 <body>
-  <div id="form">
-    출발지: <input id="start" placeholder="예: 세종시청" />
-    도착지: <input id="end" placeholder="예: 속초시청" />
-    <button onclick="findRoute()">경로 탐색</button>
+  <div class="search-bar">
+    <input id="start" placeholder="출발지 예: 세종시청">
+    <input id="end" placeholder="도착지 예: 속초시청">
+    <button onclick="findRoute()">경로 찾기</button>
   </div>
   <div id="map"></div>
-
   <script>
     const map = new ol.Map({
       target: 'map',
       layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
-      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
+      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 8 })
     });
 
-    const routeLayer = new ol.layer.Vector({ source: new ol.source.Vector() });
-    const markerLayer = new ol.layer.Vector({ source: new ol.source.Vector() });
-    map.addLayer(routeLayer);
-    map.addLayer(markerLayer);
-
-    const popup = new ol.Overlay({
-      element: document.createElement("div"),
-      positioning: "bottom-center",
-      stopEvent: false,
-      offset: [0, -20]
-    });
-    map.addOverlay(popup);
-
-    map.on('click', function (evt) {
-      map.forEachFeatureAtPixel(evt.pixel, function (feature) {
-        const props = feature.getProperties();
-        if (props.type === 'spot' || props.type === 'restaurant') {
-          const el = popup.getElement();
-          const img = props.firstimage ? `<img src="${props.firstimage}"><br>` : '';
-          const html = `
-            <div class="popup">
-              <strong>${props.title}</strong><br>
-              ${img}
-              ${props.addr1}<br>
-              거리: ${props.distance}km<br>
-              ${props.overview || ''}<br>
-              ${props.parking || ''} ${props.usetime || ''}<br>
-              <a href="/tour_detail/${props.contentid}" target="_blank">상세보기</a>
-            </div>`;
-          el.innerHTML = html;
-          popup.setPosition(evt.coordinate);
-        }
-      });
-    });
+    let routeLayer = null;
 
     async function findRoute() {
-      routeLayer.getSource().clear();
-      markerLayer.getSource().clear();
-      popup.setPosition(undefined);
-
       const start = document.getElementById("start").value;
       const end = document.getElementById("end").value;
       const res = await fetch("/route", {
@@ -75,68 +36,72 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ start, end })
       });
+
       const data = await res.json();
+      if (!res.ok) return alert(data.error);
 
-      if (data.error) {
-        alert(data.error);
-        return;
-      }
+      if (routeLayer) map.removeLayer(routeLayer);
 
-      // 🛣️ 경로 표시 (readFeatures로 수정)
-      const format = new ol.format.GeoJSON();
-      const routeFeatures = format.readFeatures(data.route, {
-        dataProjection: 'EPSG:4326',
+      const route = new ol.format.GeoJSON().readFeatures(data.route, {
         featureProjection: 'EPSG:3857'
       });
-      routeLayer.getSource().addFeatures(routeFeatures);
-
-      // 📍 경유지 마커
-      const waypoint = new ol.Feature({
-        geometry: new ol.geom.Point(ol.proj.fromLonLat([data.waypoint.lon, data.waypoint.lat])),
-        title: data.waypoint.name || "경유지",
-        type: "waypoint"
-      });
-      waypoint.setStyle(new ol.style.Style({
-        image: new ol.style.Circle({
-          radius: 7,
-          fill: new ol.style.Fill({ color: 'green' }),
-          stroke: new ol.style.Stroke({ color: 'black', width: 1 })
+      routeLayer = new ol.layer.Vector({
+        source: new ol.source.Vector({ features: route }),
+        style: new ol.style.Style({
+          stroke: new ol.style.Stroke({ color: '#0066cc', width: 18 })
         })
-      }));
-      markerLayer.getSource().addFeature(waypoint);
-
-      // 📌 관광지 마커 (파란색)
-      data.spots.forEach(s => {
-        const marker = new ol.Feature({
-          geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(s.mapx), parseFloat(s.mapy)])),
-          ...s,
-          type: "spot"
-        });
-        marker.setStyle(new ol.style.Style({
-          image: new ol.style.Icon({
-            color: 'blue',
-            crossOrigin: 'anonymous',
-            src: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png'
-          })
-        }));
-        markerLayer.getSource().addFeature(marker);
       });
+      map.addLayer(routeLayer);
 
-      // 🍽️ 맛집 마커 (빨간색)
-      data.restaurants.forEach(r => {
-        const marker = new ol.Feature({
-          geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(r.mapx), parseFloat(r.mapy)])),
-          ...r,
-          type: "restaurant"
+      if (data.waypoint1) addMarker(data.waypoint1.lat, data.waypoint1.lon, "경유1: " + data.waypoint1.name, "green");
+      if (data.waypoint2) addMarker(data.waypoint2.lat, data.waypoint2.lon, "경유2: " + data.waypoint2.name, "green");
+      data.spots.forEach(s => addMarker(s.mapy, s.mapx, buildPopup(s, "관광지"), "blue"));
+      data.restaurants.forEach(r => addMarker(r.mapy, r.mapx, buildPopup(r, "맛집"), "red"));
+    }
+
+    function buildPopup(item, type) {
+      let popup = `<b>[${type}] ${item.title}</b><br>`;
+      if (item.firstimage) popup += `<img src="${item.firstimage}" width="150"><br>`;
+      if (item.addr1) popup += `주소: ${item.addr1}<br>`;
+      if (item.distance) popup += `경로에서 거리: ${item.distance}km<br>`;
+      if (item.usetime) popup += `이용시간: ${item.usetime}<br>`;
+      if (item.parking) popup += `주차정보: ${item.parking}<br>`;
+      if (item.overview) popup += `<small>${item.overview}</small>`;
+      return popup;
+    }
+
+    function addMarker(lat, lon, html, color) {
+      const el = document.createElement('div');
+      el.className = 'marker';
+      el.style.backgroundColor = color;
+      el.style.width = '14px';
+      el.style.height = '14px';
+      el.style.borderRadius = '50%';
+      el.style.border = '2px solid white';
+
+      const overlay = new ol.Overlay({
+        position: ol.proj.fromLonLat([lon, lat]),
+        positioning: 'center-center',
+        element: el,
+        stopEvent: false
+      });
+      map.addOverlay(overlay);
+
+      el.addEventListener('click', () => {
+        const popup = document.createElement('div');
+        popup.innerHTML = html;
+        popup.style.background = 'white';
+        popup.style.border = '1px solid gray';
+        popup.style.padding = '5px';
+        popup.style.maxWidth = '250px';
+
+        const popupOverlay = new ol.Overlay({
+          element: popup,
+          positioning: 'bottom-center',
+          position: ol.proj.fromLonLat([lon, lat])
         });
-        marker.setStyle(new ol.style.Style({
-          image: new ol.style.Icon({
-            color: 'red',
-            crossOrigin: 'anonymous',
-            src: 'https://maps.google.com/mapfiles/ms/icons/red-dot.png'
-          })
-        }));
-        markerLayer.getSource().addFeature(marker);
+        map.addOverlay(popupOverlay);
+        setTimeout(() => map.removeOverlay(popupOverlay), 15000);
       });
     }
   </script>
