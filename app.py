@@ -45,40 +45,73 @@ def is_in_coastal_bounds(lat, lon):
         (34 <= lat <= 38 and 124 <= lon <= 126)
     )
 
-def find_best_beach_waypoint(start, end):
+def find_two_beach_waypoints(start, end):
     start_lat, start_lon = start
     end_lat, end_lon = end
-    lat_candidates, lon_candidates = [], []
+    candidates = []
     for name, (lon, lat) in beach_coords.items():
         if not is_in_coastal_bounds(lat, lon):
             continue
-        if abs(lat - start_lat) < 0.2 and (end_lon - start_lon) * (lon - start_lon) > 0:
-            lat_candidates.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
-        if abs(lon - start_lon) < 0.2 and (end_lat - start_lat) * (lat - start_lat) > 0:
-            lon_candidates.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
-    best_lat = min(lat_candidates, key=lambda x: x[3]) if lat_candidates else None
-    best_lon = min(lon_candidates, key=lambda x: x[3]) if lon_candidates else None
-    return best_lat if best_lat and (not best_lon or best_lat[3] < best_lon[3]) else best_lon
+        if (abs(lat - start_lat) < 0.2 or abs(lon - start_lon) < 0.2) and (end_lat - start_lat) * (lat - start_lat) > 0 and (end_lon - start_lon) * (lon - start_lon) > 0:
+            dist = haversine(start_lat, start_lon, lat, lon)
+            candidates.append((name, lat, lon, dist))
+    candidates.sort(key=lambda x: x[3])
+    return candidates[:2] if len(candidates) >= 2 else (candidates + [None])[:2]
 
-def get_ors_route(start, waypoint, end):
+def get_ors_route_multi(start, wp1, wp2, end):
     url = "https://api.openrouteservice.org/v2/directions/driving-car/geojson"
     headers = {"Authorization": ORS_API_KEY, "Content-Type": "application/json"}
-    body = {
-        "coordinates": [
-            [start[1], start[0]],
-            [waypoint[2], waypoint[1]],
-            [end[1], end[0]]
-        ]
-    }
+    coordinates = [[start[1], start[0]]]
+    if wp1: coordinates.append([wp1[2], wp1[1]])
+    if wp2: coordinates.append([wp2[2], wp2[1]])
+    coordinates.append([end[1], end[0]])
+    body = {"coordinates": coordinates}
     res = requests.post(url, headers=headers, json=body, timeout=10)
     try:
         return res.json(), res.status_code
     except Exception as e:
         return {"error": str(e)}, 500
 
-def search_content_along_route(geojson, content_type_id=None):
+def get_detail_info(contentid):
+    url = "http://apis.data.go.kr/B551011/KorService1/detailCommon1"
+    params = {
+        "serviceKey": TOURAPI_KEY,
+        "MobileOS": "ETC",
+        "MobileApp": "SeaRoute",
+        "contentId": contentid,
+        "overviewYN": "Y",
+        "defaultYN": "Y",
+        "firstImageYN": "Y",
+        "addrinfoYN": "Y",
+        "mapinfoYN": "Y",
+        "usetimeYN": "Y",
+        "parkingYN": "Y",
+        "_type": "json"
+    }
+    try:
+        res = requests.get(url, params=params, timeout=5)
+        items = res.json().get("response", {}).get("body", {}).get("items", {}).get("item", [])
+        return items[0] if items else {}
+    except:
+        return {}
+
+def enrich_pois_with_details(pois):
+    enriched = []
+    for poi in pois:
+        detail = get_detail_info(poi["contentid"])
+        poi.update({
+            "overview": detail.get("overview"),
+            "usetime": detail.get("usetime"),
+            "parking": detail.get("parking"),
+            "homepage": detail.get("homepage"),
+            "firstimage": detail.get("firstimage", poi.get("firstimage"))
+        })
+        enriched.append(poi)
+    return enriched
+
+def search_tour_spots_along_route(geojson):
     coords = geojson['features'][0]['geometry']['coordinates']
-    results, seen_ids = [], set()
+    spots, seen_ids = [], set()
     for lon, lat in coords[::10]:
         try:
             url = "http://apis.data.go.kr/B551011/KorService1/locationBasedList1"
@@ -95,31 +128,63 @@ def search_content_along_route(geojson, content_type_id=None):
                 "MobileApp": "SeaRoute",
                 "_type": "json"
             }
-            if content_type_id:
-                params["contentTypeId"] = content_type_id
             res = requests.get(url, params=params, timeout=5)
             items = res.json().get("response", {}).get("body", {}).get("items", {}).get("item", [])
             for item in items:
                 cid = item.get("contentid")
                 if cid and cid not in seen_ids:
                     seen_ids.add(cid)
-                    results.append({
+                    spots.append({
                         "contentid": cid,
                         "title": item.get("title"),
                         "addr1": item.get("addr1"),
                         "mapx": item.get("mapx"),
                         "mapy": item.get("mapy"),
                         "firstimage": item.get("firstimage"),
-                        "homepage": item.get("homepage", ""),
                         "distance": round(haversine(lat, lon, float(item.get("mapy", lat)), float(item.get("mapx", lon))), 2)
                     })
         except:
             continue
-    return results
+    return enrich_pois_with_details(spots)
 
-@app.route("/")
-def index():
-    return render_template("index.html")
+def search_restaurants_along_route(geojson):
+    coords = geojson['features'][0]['geometry']['coordinates']
+    restaurants, seen_ids = [], set()
+    for lon, lat in coords[::10]:
+        try:
+            url = "http://apis.data.go.kr/B551011/KorService1/locationBasedList1"
+            params = {
+                "serviceKey": TOURAPI_KEY,
+                "mapX": lon,
+                "mapY": lat,
+                "radius": 10000,
+                "listYN": "Y",
+                "arrange": "E",
+                "numOfRows": 10,
+                "pageNo": 1,
+                "MobileOS": "ETC",
+                "MobileApp": "SeaRoute",
+                "_type": "json",
+                "contentTypeId": "39"
+            }
+            res = requests.get(url, params=params, timeout=5)
+            items = res.json().get("response", {}).get("body", {}).get("items", {}).get("item", [])
+            for item in items:
+                cid = item.get("contentid")
+                if cid and cid not in seen_ids:
+                    seen_ids.add(cid)
+                    restaurants.append({
+                        "contentid": cid,
+                        "title": item.get("title"),
+                        "addr1": item.get("addr1"),
+                        "mapx": item.get("mapx"),
+                        "mapy": item.get("mapy"),
+                        "firstimage": item.get("firstimage"),
+                        "distance": round(haversine(lat, lon, float(item.get("mapy", lat)), float(item.get("mapx", lon))), 2)
+                    })
+        except:
+            continue
+    return enrich_pois_with_details(restaurants)
 
 @app.route("/route", methods=["POST"])
 def route():
@@ -129,60 +194,29 @@ def route():
         end = geocode_google(data.get("end"))
         if not start or not end:
             return jsonify({"error": "❌ 주소 변환 실패"}), 400
-        waypoint = find_best_beach_waypoint(start, end)
-        if not waypoint:
+
+        wp1, wp2 = find_two_beach_waypoints(start, end)
+        if not wp1:
             return jsonify({"error": "❌ 경유지 탐색 실패"}), 500
-        route_data, status = get_ors_route(start, waypoint, end)
+
+        route_data, status = get_ors_route_multi(start, wp1, wp2, end)
         if "error" in route_data:
             return jsonify({"error": route_data["error"]}), status
-        spots = search_content_along_route(route_data)
-        restaurants = search_content_along_route(route_data, content_type_id="39")
-        waypoint_addr = reverse_geocode_google(waypoint[1], waypoint[2])
+
+        spots = search_tour_spots_along_route(route_data)
+        restaurants = search_restaurants_along_route(route_data)
+        wp1_addr = reverse_geocode_google(wp1[1], wp1[2]) if wp1 else ""
+        wp2_addr = reverse_geocode_google(wp2[1], wp2[2]) if wp2 else ""
+
         return jsonify({
             "route": route_data,
-            "waypoint": {
-                "name": waypoint[0],
-                "lat": waypoint[1],
-                "lon": waypoint[2],
-                "address": waypoint_addr
-            },
+            "waypoint1": {"name": wp1[0], "lat": wp1[1], "lon": wp1[2], "address": wp1_addr} if wp1 else None,
+            "waypoint2": {"name": wp2[0], "lat": wp2[1], "lon": wp2[2], "address": wp2_addr} if wp2 else None,
             "spots": spots or [],
             "restaurants": restaurants or []
         })
     except Exception as e:
         return jsonify({"error": f"❌ 서버 오류: {str(e)}"}), 500
-
-@app.route("/tour_detail/<contentid>")
-def tour_detail(contentid):
-    url = "http://apis.data.go.kr/B551011/KorService1/detailCommon1"
-    params = {
-        "serviceKey": TOURAPI_KEY,
-        "MobileOS": "ETC",
-        "MobileApp": "SeaRoute",
-        "contentId": contentid,
-        "overviewYN": "Y",
-        "defaultYN": "Y",
-        "firstImageYN": "Y",
-        "addrinfoYN": "Y",
-        "mapinfoYN": "Y",
-        "areacodeYN": "Y",
-        "catcodeYN": "Y",
-        "_type": "json"
-    }
-    try:
-        res = requests.get(url, params=params, timeout=5)
-        if res.status_code != 200:
-            return f"<h2>TourAPI 오류: {res.status_code}</h2>", 500
-
-        data = res.json()
-        item_list = data.get("response", {}).get("body", {}).get("items", {}).get("item", [])
-        if not item_list:
-            return f"<h2>❌ 관광지 정보가 없습니다.</h2><p>contentid: {contentid}</p>", 404
-
-        item = item_list[0]
-        return render_template("tour_detail.html", item=item)
-    except Exception as e:
-        return f"<h2>TourAPI 호출 중 오류 발생</h2><p>{str(e)}</p>", 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
