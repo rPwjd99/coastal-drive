@@ -162,19 +162,39 @@ def index():
 def route():
     try:
         data = request.get_json()
+        print("📥 [요청 받은 데이터]", data)
+
         start = geocode_google(data.get("start"))
         end = geocode_google(data.get("end"))
+        print("🧭 [변환된 좌표] start:", start, "end:", end)
+
         if not start or not end:
+            print("❌ 주소 변환 실패")
             return jsonify({"error": "❌ 주소 변환 실패"}), 400
+
         waypoint = find_best_beach_waypoint(start, end)
+        print("📍 [선택된 경유지]", waypoint)
+
         if not waypoint:
+            print("❌ 경유지 탐색 실패")
             return jsonify({"error": "❌ 경유지 탐색 실패"}), 500
+
         route_data, status = get_ors_route(start, waypoint, end)
+        print("🛣️ [ORS 응답 상태]", status)
+
         if "error" in route_data:
+            print("❌ ORS 오류:", route_data["error"])
             return jsonify({"error": route_data["error"]}), status
+
         spots = search_tour_spots_along_route(route_data)
+        print(f"🗺️ [관광지 개수]: {len(spots)}")
+
         restaurants = search_restaurants_along_route(route_data)
+        print(f"🍽️ [맛집 개수]: {len(restaurants)}")
+
         waypoint_addr = reverse_geocode_google(waypoint[1], waypoint[2])
+        print("📌 [경유지 주소]:", waypoint_addr)
+
         return jsonify({
             "route": route_data,
             "waypoint": {
@@ -186,7 +206,9 @@ def route():
             "spots": spots or [],
             "restaurants": restaurants or []
         })
+
     except Exception as e:
+        print("🔥 [서버 예외 발생]:", str(e))
         return jsonify({"error": f"❌ 서버 오류: {str(e)}"}), 500
 
 @app.route("/tour_detail/<contentid>")
