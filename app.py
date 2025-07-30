@@ -1,180 +1,113 @@
-from flask import Flask, request, jsonify, render_template
-import os
+from flask import Flask, render_template, request, jsonify
 import requests
+import os
 from dotenv import load_dotenv
-from beaches_coordinates import beach_coords
-from math import radians, cos, sin, asin, sqrt
 
-load_dotenv()
 app = Flask(__name__)
+load_dotenv()
 
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-ORS_API_KEY = os.getenv("ORS_API_KEY")
-TOURAPI_KEY = os.getenv("TOURAPI_KEY")
+TOUR_API_KEY = os.getenv("TOUR_API_KEY")  # 디코딩된 키
+NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
+NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 
-def haversine(lat1, lon1, lat2, lon2):
-    R = 6371
-    dlat = radians(lat2 - lat1)
-    dlon = radians(lon2 - lon1)
-    a = sin(dlat / 2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2)**2
-    return 2 * R * asin(sqrt(a))
-
-def geocode_google(address):
-    url = "https://maps.googleapis.com/maps/api/geocode/json"
-    params = {"address": address, "key": GOOGLE_API_KEY}
-    res = requests.get(url, params=params)
-    try:
-        location = res.json()["results"][0]["geometry"]["location"]
-        return location["lat"], location["lng"]
-    except:
-        return None
-
-def reverse_geocode_google(lat, lon):
-    url = "https://maps.googleapis.com/maps/api/geocode/json"
-    params = {"latlng": f"{lat},{lon}", "key": GOOGLE_API_KEY}
-    res = requests.get(url, params=params)
-    try:
-        return res.json()["results"][0]["formatted_address"]
-    except:
-        return "주소 불러오기 실패"
-
-def is_in_coastal_bounds(lat, lon):
-    return (
-        (35 <= lat <= 38 and 128 <= lon <= 131) or
-        (33 <= lat <= 35 and 126 <= lon <= 129) or
-        (34 <= lat <= 38 and 124 <= lon <= 126)
-    )
-
-def find_best_beach_waypoint(start, end):
-    start_lat, start_lon = start
-    end_lat, end_lon = end
-    lat_candidates, lon_candidates = [], []
-    for name, (lon, lat) in beach_coords.items():
-        if not is_in_coastal_bounds(lat, lon):
-            continue
-        if abs(lat - start_lat) < 0.2 and (end_lon - start_lon) * (lon - start_lon) > 0:
-            lat_candidates.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
-        if abs(lon - start_lon) < 0.2 and (end_lat - start_lat) * (lat - start_lat) > 0:
-            lon_candidates.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
-    best_lat = min(lat_candidates, key=lambda x: x[3]) if lat_candidates else None
-    best_lon = min(lon_candidates, key=lambda x: x[3]) if lon_candidates else None
-    return best_lat if best_lat and (not best_lon or best_lat[3] < best_lon[3]) else best_lon
-
-def get_ors_route(start, waypoint, end):
-    url = "https://api.openrouteservice.org/v2/directions/driving-car/geojson"
-    headers = {"Authorization": ORS_API_KEY, "Content-Type": "application/json"}
-    body = {
-        "coordinates": [
-            [start[1], start[0]],
-            [waypoint[2], waypoint[1]],
-            [end[1], end[0]]
-        ]
-    }
-    res = requests.post(url, headers=headers, json=body)
-    try:
-        return res.json(), res.status_code
-    except Exception as e:
-        return {"error": str(e)}, 500
-
-def search_tour_spots_along_route(geojson):
-    coords = geojson['features'][0]['geometry']['coordinates']
-    spots, seen_ids = [], set()
-    for lon, lat in coords[::10]:
-        try:
-            url = "http://apis.data.go.kr/B551011/KorService1/locationBasedList1"
-            params = {
-                "serviceKey": TOURAPI_KEY,
-                "mapX": lon,
-                "mapY": lat,
-                "radius": 5000,
-                "listYN": "Y",
-                "arrange": "E",
-                "numOfRows": 10,
-                "pageNo": 1,
-                "MobileOS": "ETC",
-                "MobileApp": "SeaRoute",
-                "_type": "json"
-            }
-            res = requests.get(url, params=params)
-            items = res.json().get("response", {}).get("body", {}).get("items", {}).get("item", [])
-            for item in items:
-                cid = item.get("contentid")
-                if cid and cid not in seen_ids:
-                    seen_ids.add(cid)
-                    spots.append({
-                        "contentid": cid,
-                        "title": item.get("title"),
-                        "addr1": item.get("addr1"),
-                        "mapx": item.get("mapx"),
-                        "mapy": item.get("mapy"),
-                        "firstimage": item.get("firstimage"),
-                        "homepage": item.get("homepage", ""),
-                        "distance": round(haversine(lat, lon, float(item.get("mapy", lat)), float(item.get("mapx", lon))), 2)
-                    })
-        except:
-            continue
-    return spots
 
 @app.route("/")
 def index():
     return render_template("index.html")
 
+
 @app.route("/route", methods=["POST"])
-def route():
-    try:
-        data = request.get_json()
-        start = geocode_google(data.get("start"))
-        end = geocode_google(data.get("end"))
-        if not start or not end:
-            return jsonify({"error": "❌ 주소 변환 실패"}), 400
-        waypoint = find_best_beach_waypoint(start, end)
-        if not waypoint:
-            return jsonify({"error": "❌ 경유지 탐색 실패"}), 500
-        route_data, status = get_ors_route(start, waypoint, end)
-        if "error" in route_data:
-            return jsonify({"error": route_data["error"]}), status
-        spots = search_tour_spots_along_route(route_data)
-        waypoint_addr = reverse_geocode_google(waypoint[1], waypoint[2])
-        return jsonify({
-            "route": route_data,
-            "waypoint": {
-                "name": waypoint[0],
-                "lat": waypoint[1],
-                "lon": waypoint[2],
-                "address": waypoint_addr
+def calculate_route():
+    data = request.get_json()
+    start = data.get("start")
+    end = data.get("end")
+
+    if not start or not end:
+        return jsonify({"error": "출발지와 도착지를 모두 입력하세요."}), 400
+
+    # 네이버 주소 → 좌표 변환
+    def geocode(address):
+        res = requests.get(
+            "https://naveropenapi.apigw.ntruss.com/map-geocode/v2/geocode",
+            headers={
+                "X-NCP-APIGW-API-KEY-ID": NAVER_CLIENT_ID,
+                "X-NCP-APIGW-API-KEY": NAVER_CLIENT_SECRET
             },
-            "spots": spots or []
-        })
-    except Exception as e:
-        return jsonify({"error": f"❌ 서버 오류: {str(e)}"}), 500
+            params={"query": address}
+        )
+        items = res.json().get("addresses")
+        if items:
+            return float(items[0]["x"]), float(items[0]["y"])
+        return None
 
-@app.route("/tour_detail/<contentid>")
-def tour_detail(contentid):
-    url = "http://apis.data.go.kr/B551011/KorService1/detailCommon1"
-    params = {
-        "serviceKey": TOURAPI_KEY,
-        "MobileOS": "ETC",
-        "MobileApp": "SeaRoute",
-        "contentId": contentid,
-        "overviewYN": "Y",
-        "defaultYN": "Y",
-        "_type": "json"
+    start_coord = geocode(start)
+    end_coord = geocode(end)
+
+    if not start_coord or not end_coord:
+        return jsonify({"error": "주소 변환 실패"}), 500
+
+    # 경유지: 중간 위도 기준 해안 가까운 지점 (임시)
+    waypoint = {"name": "가까운 해안", "address": "임의위치", "coord": [(start_coord[0] + end_coord[0])/2, (start_coord[1] + end_coord[1])/2]}
+
+    # OpenRouteService (또는 NAVER API) 대체 부분 — 임의 경로 생성
+    route_geojson = {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [start_coord, waypoint["coord"], end_coord]
+            }
+        }]
     }
-    try:
-        res = requests.get(url, params=params, timeout=5)
-        if res.status_code != 200:
-            return f"<h2>TourAPI 오류: {res.status_code}</h2>", 500
 
-        data = res.json()
-        item_list = data.get("response", {}).get("body", {}).get("items", {}).get("item", [])
-        if not item_list:
-            return f"<h2>❌ 관광지 정보가 없습니다.</h2><p>contentid: {contentid}</p>", 404
+    # 관광지 및 맛집 검색
+    def search_tourspots(lat, lon, content_type):
+        res = requests.get(
+            "https://apis.data.go.kr/B551011/KorService1/locationBasedList1",
+            params={
+                "serviceKey": TOUR_API_KEY,
+                "mapX": lon,
+                "mapY": lat,
+                "radius": 5000,
+                "MobileOS": "ETC",
+                "MobileApp": "coastaldrive",
+                "contentTypeId": content_type,
+                "_type": "json",
+                "numOfRows": 30
+            }
+        )
+        items = res.json().get("response", {}).get("body", {}).get("items", {}).get("item", [])
+        return items
 
-        item = item_list[0]
-        return render_template("tour_detail.html", item=item)
-    except Exception as e:
-        return f"<h2>TourAPI 호출 중 오류 발생</h2><p>{str(e)}</p>", 500
+    tour_spots = search_tourspots(end_coord[1], end_coord[0], content_type=12)  # 관광지
+    food_spots = search_tourspots(end_coord[1], end_coord[0], content_type=39)  # 음식점
+
+    def format_spot(item, category):
+        return {
+            "title": item.get("title"),
+            "mapx": item.get("mapx"),
+            "mapy": item.get("mapy"),
+            "firstimage": item.get("firstimage"),
+            "addr1": item.get("addr1"),
+            "parking": item.get("parking"),
+            "usetime": item.get("usetime"),
+            "homepage": item.get("homepage"),
+            "category": category
+        }
+
+    spots = [format_spot(item, "관광지") for item in tour_spots] + \
+            [format_spot(item, "음식점") for item in food_spots]
+
+    return jsonify({
+        "route": route_geojson,
+        "waypoint": {
+            "name": waypoint["name"],
+            "address": waypoint["address"]
+        },
+        "spots": spots
+    })
+
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(debug=False, port=10000, host="0.0.0.0")
