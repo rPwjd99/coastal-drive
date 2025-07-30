@@ -2,78 +2,116 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>해안도로 감성 드라이브</title>
+  <title>바다따라: 해안도로 감성 드라이브 코스 추천</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
+  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
   <style>
-    html, body { margin: 0; padding: 0; height: 100%; }
-    #map { width: 100%; height: 100%; }
-    .popup { background: white; padding: 5px; border: 1px solid black; min-width: 200px; }
+    html, body { margin: 0; padding: 0; height: 100%; font-family: sans-serif; }
+    #map { width: 100%; height: 90%; }
+    #controls {
+      padding: 10px;
+      background: #f0f0f0;
+    }
+    input { width: 200px; margin-right: 10px; }
+    button { padding: 5px 10px; }
   </style>
 </head>
 <body>
+  <div id="controls">
+    <input id="start" placeholder="출발지 예: 세종시청" />
+    <input id="end" placeholder="도착지 예: 속초시청" />
+    <button onclick="calculateRoute()">경로 계산</button>
+  </div>
   <div id="map"></div>
-  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
+
   <script>
     const map = new ol.Map({
-      target: 'map',
-      layers: [
-        new ol.layer.Tile({ source: new ol.source.OSM() })
-      ],
-      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
+      target: "map",
+      layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
+      view: new ol.View({
+        center: ol.proj.fromLonLat([127.5, 36.5]),
+        zoom: 7,
+      }),
     });
 
-    const popupElement = document.createElement('div');
-    popupElement.className = 'popup';
-    const popup = new ol.Overlay({ element: popupElement, positioning: 'bottom-center', stopEvent: false, offset: [0, -20] });
-    map.addOverlay(popup);
+    const vectorLayer = new ol.layer.Vector({
+      source: new ol.source.Vector(),
+    });
+    map.addLayer(vectorLayer);
 
-    function addMarker(lon, lat, name, image, info, isRestaurant) {
-      const color = isRestaurant ? 'green' : 'red';
-      const marker = new ol.Feature({ geometry: new ol.geom.Point(ol.proj.fromLonLat([lon, lat])) });
+    function createMarker(lon, lat, color, title, popupUrl = null) {
+      const marker = new ol.Feature({
+        geometry: new ol.geom.Point(ol.proj.fromLonLat([lon, lat])),
+        name: title,
+        popup: popupUrl
+      });
       marker.setStyle(new ol.style.Style({
-        image: new ol.style.Circle({ radius: 6, fill: new ol.style.Fill({ color }) })
+        image: new ol.style.Circle({
+          radius: 6,
+          fill: new ol.style.Fill({ color: color }),
+          stroke: new ol.style.Stroke({ color: '#000', width: 1 })
+        })
       }));
-      const vectorLayer = new ol.layer.Vector({ source: new ol.source.Vector({ features: [marker] }) });
-      map.addLayer(vectorLayer);
-      marker.set('popupContent', `<b>${name}</b><br>${info}<br><img src="${image}" width="200" />`);
+      return marker;
     }
 
-    map.on('click', function (e) {
-      map.forEachFeatureAtPixel(e.pixel, function (feature) {
-        const content = feature.get('popupContent');
-        if (content) {
-          popupElement.innerHTML = content;
-          popup.setPosition(e.coordinate);
+    function calculateRoute() {
+      const start = document.getElementById("start").value;
+      const end = document.getElementById("end").value;
+      fetch("/route", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ start, end }),
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.error) {
+          alert(data.error);
+          return;
+        }
+
+        vectorLayer.getSource().clear();
+
+        const route = new ol.format.GeoJSON().readFeatures(data.route, {
+          featureProjection: "EPSG:3857",
+        });
+        route.forEach(f => f.setStyle(new ol.style.Style({
+          stroke: new ol.style.Stroke({ color: "#0000FF", width: 3 })
+        })));
+        vectorLayer.getSource().addFeatures(route);
+
+        const wp = data.waypoint;
+        const wpMarker = createMarker(wp.lon, wp.lat, "#00BB00", `경유지: ${wp.name}`);
+        vectorLayer.getSource().addFeature(wpMarker);
+
+        data.spots.forEach(spot => {
+          const marker = createMarker(spot.mapx, spot.mapy, "#0066FF", spot.title, `/tour_detail/${spot.contentid}`);
+          vectorLayer.getSource().addFeature(marker);
+        });
+
+        data.restaurants.forEach(r => {
+          const marker = createMarker(r.mapx, r.mapy, "#FF3333", r.title, `/tour_detail/${r.contentid}`);
+          vectorLayer.getSource().addFeature(marker);
+        });
+
+        map.getView().fit(vectorLayer.getSource().getExtent(), { padding: [50, 50, 50, 50] });
+      })
+      .catch(err => alert("서버 오류: " + err));
+    }
+
+    // 마커 클릭 시 팝업 열기
+    map.on("click", function (evt) {
+      map.forEachFeatureAtPixel(evt.pixel, function (feature) {
+        const name = feature.get("name");
+        const popup = feature.get("popup");
+        if (popup) {
+          window.open(popup, "_blank");
+        } else if (name) {
+          alert(name);
         }
       });
     });
-
-    // 예시 좌표 - 실사용 시 서버에서 받아온 mid_lat, mid_lon 사용
-    fetch('/route', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mid_lat: 36.5, mid_lon: 127.5 })
-    })
-    .then(res => res.json())
-    .then(data => {
-      data.tourspots?.forEach(item => {
-        const name = item.title;
-        const lon = parseFloat(item.mapx);
-        const lat = parseFloat(item.mapy);
-        const image = item.firstimage || '';
-        const info = item.addr1 || '';
-        addMarker(lon, lat, name, image, info, false);
-      });
-      data.restaurants?.forEach(item => {
-        const name = item.title;
-        const lon = parseFloat(item.mapx);
-        const lat = parseFloat(item.mapy);
-        const image = item.firstimage || '';
-        const info = (item.addr1 || '') + '<br>' + (item.parking || '') + '<br>' + (item.usetime || '');
-        addMarker(lon, lat, name, image, info, true);
-      });
-    })
-    .catch(err => console.error('Error:', err));
   </script>
 </body>
 </html>
