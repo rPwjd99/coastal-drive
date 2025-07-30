@@ -2,131 +2,78 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>바다따라: 해안도로 드라이브 추천</title>
+  <title>해안도로 감성 드라이브</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
   <style>
-    #map {
-      width: 100%;
-      height: 90vh;
-    }
-    #controls {
-      padding: 10px;
-    }
+    html, body { margin: 0; padding: 0; height: 100%; }
+    #map { width: 100%; height: 100%; }
+    .popup { background: white; padding: 5px; border: 1px solid black; min-width: 200px; }
   </style>
 </head>
 <body>
-  <div id="controls">
-    출발지: <input type="text" id="start" placeholder="예: 세종시청" />
-    도착지: <input type="text" id="end" placeholder="예: 속초시청" />
-    <button onclick="calculateRoute()">경로 계산</button>
-  </div>
   <div id="map"></div>
-
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
   <script>
     const map = new ol.Map({
-      target: "map",
+      target: 'map',
       layers: [
-        new ol.layer.Tile({
-          source: new ol.source.OSM()
-        })
+        new ol.layer.Tile({ source: new ol.source.OSM() })
       ],
-      view: new ol.View({
-        center: ol.proj.fromLonLat([127.5, 36.5]),
-        zoom: 7
-      })
+      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
     });
 
-    const vectorSource = new ol.source.Vector();
-    const vectorLayer = new ol.layer.Vector({ source: vectorSource });
-    map.addLayer(vectorLayer);
+    const popupElement = document.createElement('div');
+    popupElement.className = 'popup';
+    const popup = new ol.Overlay({ element: popupElement, positioning: 'bottom-center', stopEvent: false, offset: [0, -20] });
+    map.addOverlay(popup);
 
-    function createMarker(lon, lat, name, addr, imageUrl, contentId, type) {
-      const color = type === "tour" ? "red" : "blue";
-
-      const marker = new ol.Feature({
-        geometry: new ol.geom.Point(ol.proj.fromLonLat([lon, lat])),
-        name: name,
-        addr: addr,
-        imageUrl: imageUrl,
-        contentId: contentId,
-        type: type
-      });
-
-      marker.setStyle(
-        new ol.style.Style({
-          image: new ol.style.Circle({
-            radius: 7,
-            fill: new ol.style.Fill({ color: color }),
-            stroke: new ol.style.Stroke({ color: "#fff", width: 1 })
-          })
-        })
-      );
-
-      vectorSource.addFeature(marker);
+    function addMarker(lon, lat, name, image, info, isRestaurant) {
+      const color = isRestaurant ? 'green' : 'red';
+      const marker = new ol.Feature({ geometry: new ol.geom.Point(ol.proj.fromLonLat([lon, lat])) });
+      marker.setStyle(new ol.style.Style({
+        image: new ol.style.Circle({ radius: 6, fill: new ol.style.Fill({ color }) })
+      }));
+      const vectorLayer = new ol.layer.Vector({ source: new ol.source.Vector({ features: [marker] }) });
+      map.addLayer(vectorLayer);
+      marker.set('popupContent', `<b>${name}</b><br>${info}<br><img src="${image}" width="200" />`);
     }
 
-    const overlay = new ol.Overlay({
-      element: document.createElement("div"),
-      positioning: "bottom-center",
-      stopEvent: false,
-      offset: [0, -15]
-    });
-    map.addOverlay(overlay);
-
-    map.on("click", function (evt) {
-      map.forEachFeatureAtPixel(evt.pixel, function (feature) {
-        const coord = feature.getGeometry().getCoordinates();
-        const name = feature.get("name");
-        const addr = feature.get("addr");
-        const img = feature.get("imageUrl");
-        const contentId = feature.get("contentId");
-        const type = feature.get("type");
-
-        const element = document.createElement("div");
-        element.style.background = "white";
-        element.style.padding = "8px";
-        element.style.border = "1px solid gray";
-        element.innerHTML = `
-          <b>${name}</b><br/>
-          ${addr}<br/>
-          ${img ? `<img src="${img}" width="200" /><br/>` : ""}
-          ${contentId ? `<a href="/tour_detail/${contentId}" target="_blank">자세히 보기</a>` : ""}
-        `;
-
-        overlay.setPosition(coord);
-        overlay.setElement(element);
+    map.on('click', function (e) {
+      map.forEachFeatureAtPixel(e.pixel, function (feature) {
+        const content = feature.get('popupContent');
+        if (content) {
+          popupElement.innerHTML = content;
+          popup.setPosition(e.coordinate);
+        }
       });
     });
 
-    function calculateRoute() {
-      const start = document.getElementById("start").value;
-      const end = document.getElementById("end").value;
-
-      fetch("/route", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start, end })
-      })
-        .then(res => res.json())
-        .then(data => {
-          vectorSource.clear();
-
-          if (data.route) {
-            const routeFeature = new ol.format.GeoJSON().readFeature(data.route, {
-              featureProjection: "EPSG:3857"
-            });
-            vectorSource.addFeature(routeFeature);
-          }
-
-          data.spots.forEach(s =>
-            createMarker(s.mapx, s.mapy, s.title, s.addr1, s.firstimage, s.contentid, "tour")
-          );
-          data.restaurants.forEach(r =>
-            createMarker(r.mapx, r.mapy, r.title, r.addr1, r.firstimage, r.contentid, "food")
-          );
-        });
-    }
+    // 예시 좌표 - 실사용 시 서버에서 받아온 mid_lat, mid_lon 사용
+    fetch('/route', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mid_lat: 36.5, mid_lon: 127.5 })
+    })
+    .then(res => res.json())
+    .then(data => {
+      data.tourspots?.forEach(item => {
+        const name = item.title;
+        const lon = parseFloat(item.mapx);
+        const lat = parseFloat(item.mapy);
+        const image = item.firstimage || '';
+        const info = item.addr1 || '';
+        addMarker(lon, lat, name, image, info, false);
+      });
+      data.restaurants?.forEach(item => {
+        const name = item.title;
+        const lon = parseFloat(item.mapx);
+        const lat = parseFloat(item.mapy);
+        const image = item.firstimage || '';
+        const info = (item.addr1 || '') + '<br>' + (item.parking || '') + '<br>' + (item.usetime || '');
+        addMarker(lon, lat, name, image, info, true);
+      });
+    })
+    .catch(err => console.error('Error:', err));
   </script>
 </body>
 </html>
