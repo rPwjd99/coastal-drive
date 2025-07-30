@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>바다따라: 해안도로 감성 드라이브 코스 추천</title>
+  <title>바다따라: 해안도로 감성 드라이브</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
@@ -15,15 +15,46 @@
     }
     input { width: 200px; margin-right: 10px; }
     button { padding: 5px 10px; }
+
+    .popup {
+      position: absolute;
+      background: white;
+      border: 1px solid #ccc;
+      padding: 10px;
+      border-radius: 8px;
+      bottom: 50px;
+      left: 20px;
+      min-width: 200px;
+      z-index: 100;
+      box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
+    }
+
+    .popup img {
+      width: 100%;
+      max-height: 100px;
+      object-fit: cover;
+      border-radius: 4px;
+    }
+
+    .popup h3 {
+      margin: 5px 0;
+      font-size: 16px;
+    }
+
+    .popup p {
+      margin: 0;
+      font-size: 14px;
+    }
   </style>
 </head>
 <body>
   <div id="controls">
-    <input id="start" placeholder="출발지 예: 세종시청" />
-    <input id="end" placeholder="도착지 예: 속초시청" />
+    <input id="start" placeholder="출발지 (예: 세종시청)" />
+    <input id="end" placeholder="도착지 (예: 속초시청)" />
     <button onclick="calculateRoute()">경로 계산</button>
   </div>
   <div id="map"></div>
+  <div id="popup" class="popup" style="display: none;"></div>
 
   <script>
     const map = new ol.Map({
@@ -40,11 +71,12 @@
     });
     map.addLayer(vectorLayer);
 
-    function createMarker(lon, lat, color, title, popupUrl = null) {
+    const popupEl = document.getElementById("popup");
+
+    function createMarker(lon, lat, color, featureData = {}) {
       const marker = new ol.Feature({
         geometry: new ol.geom.Point(ol.proj.fromLonLat([lon, lat])),
-        name: title,
-        popup: popupUrl
+        ...featureData
       });
       marker.setStyle(new ol.style.Style({
         image: new ol.style.Circle({
@@ -56,7 +88,23 @@
       return marker;
     }
 
+    function showPopup(feature, coordinate) {
+      const title = feature.get("title");
+      const addr = feature.get("addr1");
+      const image = feature.get("firstimage") || "";
+      const cid = feature.get("contentid");
+
+      popupEl.innerHTML = `
+        ${image ? `<img src="${image}" alt="${title}"/>` : ""}
+        <h3>${title}</h3>
+        <p>${addr || ""}</p>
+        <a href="/tour_detail/${cid}" target="_blank">상세정보</a>
+      `;
+      popupEl.style.display = "block";
+    }
+
     function calculateRoute() {
+      popupEl.style.display = "none";
       const start = document.getElementById("start").value;
       const end = document.getElementById("end").value;
       fetch("/route", {
@@ -82,16 +130,17 @@
         vectorLayer.getSource().addFeatures(route);
 
         const wp = data.waypoint;
-        const wpMarker = createMarker(wp.lon, wp.lat, "#00BB00", `경유지: ${wp.name}`);
+        const wpMarker = createMarker(wp.lon, wp.lat, "#00BB00", { title: `경유지: ${wp.name}` });
         vectorLayer.getSource().addFeature(wpMarker);
 
         data.spots.forEach(spot => {
-          const marker = createMarker(spot.mapx, spot.mapy, "#0066FF", spot.title, `/tour_detail/${spot.contentid}`);
+          const marker = createMarker(spot.mapx, spot.mapy, "#0066FF", spot);
           vectorLayer.getSource().addFeature(marker);
         });
 
         data.restaurants.forEach(r => {
-          const marker = createMarker(r.mapx, r.mapy, "#FF3333", r.title, `/tour_detail/${r.contentid}`);
+          const color = (r.title && r.title.includes("카페")) ? "#AA00FF" : "#FF3333";
+          const marker = createMarker(r.mapx, r.mapy, color, r);
           vectorLayer.getSource().addFeature(marker);
         });
 
@@ -100,17 +149,18 @@
       .catch(err => alert("서버 오류: " + err));
     }
 
-    // 마커 클릭 시 팝업 열기
     map.on("click", function (evt) {
+      popupEl.style.display = "none";
       map.forEachFeatureAtPixel(evt.pixel, function (feature) {
-        const name = feature.get("name");
-        const popup = feature.get("popup");
-        if (popup) {
-          window.open(popup, "_blank");
-        } else if (name) {
-          alert(name);
+        if (feature.get("title")) {
+          const coords = feature.getGeometry().getCoordinates();
+          showPopup(feature, coords);
         }
       });
+    });
+
+    map.on("pointermove", function () {
+      popupEl.style.display = "none";
     });
   </script>
 </body>
