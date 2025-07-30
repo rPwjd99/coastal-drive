@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!DOCTYPE html> 
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
@@ -25,6 +25,14 @@
       border: none;
       cursor: pointer;
     }
+    .popup {
+      background: white;
+      padding: 10px;
+      border: 1px solid gray;
+      border-radius: 6px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+      min-width: 200px;
+    }
   </style>
 </head>
 <body>
@@ -44,7 +52,14 @@
 
     let routeLayer = null;
     let spotLayer = null;
-    let overlay = null;
+    const popupElement = document.createElement("div");
+    popupElement.className = "popup";
+    const overlay = new ol.Overlay({
+      element: popupElement,
+      autoPan: true,
+      offset: [0, -10]
+    });
+    map.addOverlay(overlay);
 
     async function calculateRoute() {
       const start = document.getElementById("start").value.trim();
@@ -91,42 +106,38 @@
           const coord = ol.proj.fromLonLat([parseFloat(spot.mapx), parseFloat(spot.mapy)]);
           const feature = new ol.Feature({ geometry: new ol.geom.Point(coord) });
           const image = spot.firstimage ? `<img src="${spot.firstimage}" width="160"><br>` : "";
-          const homepage = spot.homepage ? `<br><a href='${spot.homepage}' target='_blank'>자세히 보기</a>` : "";
-          feature.set("desc", `
+          const detailLink = `<a href="/tour_detail/${spot.contentid}" target="_blank">세부정보 보기</a>`;
+          const html = `
             <b>${spot.title}</b><br>
             ${image}
-            ${spot.addr1 || "주소 없음"}${homepage}`);
+            ${spot.addr1 || "주소 없음"}<br>
+            거리: ${spot.distance} km<br>
+            ${detailLink}
+          `;
+          feature.set("desc", html);
           return feature;
         });
 
         spotLayer = new ol.layer.Vector({
           source: new ol.source.Vector({ features }),
           style: new ol.style.Style({
-            image: new ol.style.Circle({ radius: 6, fill: new ol.style.Fill({ color: "red" }), stroke: new ol.style.Stroke({ color: "white", width: 1 }) })
+            image: new ol.style.Circle({
+              radius: 6,
+              fill: new ol.style.Fill({ color: "red" }),
+              stroke: new ol.style.Stroke({ color: "white", width: 1 })
+            })
           })
         });
         map.addLayer(spotLayer);
 
-        if (!overlay) {
-          overlay = new ol.Overlay({ element: document.createElement("div"), autoPan: true, offset: [0, -10] });
-          map.addOverlay(overlay);
-        }
-
-        map.on("pointermove", function (evt) {
+        map.on("click", function (evt) {
           const feature = map.forEachFeatureAtPixel(evt.pixel, f => f);
-          const element = overlay.getElement();
           if (feature && feature.get("desc")) {
-            element.innerHTML = feature.get("desc");
-            element.style.background = "white";
-            element.style.padding = "6px 10px";
-            element.style.border = "1px solid gray";
-            element.style.borderRadius = "6px";
-            element.style.boxShadow = "0 2px 5px rgba(0,0,0,0.3)";
+            popupElement.innerHTML = feature.get("desc");
             overlay.setPosition(evt.coordinate);
-            element.style.display = "block";
-            document.body.appendChild(element);
+            popupElement.style.display = "block";
           } else {
-            if (element) element.style.display = "none";
+            overlay.setPosition(undefined);
           }
         });
 
