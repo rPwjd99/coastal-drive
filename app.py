@@ -76,17 +76,17 @@ def get_ors_route(start, waypoint, end):
     except Exception as e:
         return {"error": str(e)}, 500
 
-def search_tour_spots_along_route(geojson):
+def search_content_along_route(geojson, content_type_id=None):
     coords = geojson['features'][0]['geometry']['coordinates']
-    spots, seen_ids = [], set()
-    for lon, lat in coords[::15]:
+    results, seen_ids = [], set()
+    for lon, lat in coords[::10]:
         try:
             url = "http://apis.data.go.kr/B551011/KorService1/locationBasedList1"
             params = {
                 "serviceKey": TOURAPI_KEY,
                 "mapX": lon,
                 "mapY": lat,
-                "radius": 5000,
+                "radius": 10000,
                 "listYN": "Y",
                 "arrange": "E",
                 "numOfRows": 10,
@@ -95,13 +95,15 @@ def search_tour_spots_along_route(geojson):
                 "MobileApp": "SeaRoute",
                 "_type": "json"
             }
+            if content_type_id:
+                params["contentTypeId"] = content_type_id
             res = requests.get(url, params=params, timeout=5)
             items = res.json().get("response", {}).get("body", {}).get("items", {}).get("item", [])
             for item in items:
                 cid = item.get("contentid")
                 if cid and cid not in seen_ids:
                     seen_ids.add(cid)
-                    spots.append({
+                    results.append({
                         "contentid": cid,
                         "title": item.get("title"),
                         "addr1": item.get("addr1"),
@@ -113,46 +115,7 @@ def search_tour_spots_along_route(geojson):
                     })
         except:
             continue
-    return spots
-
-def search_restaurants_along_route(geojson):
-    coords = geojson['features'][0]['geometry']['coordinates']
-    restaurants, seen_ids = [], set()
-    for lon, lat in coords[::15]:
-        try:
-            url = "http://apis.data.go.kr/B551011/KorService1/locationBasedList1"
-            params = {
-                "serviceKey": TOURAPI_KEY,
-                "mapX": lon,
-                "mapY": lat,
-                "radius": 5000,
-                "listYN": "Y",
-                "arrange": "E",
-                "numOfRows": 10,
-                "pageNo": 1,
-                "MobileOS": "ETC",
-                "MobileApp": "SeaRoute",
-                "_type": "json",
-                "contentTypeId": "39"
-            }
-            res = requests.get(url, params=params, timeout=5)
-            items = res.json().get("response", {}).get("body", {}).get("items", {}).get("item", [])
-            for item in items:
-                cid = item.get("contentid")
-                if cid and cid not in seen_ids:
-                    seen_ids.add(cid)
-                    restaurants.append({
-                        "contentid": cid,
-                        "title": item.get("title"),
-                        "addr1": item.get("addr1"),
-                        "mapx": item.get("mapx"),
-                        "mapy": item.get("mapy"),
-                        "firstimage": item.get("firstimage"),
-                        "distance": round(haversine(lat, lon, float(item.get("mapy", lat)), float(item.get("mapx", lon))), 2)
-                    })
-        except:
-            continue
-    return restaurants
+    return results
 
 @app.route("/")
 def index():
@@ -162,39 +125,19 @@ def index():
 def route():
     try:
         data = request.get_json()
-        print("📥 [요청 받은 데이터]", data)
-
         start = geocode_google(data.get("start"))
         end = geocode_google(data.get("end"))
-        print("🧭 [변환된 좌표] start:", start, "end:", end)
-
         if not start or not end:
-            print("❌ 주소 변환 실패")
             return jsonify({"error": "❌ 주소 변환 실패"}), 400
-
         waypoint = find_best_beach_waypoint(start, end)
-        print("📍 [선택된 경유지]", waypoint)
-
         if not waypoint:
-            print("❌ 경유지 탐색 실패")
             return jsonify({"error": "❌ 경유지 탐색 실패"}), 500
-
         route_data, status = get_ors_route(start, waypoint, end)
-        print("🛣️ [ORS 응답 상태]", status)
-
         if "error" in route_data:
-            print("❌ ORS 오류:", route_data["error"])
             return jsonify({"error": route_data["error"]}), status
-
-        spots = search_tour_spots_along_route(route_data)
-        print(f"🗺️ [관광지 개수]: {len(spots)}")
-
-        restaurants = search_restaurants_along_route(route_data)
-        print(f"🍽️ [맛집 개수]: {len(restaurants)}")
-
+        spots = search_content_along_route(route_data)
+        restaurants = search_content_along_route(route_data, content_type_id="39")
         waypoint_addr = reverse_geocode_google(waypoint[1], waypoint[2])
-        print("📌 [경유지 주소]:", waypoint_addr)
-
         return jsonify({
             "route": route_data,
             "waypoint": {
@@ -206,9 +149,7 @@ def route():
             "spots": spots or [],
             "restaurants": restaurants or []
         })
-
     except Exception as e:
-        print("🔥 [서버 예외 발생]:", str(e))
         return jsonify({"error": f"❌ 서버 오류: {str(e)}"}), 500
 
 @app.route("/tour_detail/<contentid>")
@@ -221,6 +162,11 @@ def tour_detail(contentid):
         "contentId": contentid,
         "overviewYN": "Y",
         "defaultYN": "Y",
+        "firstImageYN": "Y",
+        "addrinfoYN": "Y",
+        "mapinfoYN": "Y",
+        "areacodeYN": "Y",
+        "catcodeYN": "Y",
         "_type": "json"
     }
     try:
