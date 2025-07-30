@@ -9,29 +9,29 @@ from math import radians, cos, sin, asin, sqrt
 
 load_dotenv()
 
-NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID")
-NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
+ORS_API_KEY = os.getenv("ORS_API_KEY")
 TOURAPI_KEY = os.getenv("TOURAPI_KEY")
 
 app = Flask(__name__)
 
+# 위경도 거리 계산 함수
 def haversine(lon1, lat1, lon2, lat2):
     lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
     dlon = lon2 - lon1
     dlat = lat2 - lat1
     a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
     c = 2 * asin(sqrt(a))
-    return 6371 * c  # 지구 반지름(km)
+    return 6371 * c
 
-# ✅ 기존 함수: 단일 해수욕장에서 → 해수욕장 2개로 변경
-def get_two_nearest_beaches(start, end):
+# 경유지 2개 선택
+def get_two_nearest_beaches(start):
     start_lon, start_lat = start
     distances = []
     for beach in beach_coords:
         dist = haversine(start_lon, start_lat, beach["lon"], beach["lat"])
         distances.append((dist, beach))
     distances.sort(key=lambda x: x[0])
-    return [distances[0][1], distances[1][1]]  # 거리 기준 상위 2개
+    return [distances[0][1], distances[1][1]]
 
 @app.route("/")
 def home():
@@ -43,29 +43,17 @@ def route():
     start = data["start"]
     end = data["end"]
 
-    # ✅ 해수욕장 2곳
-    waypoints = get_two_nearest_beaches(start, end)
+    waypoints = get_two_nearest_beaches(start)
+    coords = [start, [waypoints[0]["lon"], waypoints[0]["lat"]], [waypoints[1]["lon"], waypoints[1]["lat"]], end]
 
-    coords = [
-        start,
-        [waypoints[0]["lon"], waypoints[0]["lat"]],
-        [waypoints[1]["lon"], waypoints[1]["lat"]],
-        end
-    ]
-
-    headers = {
-        "X-NCP-APIGW-API-KEY-ID": NAVER_CLIENT_ID,
-        "X-NCP-APIGW-API-KEY": NAVER_CLIENT_SECRET
+    ors_url = "https://api.openrouteservice.org/v2/directions/driving-car/geojson"
+    headers = {"Authorization": ORS_API_KEY, "Content-Type": "application/json"}
+    body = {
+        "coordinates": coords,
+        "instructions": False
     }
 
-    params = {
-        "start": f"{coords[0][0]},{coords[0][1]}",
-        "goal": f"{coords[3][0]},{coords[3][1]}",
-        "waypoints": f"{coords[1][0]},{coords[1][1]}|{coords[2][0]},{coords[2][1]}",
-        "option": "trf"
-    }
-
-    res = requests.get("https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving", headers=headers, params=params)
+    res = requests.post(ors_url, headers=headers, json=body)
     route_data = res.json()
 
     return jsonify({
@@ -81,7 +69,6 @@ def tourspot():
 
     results = []
 
-    # ✅ 관광지 + 맛집 + 카페 추가됨 (팝업용 이미지 포함)
     for content_type, label in [("39", "restaurant"), ("38", "cafe"), ("12", "tourist")]:
         url = "http://apis.data.go.kr/B551011/KorService1/locationBasedList1"
         params = {
