@@ -13,9 +13,15 @@
     }
     .popup {
       background: white;
-      padding: 5px;
-      border: 1px solid #ccc;
-      font-size: 12px;
+      padding: 6px;
+      border: 1px solid #888;
+      border-radius: 4px;
+      font-size: 13px;
+      max-width: 250px;
+    }
+    .popup img {
+      width: 100%;
+      margin-top: 5px;
     }
   </style>
 </head>
@@ -26,18 +32,18 @@
       target: "map",
       layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
       view: new ol.View({
-        center: ol.proj.fromLonLat([127.8, 36.5]),
-        zoom: 8,
-      }),
+        center: ol.proj.fromLonLat([127.5, 36.5]),
+        zoom: 8
+      })
     });
 
     const routeLayer = new ol.layer.Vector({
-      source: new ol.source.Vector(),
+      source: new ol.source.Vector()
     });
     map.addLayer(routeLayer);
 
     const markerLayer = new ol.layer.Vector({
-      source: new ol.source.Vector(),
+      source: new ol.source.Vector()
     });
     map.addLayer(markerLayer);
 
@@ -47,7 +53,7 @@
       element: popup,
       positioning: "bottom-center",
       stopEvent: false,
-      offset: [0, -10],
+      offset: [0, -10]
     });
     map.addOverlay(overlay);
 
@@ -66,10 +72,9 @@
       const res = await fetch("/route", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start, end }),
+        body: JSON.stringify({ start, end })
       });
       const data = await res.json();
-
       drawRoute(data.route);
       for (const wp of data.waypoints) {
         await fetchTourspots([parseFloat(wp.lon), parseFloat(wp.lat)]);
@@ -78,8 +83,8 @@
 
     function drawRoute(routeData) {
       routeLayer.getSource().clear();
-      const coords = routeData.route.route.traoptimal[0].path.map(p =>
-        ol.proj.fromLonLat([p[0], p[1]])
+      const coords = routeData.features[0].geometry.coordinates.map(c =>
+        ol.proj.fromLonLat([c[0], c[1]])
       );
       const line = new ol.geom.LineString(coords);
       const feature = new ol.Feature({ geometry: line });
@@ -87,8 +92,8 @@
         new ol.style.Style({
           stroke: new ol.style.Stroke({
             color: "#1976D2",
-            width: 6,
-          }),
+            width: 6
+          })
         })
       );
       routeLayer.getSource().addFeature(feature);
@@ -98,7 +103,7 @@
       const res = await fetch("/tourspot", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lon: coord[0], lat: coord[1] }),
+        body: JSON.stringify({ lon: coord[0], lat: coord[1] })
       });
       const data = await res.json();
       addMarkers(data);
@@ -106,7 +111,7 @@
 
     function addMarkers(spots) {
       for (const s of spots) {
-        const iconColor =
+        const color =
           s.type === "restaurant"
             ? "red"
             : s.type === "cafe"
@@ -114,32 +119,32 @@
             : "blue";
 
         const marker = new ol.Feature({
-          geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(s.lon), parseFloat(s.lat)])),
+          geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(s.lon), parseFloat(s.lat)]))
         });
 
         marker.setStyle(
           new ol.style.Style({
             image: new ol.style.Circle({
-              radius: 8,
-              fill: new ol.style.Fill({ color: iconColor }),
-              stroke: new ol.style.Stroke({ color: "#fff", width: 2 }),
-            }),
+              radius: 7,
+              fill: new ol.style.Fill({ color }),
+              stroke: new ol.style.Stroke({ color: "#fff", width: 2 })
+            })
           })
         );
 
-        const info = `
+        const popupHTML = `
           <strong>${s.name}</strong><br/>
           ${s.addr || ""}<br/>
           ${s.info || ""}<br/>
-          ${s.img ? `<img src="${s.img}" width="150"/>` : ""}
+          ${s.img ? `<img src="${s.img}">` : ""}
         `;
-        marker.set("popupContent", info);
+        marker.set("popupContent", popupHTML);
         markerLayer.getSource().addFeature(marker);
       }
     }
 
-    // 예시 좌표: 세종시청 → 속초시청
-    const start = [127.289, 36.480]; // [lon, lat]
+    // 🔹 테스트용 좌표 (세종시청 → 속초시청)
+    const start = [127.289, 36.480];
     const end = [128.593, 38.207];
     fetchRoute(start, end);
   </script>
