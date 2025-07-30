@@ -3,16 +3,16 @@ import os
 import requests
 from dotenv import load_dotenv
 from beaches_coordinates import beach_coords
+from math import radians, cos, sin, asin, sqrt
 
 load_dotenv()
 app = Flask(__name__)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 ORS_API_KEY = os.getenv("ORS_API_KEY")
-TOURAPI_KEY = "e1tU33wjMx2nynKjH8yDBm/S4YNne6B8mpCOWtzMH9TSONF71XG/xAwPqyv1fANpgeOvbPY+Le+gM6cYCnWV8w=="
+TOURAPI_KEY = os.getenv("TOURAPI_KEY")
 
 def haversine(lat1, lon1, lat2, lon2):
-    from math import radians, cos, sin, asin, sqrt
     R = 6371
     dlat = radians(lat2 - lat1)
     dlon = radians(lon2 - lon1)
@@ -21,7 +21,8 @@ def haversine(lat1, lon1, lat2, lon2):
 
 def geocode_google(address):
     url = "https://maps.googleapis.com/maps/api/geocode/json"
-    res = requests.get(url, params={"address": address, "key": GOOGLE_API_KEY})
+    params = {"address": address, "key": GOOGLE_API_KEY}
+    res = requests.get(url, params=params)
     try:
         location = res.json()["results"][0]["geometry"]["location"]
         return location["lat"], location["lng"]
@@ -30,7 +31,8 @@ def geocode_google(address):
 
 def reverse_geocode_google(lat, lon):
     url = "https://maps.googleapis.com/maps/api/geocode/json"
-    res = requests.get(url, params={"latlng": f"{lat},{lon}", "key": GOOGLE_API_KEY})
+    params = {"latlng": f"{lat},{lon}", "key": GOOGLE_API_KEY}
+    res = requests.get(url, params=params)
     try:
         return res.json()["results"][0]["formatted_address"]
     except:
@@ -48,7 +50,8 @@ def find_best_beach_waypoint(start, end):
     end_lat, end_lon = end
     lat_candidates, lon_candidates = [], []
     for name, (lon, lat) in beach_coords.items():
-        if not is_in_coastal_bounds(lat, lon): continue
+        if not is_in_coastal_bounds(lat, lon):
+            continue
         if abs(lat - start_lat) < 0.2 and (end_lon - start_lon) * (lon - start_lon) > 0:
             lat_candidates.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
         if abs(lon - start_lon) < 0.2 and (end_lat - start_lat) * (lat - start_lat) > 0:
@@ -99,12 +102,14 @@ def search_tour_spots_along_route(geojson):
                 if cid and cid not in seen_ids:
                     seen_ids.add(cid)
                     spots.append({
+                        "contentid": cid,
                         "title": item.get("title"),
                         "addr1": item.get("addr1"),
                         "mapx": item.get("mapx"),
                         "mapy": item.get("mapy"),
                         "firstimage": item.get("firstimage"),
-                        "homepage": item.get("homepage", "")
+                        "homepage": item.get("homepage", ""),
+                        "distance": round(haversine(lat, lon, float(item.get("mapy", lat)), float(item.get("mapx", lon))), 2)
                     })
         except:
             continue
@@ -142,6 +147,33 @@ def route():
         })
     except Exception as e:
         return jsonify({"error": f"❌ 서버 오류: {str(e)}"}), 500
+
+@app.route("/tour_detail/<contentid>")
+def tour_detail(contentid):
+    url = "http://apis.data.go.kr/B551011/KorService1/detailCommon1"
+    params = {
+        "serviceKey": TOURAPI_KEY,
+        "MobileOS": "ETC",
+        "MobileApp": "SeaRoute",
+        "contentId": contentid,
+        "overviewYN": "Y",
+        "defaultYN": "Y",
+        "_type": "json"
+    }
+    try:
+        res = requests.get(url, params=params, timeout=5)
+        if res.status_code != 200:
+            return f"<h2>TourAPI 오류: {res.status_code}</h2>", 500
+
+        data = res.json()
+        item_list = data.get("response", {}).get("body", {}).get("items", {}).get("item", [])
+        if not item_list:
+            return f"<h2>❌ 관광지 정보가 없습니다.</h2><p>contentid: {contentid}</p>", 404
+
+        item = item_list[0]
+        return render_template("tour_detail.html", item=item)
+    except Exception as e:
+        return f"<h2>TourAPI 호출 중 오류 발생</h2><p>{str(e)}</p>", 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
