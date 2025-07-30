@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>{{ item.title }}</title>
+</head>
+<body>
+  <h1>{{ item.title }}</h1>
+  <p><strong>주소:</strong> {{ item.addr1 or "주소 정보 없음" }}</p>
+  <p><strong>개요:</strong> {{ item.overview|safe or "소개 정보 없음" }}</p>
+
+  {% if item.firstimage %}
+    <img src="{{ item.firstimage.replace('http://', 'https://') }}" width="300">
+  {% endif %}
+
+  {% if item.homepage %}
+    <p><a href="{{ item.homepage }}" target="_blank">홈페이지 방문</a></p>
+  {% endif %}
+</body>
+</html>
