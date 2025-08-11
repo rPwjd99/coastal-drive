@@ -6,54 +6,48 @@
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
   <style>
-    html, body, #map {
-      margin: 0;
-      padding: 0;
-      height: 100%;
+    html, body, #map { margin:0; padding:0; height:100%; }
+    .controls {
+      position: absolute; top: 10px; left: 10px; z-index: 10;
+      background: rgba(255,255,255,.95); padding: 8px; border: 1px solid #ccc; border-radius: 6px;
+      font-size: 14px; box-shadow: 0 2px 8px rgba(0,0,0,.15);
     }
+    .controls input { width: 280px; margin: 4px 0; padding: 6px; }
+    .controls button { width: 100%; padding: 8px; cursor: pointer; }
     .popup {
-      background: white;
-      padding: 6px;
-      border: 1px solid #888;
-      border-radius: 4px;
-      font-size: 13px;
-      max-width: 250px;
+      background: white; padding: 6px; border: 1px solid #888; border-radius: 4px;
+      font-size: 13px; max-width: 260px;
     }
-    .popup img {
-      width: 100%;
-      margin-top: 5px;
-    }
+    .popup img { width: 100%; margin-top: 5px; }
   </style>
 </head>
 <body>
+  <div class="controls">
+    <div><input id="startInput" placeholder="출발지 주소 (예: 세종특별자치시청)" /></div>
+    <div><input id="endInput" placeholder="도착지 주소 (예: 속초시청)" /></div>
+    <button id="routeBtn">경로 찾기</button>
+  </div>
+
   <div id="map"></div>
+
   <script>
+    // 지도 기본 레이어/뷰 (기존 구조 유지)
     const map = new ol.Map({
       target: "map",
       layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
-      view: new ol.View({
-        center: ol.proj.fromLonLat([127.5, 36.5]),
-        zoom: 8
-      })
+      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 8 })
     });
 
-    const routeLayer = new ol.layer.Vector({
-      source: new ol.source.Vector()
-    });
+    const routeLayer = new ol.layer.Vector({ source: new ol.source.Vector() });
     map.addLayer(routeLayer);
 
-    const markerLayer = new ol.layer.Vector({
-      source: new ol.source.Vector()
-    });
+    const markerLayer = new ol.layer.Vector({ source: new ol.source.Vector() });
     map.addLayer(markerLayer);
 
     const popup = document.createElement("div");
     popup.className = "popup";
     const overlay = new ol.Overlay({
-      element: popup,
-      positioning: "bottom-center",
-      stopEvent: false,
-      offset: [0, -10]
+      element: popup, positioning: "bottom-center", stopEvent: false, offset: [0, -10]
     });
     map.addOverlay(overlay);
 
@@ -68,37 +62,79 @@
       }
     });
 
+    // UI
+    const $start = document.getElementById("startInput");
+    const $end = document.getElementById("endInput");
+    const $btn = document.getElementById("routeBtn");
+
+    $btn.addEventListener("click", async () => {
+      try {
+        if (!$start.value.trim() || !$end.value.trim()) {
+          alert("출발지와 도착지 주소를 모두 입력하세요.");
+          return;
+        }
+        const start = await geocode($start.value.trim());
+        const end = await geocode($end.value.trim());
+
+        await fetchRoute([start.lon, start.lat], [end.lon, end.lat]);
+      } catch (e) {
+        console.error(e);
+        alert("경로 계산 중 오류가 발생했습니다.");
+      }
+    });
+
+    // NAVER 지오코딩 호출
+    async function geocode(query) {
+      const r = await fetch("/geocode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || "geocode fail");
+      return j; // {lon, lat}
+    }
+
+    // ORS 경로 + 경유지 2곳 반영
     async function fetchRoute(start, end) {
+      markerLayer.getSource().clear();
+      routeLayer.getSource().clear();
+
       const res = await fetch("/route", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ start, end })
       });
       const data = await res.json();
+
       drawRoute(data.route);
+
+      // 두 경유지 주변 관광정보(맛집/카페/관광지) 조회
       for (const wp of data.waypoints) {
         await fetchTourspots([parseFloat(wp.lon), parseFloat(wp.lat)]);
       }
     }
 
+    // 경로 선 그리기 (ORS GeoJSON)
     function drawRoute(routeData) {
       routeLayer.getSource().clear();
+      // features[0].geometry.coordinates = [[lon,lat], ...]
       const coords = routeData.features[0].geometry.coordinates.map(c =>
         ol.proj.fromLonLat([c[0], c[1]])
       );
       const line = new ol.geom.LineString(coords);
       const feature = new ol.Feature({ geometry: line });
-      feature.setStyle(
-        new ol.style.Style({
-          stroke: new ol.style.Stroke({
-            color: "#1976D2",
-            width: 6
-          })
-        })
-      );
+      feature.setStyle(new ol.style.Style({
+        stroke: new ol.style.Stroke({ color: "#1976D2", width: 6 })
+      }));
       routeLayer.getSource().addFeature(feature);
+
+      // 화면에 경로 맞춰줌
+      const extent = line.getExtent();
+      map.getView().fit(extent, { padding: [60, 60, 60, 60], maxZoom: 14 });
     }
 
+    // TourAPI: 경유지 주변 5km의 맛집/카페/관광지
     async function fetchTourspots(coord) {
       const res = await fetch("/tourspot", {
         method: "POST",
@@ -109,44 +145,40 @@
       addMarkers(data);
     }
 
+    // 마커 + 팝업 (사진/운영시간/주차 정보 포함: 값이 있을 때만 표시)
     function addMarkers(spots) {
       for (const s of spots) {
-        const color =
-          s.type === "restaurant"
-            ? "red"
-            : s.type === "cafe"
-            ? "orange"
-            : "blue";
+        const color = s.type === "restaurant" ? "red" : s.type === "cafe" ? "orange" : "blue";
 
         const marker = new ol.Feature({
-          geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(s.lon), parseFloat(s.lat)]))
+          geometry: new ol.geom.Point(
+            ol.proj.fromLonLat([parseFloat(s.lon), parseFloat(s.lat)])
+          )
         });
 
-        marker.setStyle(
-          new ol.style.Style({
-            image: new ol.style.Circle({
-              radius: 7,
-              fill: new ol.style.Fill({ color }),
-              stroke: new ol.style.Stroke({ color: "#fff", width: 2 })
-            })
+        marker.setStyle(new ol.style.Style({
+          image: new ol.style.Circle({
+            radius: 7,
+            fill: new ol.style.Fill({ color }),
+            stroke: new ol.style.Stroke({ color: "#fff", width: 2 })
           })
-        );
+        }));
 
-        const popupHTML = `
-          <strong>${s.name}</strong><br/>
-          ${s.addr || ""}<br/>
-          ${s.info || ""}<br/>
-          ${s.img ? `<img src="${s.img}">` : ""}
-        `;
+        const lines = [];
+        if (s.name) lines.push(`<strong>${s.name}</strong>`);
+        if (s.addr) lines.push(s.addr);
+        if (s.info) lines.push(s.info);
+        if (s.img) lines.push(`<img src="${s.img}">`);
+        const popupHTML = lines.join("<br/>");
+
         marker.set("popupContent", popupHTML);
         markerLayer.getSource().addFeature(marker);
       }
     }
 
-    // 🔹 테스트용 좌표 (세종시청 → 속초시청)
-    const start = [127.289, 36.480];
-    const end = [128.593, 38.207];
-    fetchRoute(start, end);
+    // 편의: 초기값
+    $start.value = "세종특별자치시청";
+    $end.value = "속초시청";
   </script>
 </body>
 </html>
