@@ -31,7 +31,6 @@
   <div id="map"></div>
 
   <script>
-    // 지도 기본 레이어/뷰 (기존 구조 유지)
     const map = new ol.Map({
       target: "map",
       layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
@@ -62,7 +61,6 @@
       }
     });
 
-    // UI
     const $start = document.getElementById("startInput");
     const $end = document.getElementById("endInput");
     const $btn = document.getElementById("routeBtn");
@@ -75,7 +73,6 @@
         }
         const start = await geocode($start.value.trim());
         const end = await geocode($end.value.trim());
-
         await fetchRoute([start.lon, start.lat], [end.lon, end.lat]);
       } catch (e) {
         console.error(e);
@@ -83,7 +80,6 @@
       }
     });
 
-    // NAVER 지오코딩 호출
     async function geocode(query) {
       const r = await fetch("/geocode", {
         method: "POST",
@@ -95,7 +91,6 @@
       return j; // {lon, lat}
     }
 
-    // ORS 경로 + 경유지 2곳 반영
     async function fetchRoute(start, end) {
       markerLayer.getSource().clear();
       routeLayer.getSource().clear();
@@ -109,16 +104,14 @@
 
       drawRoute(data.route);
 
-      // 두 경유지 주변 관광정보(맛집/카페/관광지) 조회
+      // 경유지 2곳 주변 관광정보 로드 (맛집/카페/관광지)
       for (const wp of data.waypoints) {
         await fetchTourspots([parseFloat(wp.lon), parseFloat(wp.lat)]);
       }
     }
 
-    // 경로 선 그리기 (ORS GeoJSON)
     function drawRoute(routeData) {
       routeLayer.getSource().clear();
-      // features[0].geometry.coordinates = [[lon,lat], ...]
       const coords = routeData.features[0].geometry.coordinates.map(c =>
         ol.proj.fromLonLat([c[0], c[1]])
       );
@@ -129,12 +122,10 @@
       }));
       routeLayer.getSource().addFeature(feature);
 
-      // 화면에 경로 맞춰줌
       const extent = line.getExtent();
       map.getView().fit(extent, { padding: [60, 60, 60, 60], maxZoom: 14 });
     }
 
-    // TourAPI: 경유지 주변 5km의 맛집/카페/관광지
     async function fetchTourspots(coord) {
       const res = await fetch("/tourspot", {
         method: "POST",
@@ -145,7 +136,6 @@
       addMarkers(data);
     }
 
-    // 마커 + 팝업 (사진/운영시간/주차 정보 포함: 값이 있을 때만 표시)
     function addMarkers(spots) {
       for (const s of spots) {
         const color = s.type === "restaurant" ? "red" : s.type === "cafe" ? "orange" : "blue";
@@ -176,7 +166,7 @@
       }
     }
 
-    // 편의: 초기값
+    // 편의: 초기값 (원하면 삭제)
     $start.value = "세종특별자치시청";
     $end.value = "속초시청";
   </script>
