@@ -1,174 +1,142 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <title>해안도로 감성 드라이브</title>
+  <meta charset="UTF-8">
+  <title>🌊 바다따라: 해안도로 감성 드라이브</title>
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
   <style>
-    html, body, #map { margin:0; padding:0; height:100%; }
-    .controls {
-      position: absolute; top: 10px; left: 10px; z-index: 10;
-      background: rgba(255,255,255,.95); padding: 8px; border: 1px solid #ccc; border-radius: 6px;
-      font-size: 14px; box-shadow: 0 2px 8px rgba(0,0,0,.15);
+    body { margin: 0; font-family: sans-serif; }
+    #map { width: 100%; height: 90vh; }
+    #controls {
+      padding: 10px;
+      background: #f7f7f7;
+      border-bottom: 1px solid #ccc;
     }
-    .controls input { width: 280px; margin: 4px 0; padding: 6px; }
-    .controls button { width: 100%; padding: 8px; cursor: pointer; }
+    input { width: 300px; padding: 6px; margin-right: 10px; }
+    button { padding: 6px 14px; background: #0078ff; color: white; border: none; cursor: pointer; }
     .popup {
-      background: white; padding: 6px; border: 1px solid #888; border-radius: 4px;
-      font-size: 13px; max-width: 260px;
+      background: white; padding: 6px 10px; border: 1px solid gray; border-radius: 6px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.3); font-size: 13px; max-width: 260px;
     }
-    .popup img { width: 100%; margin-top: 5px; }
   </style>
 </head>
 <body>
-  <div class="controls">
-    <div><input id="startInput" placeholder="출발지 주소 (예: 세종특별자치시청)" /></div>
-    <div><input id="endInput" placeholder="도착지 주소 (예: 속초시청)" /></div>
-    <button id="routeBtn">경로 찾기</button>
+  <div id="controls">
+    <input id="start" placeholder="출발지 (예: 세종시청)">
+    <input id="end" placeholder="도착지 (예: 속초시청)">
+    <button onclick="calculateRoute()">경로 계산</button>
   </div>
-
   <div id="map"></div>
 
   <script>
     const map = new ol.Map({
       target: "map",
       layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
-      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 8 })
+      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
     });
 
-    const routeLayer = new ol.layer.Vector({ source: new ol.source.Vector() });
-    map.addLayer(routeLayer);
+    let routeLayer = null;
+    let spotLayer = null;
+    let overlay = null;
 
-    const markerLayer = new ol.layer.Vector({ source: new ol.source.Vector() });
-    map.addLayer(markerLayer);
-
-    const popup = document.createElement("div");
-    popup.className = "popup";
-    const overlay = new ol.Overlay({
-      element: popup, positioning: "bottom-center", stopEvent: false, offset: [0, -10]
-    });
-    map.addOverlay(overlay);
-
-    map.on("pointermove", function (evt) {
-      const feature = map.forEachFeatureAtPixel(evt.pixel, f => f);
-      if (feature && feature.get("popupContent")) {
-        popup.innerHTML = feature.get("popupContent");
-        overlay.setPosition(evt.coordinate);
-        popup.style.display = "block";
-      } else {
-        popup.style.display = "none";
+    async function calculateRoute() {
+      const start = document.getElementById("start").value.trim();
+      const end = document.getElementById("end").value.trim();
+      if (!start || !end) {
+        alert("출발지와 도착지를 모두 입력하세요.");
+        return;
       }
-    });
 
-    const $start = document.getElementById("startInput");
-    const $end = document.getElementById("endInput");
-    const $btn = document.getElementById("routeBtn");
-
-    $btn.addEventListener("click", async () => {
       try {
-        if (!$start.value.trim() || !$end.value.trim()) {
-          alert("출발지와 도착지 주소를 모두 입력하세요.");
-          return;
-        }
-        const start = await geocode($start.value.trim());
-        const end = await geocode($end.value.trim());
-        await fetchRoute([start.lon, start.lat], [end.lon, end.lat]);
-      } catch (e) {
-        console.error(e);
-        alert("경로 계산 중 오류가 발생했습니다.");
-      }
-    });
-
-    async function geocode(query) {
-      const r = await fetch("/geocode", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query })
-      });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || "geocode fail");
-      return j; // {lon, lat}
-    }
-
-    async function fetchRoute(start, end) {
-      markerLayer.getSource().clear();
-      routeLayer.getSource().clear();
-
-      const res = await fetch("/route", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start, end })
-      });
-      const data = await res.json();
-
-      drawRoute(data.route);
-
-      // 경유지 2곳 주변 관광정보 로드 (맛집/카페/관광지)
-      for (const wp of data.waypoints) {
-        await fetchTourspots([parseFloat(wp.lon), parseFloat(wp.lat)]);
-      }
-    }
-
-    function drawRoute(routeData) {
-      routeLayer.getSource().clear();
-      const coords = routeData.features[0].geometry.coordinates.map(c =>
-        ol.proj.fromLonLat([c[0], c[1]])
-      );
-      const line = new ol.geom.LineString(coords);
-      const feature = new ol.Feature({ geometry: line });
-      feature.setStyle(new ol.style.Style({
-        stroke: new ol.style.Stroke({ color: "#1976D2", width: 6 })
-      }));
-      routeLayer.getSource().addFeature(feature);
-
-      const extent = line.getExtent();
-      map.getView().fit(extent, { padding: [60, 60, 60, 60], maxZoom: 14 });
-    }
-
-    async function fetchTourspots(coord) {
-      const res = await fetch("/tourspot", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lon: coord[0], lat: coord[1] })
-      });
-      const data = await res.json();
-      addMarkers(data);
-    }
-
-    function addMarkers(spots) {
-      for (const s of spots) {
-        const color = s.type === "restaurant" ? "red" : s.type === "cafe" ? "orange" : "blue";
-
-        const marker = new ol.Feature({
-          geometry: new ol.geom.Point(
-            ol.proj.fromLonLat([parseFloat(s.lon), parseFloat(s.lat)])
-          )
+        const response = await fetch("/route", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ start, end })
         });
 
-        marker.setStyle(new ol.style.Style({
-          image: new ol.style.Circle({
-            radius: 7,
-            fill: new ol.style.Fill({ color }),
-            stroke: new ol.style.Stroke({ color: "#fff", width: 2 })
+        const result = await response.json();
+        if (!response.ok || !result.route) {
+          throw new Error(result.error || "서버 오류 발생");
+        }
+
+        const coords = result.route.features[0].geometry.coordinates.map(
+          ([lon, lat]) => ol.proj.fromLonLat([lon, lat])
+        );
+
+        if (routeLayer) map.removeLayer(routeLayer);
+        routeLayer = new ol.layer.Vector({
+          source: new ol.source.Vector({
+            features: [new ol.Feature({ geometry: new ol.geom.LineString(coords) })]
+          }),
+          style: new ol.style.Style({
+            stroke: new ol.style.Stroke({ color: "blue", width: 4 })
           })
-        }));
+        });
+        map.addLayer(routeLayer);
+        map.getView().fit(new ol.geom.LineString(coords), { padding: [50, 50, 50, 50], maxZoom: 12 });
 
-        const lines = [];
-        if (s.name) lines.push(`<strong>${s.name}</strong>`);
-        if (s.addr) lines.push(s.addr);
-        if (s.info) lines.push(s.info);
-        if (s.img) lines.push(`<img src="${s.img}">`);
-        const popupHTML = lines.join("<br/>");
+        alert(
+          `✅ 경유1: ${result.waypoint1.name}\n📍 ${result.waypoint1.address}\n\n` +
+          `✅ 경유2(도착지 방향): ${result.waypoint2.name}\n📍 ${result.waypoint2.address}`
+        );
 
-        marker.set("popupContent", popupHTML);
-        markerLayer.getSource().addFeature(marker);
+        const spots = result.spots || [];
+        if (spotLayer) map.removeLayer(spotLayer);
+
+        const features = spots.map(spot => {
+          const coord = ol.proj.fromLonLat([parseFloat(spot.mapx), parseFloat(spot.mapy)]);
+          const feature = new ol.Feature({ geometry: new ol.geom.Point(coord) });
+
+          const img = spot.firstimage ? `<img src="${spot.firstimage}" width="160"><br>` : "";
+          const homepage = spot.homepage ? `<br><a href='${spot.homepage}' target='_blank'>자세히 보기</a>` : "";
+          const parking = spot.parking ? `<br>주차: ${spot.parking}` : "";
+          const usetime = spot.usetime ? `<br>운영시간: ${spot.usetime}` : "";
+
+          feature.set("desc", `
+            <b>${spot.title}</b><br>
+            ${img}
+            ${spot.addr1 || "주소 없음"}${parking}${usetime}${homepage}
+          `);
+          return feature;
+        });
+
+        spotLayer = new ol.layer.Vector({
+          source: new ol.source.Vector({ features }),
+          style: new ol.style.Style({
+            image: new ol.style.Circle({
+              radius: 6,
+              fill: new ol.style.Fill({ color: "red" }),
+              stroke: new ol.style.Stroke({ color: "white", width: 1 })
+            })
+          })
+        });
+        map.addLayer(spotLayer);
+
+        if (!overlay) {
+          const el = document.createElement("div");
+          el.className = "popup";
+          overlay = new ol.Overlay({ element: el, autoPan: true, offset: [0, -10] });
+          map.addOverlay(overlay);
+        }
+
+        map.on("pointermove", function (evt) {
+          const feature = map.forEachFeatureAtPixel(evt.pixel, f => f);
+          const element = overlay.getElement();
+          if (feature && feature.get("desc")) {
+            element.innerHTML = feature.get("desc");
+            overlay.setPosition(evt.coordinate);
+            element.style.display = "block";
+          } else if (element) {
+            element.style.display = "none";
+          }
+        });
+
+      } catch (err) {
+        alert("❌ 경로 요청 실패: " + err.message);
+        console.error(err);
       }
     }
-
-    // 편의: 초기값 (원하면 삭제)
-    $start.value = "세종특별자치시청";
-    $end.value = "속초시청";
   </script>
 </body>
 </html>
