@@ -2,21 +2,22 @@ from flask import Flask, request, jsonify, render_template
 import os
 import requests
 from dotenv import load_dotenv
-from beaches_coordinates import beach_coords  # {name: (lon, lat)}
+from beaches_coordinates import beach_coords
 
 load_dotenv()
 app = Flask(__name__)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 ORS_API_KEY = os.getenv("ORS_API_KEY")
-TOURAPI_KEY = os.getenv("TOURAPI_KEY", "e1tU33wjMx2nynKjH8yDBm/S4YNne6B8mpCOWtzMH9TSONF71XG/xAwPqyv1fANpgeOvbPY+Le+gM6cYCnWV8w==")
+TOURAPI_KEY = "e1tU33wjMx2nynKjH8yDBm/S4YNne6B8mpCOWtzMH9TSONF71XG/xAwPqyv1fANpgeOvbPY+Le+gM6cYCnWV8w=="
 
+# -------------------- 유틸 --------------------
 def haversine(lat1, lon1, lat2, lon2):
     from math import radians, cos, sin, asin, sqrt
-    R = 6371.0
+    R = 6371
     dlat = radians(lat2 - lat1)
     dlon = radians(lon2 - lon1)
-    a = sin(dlat/2)**2 + cos(radians(lat1))*cos(radians(lat2))*sin(dlon/2)**2
+    a = sin(dlat / 2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2)**2
     return 2 * R * asin(sqrt(a))
 
 def geocode_google(address):
@@ -37,73 +38,89 @@ def reverse_geocode_google(lat, lon):
         return "주소 불러오기 실패"
 
 def is_in_coastal_bounds(lat, lon):
-    # 전국 해안 범위를 느슨하게: 동/남/서해 전반
+    # (이전 코드 유지) 한국 해안권 대략 박스
     return (
-        (34.0 <= lat <= 38.6 and 126.0 <= lon <= 131.5) or  # 한반도 본토 해안대
-        (33.0 <= lat <= 33.7 and 126.0 <= lon <= 127.2)     # 제주권
+        (35 <= lat <= 38 and 128 <= lon <= 131) or
+        (33 <= lat <= 35 and 126 <= lon <= 129) or
+        (34 <= lat <= 38 and 124 <= lon <= 126)
     )
 
+# -------------------- 경유지 선택 --------------------
 def find_best_beach_waypoint(start, end):
     """
-    '전과 같이' 첫 경유지 찾기:
-    - 출발과 위도(±0.2) 가까운 후보 중, (도착–출발) 진행방향과 같은 쪽의 롱/랏만 고려
-    - 출발과 경도(±0.2) 가까운 후보도 동일 기준
-    - 두 집합 각각에서 '도착과의 거리'가 가장 짧은 후보를 뽑고, 더 나은 쪽을 선택
+    네가 쓰던 1번 경유지 찾기 로직 그대로.
+    반환 형식: (name, lat, lon, dist_to_end)  # dist는 내부 사용용
     """
     start_lat, start_lon = start
     end_lat, end_lon = end
     lat_candidates, lon_candidates = [], []
-
     for name, (lon, lat) in beach_coords.items():
-        if not is_in_coastal_bounds(lat, lon):
+        if not is_in_coastal_bounds(lat, lon): 
             continue
-
-        # 위도 유사 + 진행방향 체크(경도 방향으로 전진)
         if abs(lat - start_lat) < 0.2 and (end_lon - start_lon) * (lon - start_lon) > 0:
             lat_candidates.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
-
-        # 경도 유사 + 진행방향 체크(위도 방향으로 전진)
         if abs(lon - start_lon) < 0.2 and (end_lat - start_lat) * (lat - start_lat) > 0:
             lon_candidates.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
-
     best_lat = min(lat_candidates, key=lambda x: x[3]) if lat_candidates else None
     best_lon = min(lon_candidates, key=lambda x: x[3]) if lon_candidates else None
+    return best_lat if best_lat and (not best_lon or best_lat[3] < best_lon[3]) else best_lon
 
-    if best_lat and best_lon:
-        return best_lat if best_lat[3] <= best_lon[3] else best_lon
-    return best_lat or best_lon
+def _ahead_of(first_lat, first_lon, cand_lat, cand_lon, end_lat, end_lon):
+    """
+    '도착지 방향(전진 방향)에 있다'를 간단히 판정.
+    벡터(F→E)와 벡터(F→C)의 내적이 양수면 '앞'으로 간주.
+    """
+    dx_goal = end_lon - first_lon
+    dy_goal = end_lat - first_lat
+    dx_cand = cand_lon - first_lon
+    dy_cand = cand_lat - first_lat
+    return (dx_goal * dx_cand + dy_goal * dy_cand) > 0
 
-def find_second_beach_waypoint_simple(first_wp):
+def find_second_beach_waypoint(first_wp, end):
     """
-    두 번째 경유지는 '경유1에서 가장 가까운 해수욕장'으로 단순 선택.
-    (출발/도착 방향 필터 없이, 동일 좌표는 제외)
+    2번 경유지 = '경유1에서 가장 가까운 해수욕장' (우선),
+    가능하면 '도착지 방향(전진)'에 있는 후보만 대상으로 함.
+    반환 형식: (name, lat, lon)
     """
-    f_name, f_lat, f_lon = first_wp
-    best = None
-    best_d = 10**9
+    f_name, f_lat, f_lon = first_wp[0], first_wp[1], first_wp[2]
+    end_lat, end_lon = end
+
+    ahead_candidates = []
+    any_candidates = []
     for name, (lon, lat) in beach_coords.items():
-        if name == f_name:
+        if name == f_name: 
             continue
         if not is_in_coastal_bounds(lat, lon):
             continue
         d = haversine(f_lat, f_lon, lat, lon)
-        if d < best_d:
-            best_d = d
-            best = (name, lat, lon)
-    return best
+        any_candidates.append((name, lat, lon, d))
+        if _ahead_of(f_lat, f_lon, lat, lon, end_lat, end_lon):
+            ahead_candidates.append((name, lat, lon, d))
 
-def get_ors_route_ordered(start, waypoints, end):
+    picks = ahead_candidates if ahead_candidates else any_candidates
+    if not picks:
+        return None
+    name, lat, lon, _ = min(picks, key=lambda x: x[3])
+    return (name, lat, lon)
+
+# -------------------- 라우팅/POI --------------------
+def get_ors_route_with_waypoints(start, waypoint1, waypoint2, end):
     """
-    ORS를 출발 → 경유1 → 경유2 → 도착 '순서 그대로' 호출.
+    ORS 호출을 '출발 → 경유1 → (경유2) → 도착' 순서로 구성.
+    waypoint2가 None이면 1경유만 포함.
     """
-    if not ORS_API_KEY:
-        return {"error": "ORS_API_KEY 미설정"}, 500
     url = "https://api.openrouteservice.org/v2/directions/driving-car/geojson"
     headers = {"Authorization": ORS_API_KEY, "Content-Type": "application/json"}
 
-    coords = [[start[1], start[0]]] + [[wp[2], wp[1]] for wp in waypoints] + [[end[1], end[0]]]
-    body = {"coordinates": coords}
-    res = requests.post(url, headers=headers, json=body)
+    coords = [
+        [start[1], start[0]],
+        [waypoint1[2], waypoint1[1]],
+    ]
+    if waypoint2:
+        coords.append([waypoint2[2], waypoint2[1]])
+    coords.append([end[1], end[0]])
+
+    res = requests.post(url, headers=headers, json={"coordinates": coords})
     try:
         return res.json(), res.status_code
     except Exception as e:
@@ -148,6 +165,7 @@ def search_tour_spots_along_route(geojson):
             continue
     return spots
 
+# -------------------- Flask --------------------
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -161,39 +179,41 @@ def route():
         if not start or not end:
             return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
-        # 경유1: '전과 같이' 방식
-        wp1 = find_best_beach_waypoint(start, end)
-        if not wp1:
+        # 1) 경유1: 기존 로직 그대로
+        waypoint1 = find_best_beach_waypoint(start, end)
+        if not waypoint1:
             return jsonify({"error": "❌ 경유지1 탐색 실패"}), 500
 
-        # 경유2: 경유1과 가장 가까운 해수욕장
-        wp2 = find_second_beach_waypoint_simple(wp1)
-        waypoints = [wp1]
-        if wp2:
-            waypoints.append(wp2)
+        # 2) 경유2: 경유1에서 '다음' 해수욕장 (가능하면 목적지 방향)
+        waypoint2 = find_second_beach_waypoint(waypoint1, end)
 
-        # 반드시 출발→경유1→경유2→도착 순서로 요청
-        route_data, status = get_ors_route_ordered(start, waypoints, end)
+        # 3) 경로 요청: 2경유 우선, 실패 시 1경유로 폴백
+        route_data, status = get_ors_route_with_waypoints(start, waypoint1, waypoint2, end)
         if "error" in route_data or status != 200:
-            # 혹시 2경유가 막히면 1경유로 축소해 마지막 재시도
-            route_data2, status2 = get_ors_route_ordered(start, [wp1], end)
+            route_data2, status2 = get_ors_route_with_waypoints(start, waypoint1, None, end)
             if "error" in route_data2 or status2 != 200:
                 return jsonify({"error": route_data.get("error", "❌ 경로 계산 실패")}), status
             route_data = route_data2
-            waypoints = [wp1]
+            waypoint2 = None
 
-        # 관광지/맛집/카페는 간단 버전(전과 동일 엔드포인트 사용)
+        # 4) 경로 주변 POI
         spots = search_tour_spots_along_route(route_data)
 
-        def wp_to_info(w):
-            name, la, lo = w
-            addr = reverse_geocode_google(la, lo)
-            return {"name": name, "lat": la, "lon": lo, "address": addr}
+        # 5) 경유지 주소 역지오코딩
+        wp1_addr = reverse_geocode_google(waypoint1[1], waypoint1[2])
+        wp1_obj = {"name": waypoint1[0], "lat": waypoint1[1], "lon": waypoint1[2], "address": wp1_addr}
 
+        wp2_obj = None
+        if waypoint2:
+            wp2_addr = reverse_geocode_google(waypoint2[1], waypoint2[2])
+            wp2_obj = {"name": waypoint2[0], "lat": waypoint2[1], "lon": waypoint2[2], "address": wp2_addr}
+
+        # ✅ 기존 키 유지 + 확장
         return jsonify({
             "route": route_data,
-            "waypoints": [wp_to_info(w) for w in waypoints],
-            "spots": spots
+            "waypoint": wp1_obj,      # 기존 프론트 호환
+            "waypoint2": wp2_obj,     # 새로 추가
+            "spots": spots or []
         })
     except Exception as e:
         return jsonify({"error": f"❌ 서버 오류: {str(e)}"}), 500
