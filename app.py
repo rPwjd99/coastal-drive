@@ -3,189 +3,286 @@ import os
 import requests
 from dotenv import load_dotenv
 from beaches_coordinates import beach_coords
+from functools import lru_cache
+from math import radians, cos, sin, asin, sqrt, atan2, degrees
 
 load_dotenv()
 app = Flask(__name__)
 
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-ORS_API_KEY = os.getenv("ORS_API_KEY")
-TOURAPI_KEY = "e1tU33wjMx2nynKjH8yDBm/S4YNne6B8mpCOWtzMH9TSONF71XG/xAwPqyv1fANpgeOvbPY+Le+gM6cYCnWV8w=="
+# --- API Keys (환경변수 우선, 없으면 기본값 사용 가능) ---
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+ORS_API_KEY = os.getenv("ORS_API_KEY", "")
+TOURAPI_KEY = os.getenv("TOURAPI_KEY", "e1tU33wjMx2nynKjH8yDBm/S4YNne6B8mpCOWtzMH9TSONF71XG/xAwPqyv1fANpgeOvbPY+Le+gM6cYCnWV8w==")
+
+# --- 제주 경계(대략) ---
+JEJU_MIN_LON, JEJU_MAX_LON = 126.0, 127.1
+JEJU_MIN_LAT, JEJU_MAX_LAT = 33.05, 33.60
+
+# --- 도/특·광역시 축약어 보정 맵 ---
+PROV_MAP = {
+    "경북": "경상북도",
+    "경남": "경상남도",
+    "전북": "전라북도",
+    "전남": "전라남도",
+    "충북": "충청북도",
+    "충남": "충청남도",
+    "강원": "강원도",
+    "경기": "경기도",
+    "서울": "서울특별시",
+    "부산": "부산광역시",
+    "대구": "대구광역시",
+    "인천": "인천광역시",
+    "광주": "광주광역시",
+    "대전": "대전광역시",
+    "울산": "울산광역시",
+    "세종": "세종특별자치시",
+    "제주": "제주특별자치도",
+}
 
 def haversine(lat1, lon1, lat2, lon2):
-    from math import radians, cos, sin, asin, sqrt
-    R = 6371
+    R = 6371.0
     dlat = radians(lat2 - lat1)
     dlon = radians(lon2 - lon1)
     a = sin(dlat / 2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2)**2
     return 2 * R * asin(sqrt(a))
 
-def geocode_google(address):
-    url = "https://maps.googleapis.com/maps/api/geocode/json"
-    res = requests.get(url, params={"address": address, "key": GOOGLE_API_KEY})
-    try:
-        location = res.json()["results"][0]["geometry"]["location"]
-        return location["lat"], location["lng"]
-    except:
-        return None
+def bearing(lon1, lat1, lon2, lat2):
+    y = sin(radians(lon2 - lon1)) * cos(radians(lat2))
+    x = cos(radians(lat1)) * sin(radians(lat2)) - sin(radians(lat1)) * cos(radians(lat2)) * cos(radians(lon2 - lon1))
+    br = degrees(atan2(y, x))
+    return (br + 360) % 360
 
-def reverse_geocode_google(lat, lon):
-    url = "https://maps.googleapis.com/maps/api/geocode/json"
-    res = requests.get(url, params={"latlng": f"{lat},{lon}", "key": GOOGLE_API_KEY})
-    try:
-        return res.json()["results"][0]["formatted_address"]
-    except:
-        return "주소 불러오기 실패"
+def angle_diff(a, b):
+    d = abs(a - b) % 360
+    return d if d <= 180 else 360 - d
+
+def in_jeju(lat, lon):
+    return (JEJU_MIN_LON <= lon <= JEJU_MAX_LON) and (JEJU_MIN_LAT <= lat <= JEJU_MAX_LAT)
 
 def is_in_coastal_bounds(lat, lon):
+    # 기존 네 범위 그대로 유지
     return (
         (35 <= lat <= 38 and 128 <= lon <= 131) or
         (33 <= lat <= 35 and 126 <= lon <= 129) or
         (34 <= lat <= 38 and 124 <= lon <= 126)
     )
 
-# ---------------------------
-# 첫 번째 경유지: 기존 방식
-# ---------------------------
-def find_best_beach_waypoint(start, end):
+def normalize_address_tries(raw):
+    q = (raw or "").strip()
+    if not q:
+        return []
+
+    tries = [q]
+
+    # 제주 특화 우선 시도
+    jeju_prefix = [f"제주특별자치도 {q}", f"제주시 {q}", f"서귀포시 {q}"]
+
+    # 축약어 → 정식명칭
+    expanded = []
+    for abbr, full in PROV_MAP.items():
+        if q.startswith(abbr):
+            expanded.append(q.replace(abbr, full, 1))
+
+    # 일반 접두(전국 시도 붙여 시도)
+    generic_prefixes = [
+        "서울특별시", "부산광역시", "대구광역시", "인천광역시", "광주광역시", "대전광역시", "울산광역시",
+        "세종특별자치시", "경기도", "강원도", "충청북도", "충청남도", "전라북도", "전라남도",
+        "경상북도", "경상남도", "제주특별자치도"
+    ]
+    generic_tries = [f"{p} {q}" for p in generic_prefixes]
+
+    # 중복 제거하며 병합
+    out, seen = [], set()
+    for arr in [tries, jeju_prefix, expanded, generic_tries]:
+        for t in arr:
+            t = t.strip()
+            if t and t not in seen:
+                seen.add(t)
+                out.append(t)
+    return out
+
+@lru_cache(maxsize=512)
+def geocode_google_once(query):
+    if not GOOGLE_API_KEY:
+        return None
+    url = "https://maps.googleapis.com/maps/api/geocode/json"
+    res = requests.get(url, params={"address": query, "key": GOOGLE_API_KEY, "language": "ko", "region": "kr"}, timeout=8)
+    if res.status_code != 200:
+        return None
+    data = res.json()
+    if data.get("status") != "OK":
+        return None
+    loc = data["results"][0]["geometry"]["location"]
+    return (loc["lat"], loc["lng"])
+
+def geocode_google(address):
+    for q in normalize_address_tries(address):
+        c = geocode_google_once(q)
+        if c:
+            return c
+    return None
+
+def reverse_geocode_google(lat, lon):
+    if not GOOGLE_API_KEY:
+        return "주소 불러오기 실패"
+    url = "https://maps.googleapis.com/maps/api/geocode/json"
+    res = requests.get(url, params={"latlng": f"{lat},{lon}", "key": GOOGLE_API_KEY, "language": "ko"}, timeout=8)
+    try:
+        return res.json()["results"][0]["formatted_address"]
+    except:
+        return "주소 불러오기 실패"
+
+def find_best_beach_waypoint(start, end, candidates):
     start_lat, start_lon = start
     end_lat, end_lon = end
-    lat_candidates, lon_candidates = [], []
-    for name, (lon, lat) in beach_coords.items():
+    br_to_goal = bearing(start_lon, start_lat, end_lon, end_lat)
+
+    best = None
+    best_score = 10**12
+
+    for name, (lon, lat) in candidates.items():
         if not is_in_coastal_bounds(lat, lon):
             continue
-        # 위도 정렬 + 진행방향 체크(경도 방향)
-        if abs(lat - start_lat) < 0.2 and (end_lon - start_lon) * (lon - start_lon) > 0:
-            lat_candidates.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
-        # 경도 정렬 + 진행방향 체크(위도 방향)
-        if abs(lon - start_lon) < 0.2 and (end_lat - start_lat) * (lat - start_lat) > 0:
-            lon_candidates.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
-    best_lat = min(lat_candidates, key=lambda x: x[3]) if lat_candidates else None
-    best_lon = min(lon_candidates, key=lambda x: x[3]) if lon_candidates else None
-    return best_lat if best_lat and (not best_lon or best_lat[3] < best_lon[3]) else best_lon
+        # 방향성 + 우회비용 최소
+        ang = angle_diff(br_to_goal, bearing(start_lon, start_lat, lon, lat))
+        detour = haversine(start_lat, start_lon, lat, lon) + haversine(lat, lon, end_lat, end_lon) - haversine(start_lat, start_lon, end_lat, end_lon)
+        score = ang * 2000 + detour
+        if score < best_score:
+            best_score = score
+            best = (name, lat, lon)
+    return best
 
-# ------------------------------------------
-# 두 번째 경유지: "도착지 방향"에 있는 해수욕장
-# ------------------------------------------
-def find_second_beach_waypoint(first_wp, end):
-    """
-    first_wp: (name, lat, lon, dist_to_end)
-    end: (lat, lon)
-    규칙:
-      1) first → dest 방향 벡터(vd)와 first → candidate 벡터(vc)의 내적이 양수(앞쪽)
-      2) 각도 차(acos) 최소 우선
-      3) 동률이면 first와의 거리 짧은 순
-      4) 아무 후보도 없으면 '도착지에 더 가까운' 해수욕장(첫 경유지 제외) fallback
-    """
-    from math import radians, cos, sin, sqrt, acos
+def find_second_beach_waypoint(start, end, first_wp, candidates):
+    start_lat, start_lon = start
+    end_lat, end_lon = end
+    _, f_lat, f_lon = first_wp
+    br_to_goal_from_first = bearing(f_lon, f_lat, end_lon, end_lat)
+    dist_start_first = haversine(start_lat, start_lon, f_lat, f_lon)
 
-    if not first_wp:
-        return None
-
-    f_lat, f_lon = first_wp[1], first_wp[2]
-    d_lat, d_lon = end
-
-    # 위경도 단순 평면화 (경도에 cos(lat) 가중)
-    def to_vec(ax_lat, ax_lon, bx_lat, bx_lon, ref_lat):
-        k = cos(radians(ref_lat))
-        return ((bx_lon - ax_lon) * k, (bx_lat - ax_lat))
-
-    vd = to_vec(f_lat, f_lon, d_lat, d_lon, (f_lat + d_lat) / 2.0)
-
-    def angle(u, v):
-        ux, uy = u
-        vx, vy = v
-        nu = sqrt(ux*ux + uy*uy)
-        nv = sqrt(vx*vx + vy*vy)
-        if nu == 0 or nv == 0:
-            return float("inf")
-        dot = (ux*vx + uy*vy) / (nu*nv)
-        dot = max(-1.0, min(1.0, dot))
-        return acos(dot)
-
-    candidates = []
-    for name, (lon, lat) in beach_coords.items():
+    best = None
+    best_score = 10**12
+    for name, (lon, lat) in candidates.items():
+        if (lat, lon) == (f_lat, f_lon):
+            continue
         if not is_in_coastal_bounds(lat, lon):
             continue
-        if name == first_wp[0]:
+        # 첫 경유지 이후에 있는 후보만
+        if haversine(start_lat, start_lon, lat, lon) <= dist_start_first:
             continue
-        vc = to_vec(f_lat, f_lon, lat, lon, (f_lat + lat) / 2.0)
-        # forward: 내적 > 0
-        forward = vc[0]*vd[0] + vc[1]*vd[1]
-        ang = angle(vc, vd)
-        d_first = haversine(f_lat, f_lon, lat, lon)
-        d_end = haversine(d_lat, d_lon, lat, lon)
-        # 정렬키: 앞으로(내적) 큰 것 우선 => -forward, 각도(작은 값 우선), first와의 거리, end까지 거리
-        candidates.append((-forward, ang, d_first, d_end, (name, lat, lon, d_end)))
+        ang = angle_diff(br_to_goal_from_first, bearing(f_lon, f_lat, lon, lat))
+        detour = haversine(f_lat, f_lon, lat, lon) + haversine(lat, lon, end_lat, end_lon) - haversine(f_lat, f_lon, end_lat, end_lon)
+        score = ang * 2000 + detour
+        if score < best_score:
+            best_score = score
+            best = (name, lat, lon)
 
-    # 앞쪽/각도 기반 후보
-    candidates.sort(key=lambda t: (t[0], t[1], t[2], t[3]))
-    for _negfwd, _ang, _df, _de, packed in candidates:
-        # 내적이 양수인 경우만 우선 채택
-        if _negfwd < 0:
-            return packed
+    # 백업: 없으면 첫 경유지→도착 기준으로 다시 최적 하나 고르고, 그래도 같으면 첫 경유지와 가장 가까운 다른 해변
+    if not best:
+        temp = find_best_beach_waypoint((f_lat, f_lon), (end_lat, end_lon), candidates)
+        if temp and (temp[1], temp[2]) != (f_lat, f_lon):
+            best = temp
+        else:
+            others = sorted(
+                [(n, la, lo) for n, (lo, la) in candidates.items() if (la, lo) != (f_lat, f_lon)],
+                key=lambda x: haversine(f_lat, f_lon, x[1], x[2])
+            )
+            if others:
+                n, la, lo = others[0]
+                best = (n, la, lo)
+    return best
 
-    # fallback: 도착지에 더 가까운 순(첫 경유지 제외)
-    fallback = []
-    for name, (lon, lat) in beach_coords.items():
-        if name == first_wp[0]:
-            continue
-        fallback.append((haversine(d_lat, d_lon, lat, lon), (name, lat, lon, haversine(d_lat, d_lon, lat, lon))))
-    fallback.sort(key=lambda x: x[0])
-    return fallback[0][1] if fallback else None
-
-def get_ors_route(start, waypoint1, waypoint2, end):
+def get_ors_route(start, waypoints, end):
+    if not ORS_API_KEY:
+        return {"error": "ORS_API_KEY not set"}, 500
     url = "https://api.openrouteservice.org/v2/directions/driving-car/geojson"
     headers = {"Authorization": ORS_API_KEY, "Content-Type": "application/json"}
-    body = {
-        "coordinates": [
-            [start[1], start[0]],
-            [waypoint1[2], waypoint1[1]],
-            [waypoint2[2], waypoint2[1]],
-            [end[1], end[0]]
-        ]
-    }
-    res = requests.post(url, headers=headers, json=body)
+    coords = [[start[1], start[0]]] + [[wp[2], wp[1]] for wp in waypoints] + [[end[1], end[0]]]
+    body = {"coordinates": coords}
+    res = requests.post(url, headers=headers, json=body, timeout=15)
     try:
         return res.json(), res.status_code
     except Exception as e:
         return {"error": str(e)}, 500
 
+def tourapi_detail_common(content_id, content_type_id=None):
+    base = "http://apis.data.go.kr/B551011/KorService1/detailCommon1"
+    params = {
+        "MobileOS": "ETC", "MobileApp": "SeaRoute", "_type": "json",
+        "serviceKey": TOURAPI_KEY,
+        "contentId": content_id,
+        "defaultYN": "Y", "addrinfoYN": "Y", "overviewYN": "Y",
+        "firstImageYN": "Y", "mapinfoYN": "Y"
+    }
+    if content_type_id:
+        params["contentTypeId"] = content_type_id
+    r = requests.get(base, params=params, timeout=8)
+    try:
+        items = r.json()["response"]["body"]["items"]["item"]
+        return items[0] if isinstance(items, list) else items
+    except:
+        return {}
+
+def tourapi_detail_intro(content_id, content_type_id):
+    base = "http://apis.data.go.kr/B551011/KorService1/detailIntro1"
+    params = {
+        "MobileOS": "ETC", "MobileApp": "SeaRoute", "_type": "json",
+        "serviceKey": TOURAPI_KEY,
+        "contentId": content_id, "contentTypeId": content_type_id
+    }
+    r = requests.get(base, params=params, timeout=8)
+    try:
+        items = r.json()["response"]["body"]["items"]["item"]
+        return items[0] if isinstance(items, list) else items
+    except:
+        return {}
+
 def search_tour_spots_along_route(geojson):
     coords = geojson['features'][0]['geometry']['coordinates']
     spots, seen_ids = [], set()
+    # 경로를 적당히 샘플링하여 API 과다호출 방지
     for lon, lat in coords[::10]:
         try:
             url = "http://apis.data.go.kr/B551011/KorService1/locationBasedList1"
             params = {
                 "serviceKey": TOURAPI_KEY,
-                "mapX": lon,
-                "mapY": lat,
+                "mapX": lon, "mapY": lat,
                 "radius": 5000,
                 "listYN": "Y",
                 "arrange": "E",
-                "numOfRows": 10,
+                "numOfRows": 20,
                 "pageNo": 1,
                 "MobileOS": "ETC",
                 "MobileApp": "SeaRoute",
                 "_type": "json"
             }
-            res = requests.get(url, params=params)
+            res = requests.get(url, params=params, timeout=8)
             items = res.json().get("response", {}).get("body", {}).get("items", {}).get("item", [])
+            if not isinstance(items, list):
+                items = [items] if items else []
             for item in items:
                 cid = item.get("contentid")
-                if cid and cid not in seen_ids:
-                    seen_ids.add(cid)
-                    spots.append({
-                        "title": item.get("title"),
-                        "addr1": item.get("addr1"),
-                        "mapx": item.get("mapx"),
-                        "mapy": item.get("mapy"),
-                        "firstimage": item.get("firstimage"),
-                        "homepage": item.get("homepage", ""),
-                        # 있으면 보여주고, 없으면 빈값
-                        "parking": item.get("parking", ""),
-                        "usetime": item.get("usetime", "")
-                    })
+                if not cid or cid in seen_ids:
+                    continue
+                seen_ids.add(cid)
+                ctype = item.get("contenttypeid")
+                common = tourapi_detail_common(cid, ctype)
+                intro = tourapi_detail_intro(cid, int(ctype)) if ctype else {}
+
+                photo = common.get("firstimage") or common.get("firstimage2") or item.get("firstimage") or item.get("firstimage2")
+                hours = intro.get("usetime") or intro.get("opentime") or intro.get("usetimefood") or intro.get("opentimefood")
+                parking = intro.get("parking") or intro.get("parkingfood") or common.get("parking")
+
+                spots.append({
+                    "title": item.get("title") or common.get("title"),
+                    "addr1": common.get("addr1") or item.get("addr1"),
+                    "mapx": float(common.get("mapx") or item.get("mapx") or lon),
+                    "mapy": float(common.get("mapy") or item.get("mapy") or lat),
+                    "firstimage": photo,
+                    "homepage": item.get("homepage", ""),
+                    "hours": hours,
+                    "parking": parking,
+                    "contenttypeid": ctype
+                })
         except:
             continue
     return spots
@@ -197,50 +294,69 @@ def index():
 @app.route("/route", methods=["POST"])
 def route():
     try:
-        data = request.get_json()
-        start = geocode_google(data.get("start"))
-        end = geocode_google(data.get("end"))
+        data = request.get_json(force=True)
+        start_raw = data.get("start")
+        end_raw = data.get("end")
+        jeju_only = data.get("jeju_only", True)  # 기본 True
+
+        start = geocode_google(start_raw)
+        end = geocode_google(end_raw)
         if not start or not end:
-            return jsonify({"error": "❌ 주소 변환 실패"}), 400
+            return jsonify({"error": "주소 변환 실패"}), 400
 
-        # 1) 첫 번째 경유지: 기존 로직
-        waypoint1 = find_best_beach_waypoint(start, end)
-        if not waypoint1:
-            return jsonify({"error": "❌ 1번 경유지 탐색 실패"}), 500
+        s_lat, s_lon = start
+        e_lat, e_lon = end
 
-        # 2) 두 번째 경유지: 도착지 방향
-        waypoint2 = find_second_beach_waypoint(waypoint1, end)
-        if not waypoint2:
-            return jsonify({"error": "❌ 2번 경유지 탐색 실패"}), 500
+        s_in = in_jeju(s_lat, s_lon)
+        e_in = in_jeju(e_lat, e_lon)
+        if jeju_only:
+            if s_in and not e_in:
+                return jsonify({"error": "제주 섬내 전용: 출발 제주, 도착 본토 불가"}), 400
+            if e_in and not s_in:
+                return jsonify({"error": "제주 섬내 전용: 도착 제주, 출발 본토 불가"}), 400
 
-        route_data, status = get_ors_route(start, waypoint1, waypoint2, end)
-        if "error" in route_data:
-            return jsonify({"error": route_data["error"]}), status
+        # 제주 모드면 후보를 제주 내 해수욕장만 사용하도록 필터(데이터가 전국이면 여기서 필터)
+        candidates = dict(beach_coords)
+        if s_in or e_in or jeju_only:
+            candidates = {n: (lo, la) for n, (lo, la) in beach_coords.items()
+                          if JEJU_MIN_LON <= lo <= JEJU_MAX_LON and JEJU_MIN_LAT <= la <= JEJU_MAX_LAT}
 
+        if not candidates:
+            return jsonify({"error": "경유지 후보 없음(제주 후보가 비어있음)"}), 400
+
+        wp1 = find_best_beach_waypoint((s_lat, s_lon), (e_lat, e_lon), candidates)
+        if not wp1:
+            return jsonify({"error": "경유지1 탐색 실패"}), 500
+        wp2 = find_second_beach_waypoint((s_lat, s_lon), (e_lat, e_lon), wp1, candidates)
+
+        # 라우트 시도: 2경유 → 실패 시 1경유 축소
+        waypoints = [wp1] + ([wp2] if wp2 else [])
+        route_data, status = get_ors_route((s_lat, s_lon), waypoints, (e_lat, e_lon))
+        if "error" in route_data or status != 200:
+            # 축소 재시도
+            route_data2, status2 = get_ors_route((s_lat, s_lon), [wp1], (e_lat, e_lon))
+            if "error" in route_data2 or status2 != 200:
+                return jsonify({"error": route_data.get("error", "경로 계산 실패")}), status
+            route_data = route_data2
+            waypoints = [wp1]
+
+        # POI(관광지/맛집/카페) 수집 + 세부정보(사진/운영시간/주차)
         spots = search_tour_spots_along_route(route_data)
 
-        waypoint1_addr = reverse_geocode_google(waypoint1[1], waypoint1[2])
-        waypoint2_addr = reverse_geocode_google(waypoint2[1], waypoint2[2])
+        wp_info = []
+        for w in waypoints:
+            name, la, lo = w
+            addr = reverse_geocode_google(la, lo)
+            wp_info.append({"name": name, "lat": la, "lon": lo, "address": addr})
 
         return jsonify({
             "route": route_data,
-            "waypoint1": {
-                "name": waypoint1[0],
-                "lat": waypoint1[1],
-                "lon": waypoint1[2],
-                "address": waypoint1_addr
-            },
-            "waypoint2": {
-                "name": waypoint2[0],
-                "lat": waypoint2[1],
-                "lon": waypoint2[2],
-                "address": waypoint2_addr
-            },
+            "waypoints": wp_info,  # 최대 2개
             "spots": spots or []
         })
     except Exception as e:
-        return jsonify({"error": f"❌ 서버 오류: {str(e)}"}), 500
+        return jsonify({"error": f"서버 오류: {str(e)}"}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=True)
