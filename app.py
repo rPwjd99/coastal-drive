@@ -11,21 +11,20 @@ from scipy.spatial import KDTree
 load_dotenv()
 app = Flask(__name__)
 
-# 환경변수 불러오기
+# 환경변수
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 NAVER_API_KEY_ID = os.getenv("NAVER_API_KEY_ID")
 NAVER_API_KEY_SECRET = os.getenv("NAVER_API_KEY_SECRET")
 
-# 데이터 불러오기
+# 도로 끝점 데이터
 road_points = pd.read_csv("road_endpoints_reduced.csv", low_memory=False)
 road_points["x"] = pd.to_numeric(road_points["x"], errors="coerce")
 road_points["y"] = pd.to_numeric(road_points["y"], errors="coerce")
 
-coastline = gpd.read_file("coastal_route_result.geojson")
-coastline = coastline.to_crs(epsg=4326)
-
-# 유효한 geometry만 추출
+# 해안선 데이터
+coastline = gpd.read_file("coastal_route_result.geojson").to_crs(epsg=4326)
 valid_geometries = coastline[coastline.geometry.notnull()]
+
 coast_coords = []
 for geom in valid_geometries.geometry:
     if isinstance(geom, LineString):
@@ -58,13 +57,13 @@ def find_waypoint_near_coast(start, end, radius_km=10):
         if pd.isna(px) or pd.isna(py):
             continue
         dist, _ = coast_tree.query([px, py])
-        if dist < radius_km / 111:  # 약 10km 이내
+        if dist < radius_km / 111:
             candidates.append(((py, px), dist))
     if not candidates:
         print("❌ 해안 웨이포인트 없음")
         return None
     candidates.sort(key=lambda x: x[1])
-    return candidates[0][0]  # (lat, lon)
+    return candidates[0][0]
 
 # NAVER Directions API
 def get_naver_route(start, waypoint, end):
@@ -83,11 +82,15 @@ def get_naver_route(start, waypoint, end):
     try:
         res = requests.get(url, headers=headers, params=params)
         data = res.json()
-        print("✅ NAVER 응답:", json.dumps(data, indent=2))
-        return data
+        print("✅ NAVER 응답 구조:", json.dumps(data, indent=2))
+        if "route" in data and "trafast" in data["route"]:
+            return data["route"]["trafast"][0]["path"]
+        else:
+            print("❌ 예상 경로 구조 없음")
+            return None
     except Exception as e:
         print("❌ NAVER 경로 요청 실패:", e)
-        return {"error": str(e)}
+        return None
 
 @app.route("/")
 def index():
@@ -106,18 +109,17 @@ def route():
         if not waypoint:
             return jsonify({"error": "❌ 해안 웨이포인트 없음"}), 500
 
-        route_data = get_naver_route(start, waypoint, end)
-        if "route" not in route_data or "trafast" not in route_data["route"]:
+        path_coords = get_naver_route(start, waypoint, end)
+        if not path_coords:
             return jsonify({"error": "❌ 경로 계산 실패"}), 502
 
-        coords = route_data["route"]["trafast"][0]["path"]
         geojson = {
             "type": "FeatureCollection",
             "features": [{
                 "type": "Feature",
                 "geometry": {
                     "type": "LineString",
-                    "coordinates": coords
+                    "coordinates": path_coords
                 },
                 "properties": {}
             }]
