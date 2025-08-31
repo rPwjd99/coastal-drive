@@ -62,12 +62,10 @@
   <div id="popup" class="ol-popup" style="display:none;"></div>
 
   <script>
-    // ====== 서버 주소 설정 ======
-    // GitHub Pages 등 별도 도메인에서 쓸 때 아래를 여러분 Render 주소로 바꾸세요.
-    // 예) "https://coastal-drive.onrender.com"
-    const BASE_URL = ""; // 같은 도메인/프록시면 빈 문자열 유지
+    // ====== 서버 주소 ======
+    const BASE_URL = ""; // Render 같은 외부 배포시 "https://coastal-drive.onrender.com" 로 바꿔주세요.
 
-    // ====== OpenLayers 기본 지도 ======
+    // ====== 지도 세팅 ======
     const map = new ol.Map({
       target: 'map',
       layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
@@ -117,8 +115,9 @@
       if (p.popup_html) {
         popupEl.innerHTML = p.popup_html;
       } else if (p.kind === 'beach_waypoint') {
-        const t = (p.t ?? '').toFixed ? p.t.toFixed(3) : p.t;
-        const perp = (p.perp_km ?? '').toFixed ? p.perp_km.toFixed(2) : p.perp_km;
+        // 🔹 여기 부분 수정됨
+        const t = (typeof p.t === 'number') ? p.t.toFixed(3) : p.t;
+        const perp = (typeof p.perp_km === 'number') ? p.perp_km.toFixed(2) : p.perp_km;
         popupEl.innerHTML =
           `<b>${p.title || '경유지(해수욕장)'}</b>
            ${p.addr1 ? `<div>주소: ${p.addr1}</div>`:''}
@@ -178,85 +177,35 @@
       if (extent && extent.every(v => isFinite(v))) map.getView().fit(extent, { padding:[30,30,30,30], duration:500, maxZoom:14 });
     }
 
-    // ====== 웜업 & 재시도 유틸 ======
-    const sleep = (ms)=>new Promise(r=>setTimeout(r, ms));
-
-    async function withRetries(fn, {attempts=3, delaysMs=[1500, 3000, 6000], label='작업'}){
-      let lastErr;
-      for (let i=0;i<attempts;i++){
-        try { return await fn(); }
-        catch(e){
-          lastErr = e;
-          if (i < attempts-1){
-            setBusy(true, `${label} 재시도 ${i+2}/${attempts}… (${delaysMs[i]}ms 대기)`);
-            await sleep(delaysMs[i] || 2000);
-          }
-        }
-      }
-      throw lastErr;
-    }
-
-    async function warmUp(){
-      const url = (BASE_URL || "") + "/";
-      return withRetries(async ()=>{
-        const res = await fetch(url, { method:'GET', cache:'no-store' });
-        if (!res.ok){ throw new Error('웜업 실패'); }
-        return true;
-      }, { attempts:3, delaysMs:[1500, 3000, 6000], label:'서버 깨우는 중' });
-    }
-
-    async function postRoute(payload){
-      const url = (BASE_URL || "") + "/api/route";
-      return withRetries(async ()=>{
-        const res = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) });
-        const data = await res.json();
-        if (!res.ok || !data.ok){ throw new Error(data.error || '경로 계산 실패'); }
-        return data;
-      }, { attempts:3, delaysMs:[2000, 4000, 8000], label:'경로 계산' });
-    }
-
-    // ====== 메인 액션 ======
+    // ====== 서버 웜업 및 요청 ======
     async function fetchRoute(){
-      setError(''); $summary.textContent = '';
-      const originVal = $origin.value.trim();
-      const destVal = $destination.value.trim();
-      if (!originVal || !destVal){ setError('출발지와 도착지를 입력하세요.'); return; }
-
-      const payload = {
-        origin: originVal, destination: destVal,
-        corridor_km: Number($corridor.value || 30),
-        detour_abs_km: Number($detourAbs.value || 50),
-        detour_rel: Number($detourRel.value || 0.35),
-        max_waypoints: 3
-      };
+      setError(''); $summary.textContent='';
+      const originVal=$origin.value.trim(); const destVal=$destination.value.trim();
+      if (!originVal||!destVal){ setError('출발지와 도착지를 입력하세요.'); return; }
+      const payload={origin:originVal,destination:destVal,
+        corridor_km:Number($corridor.value||30),
+        detour_abs_km:Number($detourAbs.value||50),
+        detour_rel:Number($detourRel.value||0.35),
+        max_waypoints:3};
 
       try{
-        setBusy(true, '서버 깨우는 중…');
-        await warmUp();
+        setBusy(true,'경로 계산 중…');
+        const res=await fetch((BASE_URL||"")+"/api/route",{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        const data=await res.json();
+        if(!res.ok||!data.ok) throw new Error(data.error||'경로 계산 실패');
 
-        setBusy(true, '경로 계산 중…');
-        const data = await postRoute(payload);
+        addGeoJSONToSource(data.route_geojson,routeSource);
+        addGeoJSONToSource(data.waypoints_geojson,waypointsSource);
+        addGeoJSONToSource(data.pois_geojson,poisSource);
 
-        addGeoJSONToSource(data.route_geojson, routeSource);
-        addGeoJSONToSource(data.waypoints_geojson, waypointsSource);
-        addGeoJSONToSource(data.pois_geojson, poisSource);
+        const s=data.summary||{};
+        $summary.textContent=`직행 ${s.direct_km}km → 최종 ${s.final_km}km (우회 +${s.detour_km}km) · 경유지 ${s.waypoints_count}개`;
 
-        const s = data.summary || {};
-        $summary.textContent = `직행 ${s.direct_km}km → 최종 ${s.final_km}km (우회 +${s.detour_km}km) · 경유지 ${s.waypoints_count}개 · 코리도 ${s.corridor_km}km / 우회한도 ${s.detour_abs_km}km · 상대 ${s.detour_rel}`;
-        fitToAll();
-        setBusy(false);
-      }catch(e){
-        console.error(e);
-        setError(String(e.message || e));
-        setBusy(false);
-      }
+        fitToAll(); setBusy(false);
+      }catch(e){ console.error(e); setError(String(e.message||e)); setBusy(false); }
     }
 
     document.getElementById('routeBtn').addEventListener('click', fetchRoute);
-
-    // 데모 원하면 주석 해제
-    // $origin.value='세종특별자치시청'; $destination.value='속초시청';
-    // fetchRoute();
   </script>
 </body>
 </html>
