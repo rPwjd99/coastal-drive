@@ -11,94 +11,30 @@
 
   <style>
     html, body { margin:0; padding:0; height:100%; font-family: system-ui, -apple-system, Segoe UI, Roboto, Noto Sans KR, Arial, sans-serif; }
-    .app {
-      display: grid;
-      grid-template-rows: auto 1fr;
-      height: 100%;
-    }
+    .app { display:grid; grid-template-rows:auto 1fr; height:100%; }
     .toolbar {
-      padding: 10px 12px;
-      display: grid;
-      grid-template-columns: 1.2fr 1.2fr auto auto auto auto;
-      gap: 8px;
-      align-items: center;
-      border-bottom: 1px solid #e5e7eb;
-      background: #fff;
-      position: sticky; top:0; z-index: 10;
+      padding:10px 12px; display:grid;
+      grid-template-columns:1.2fr 1.2fr auto auto auto auto;
+      gap:8px; align-items:center; border-bottom:1px solid #e5e7eb; background:#fff; position:sticky; top:0; z-index:10;
     }
-    .toolbar input[type="text"] {
-      width: 100%;
-      padding: 10px 12px;
-      border: 1px solid #cbd5e1;
-      border-radius: 10px;
-      outline: none;
-      font-size: 14px;
+    .toolbar input[type="text"]{ width:100%; padding:10px 12px; border:1px solid #cbd5e1; border-radius:10px; font-size:14px; }
+    .toolbar input[type="number"]{ width:90px; padding:8px; border:1px solid #cbd5e1; border-radius:10px; font-size:13px; }
+    .toolbar button{ padding:10px 14px; border:0; border-radius:12px; background:#111827; color:#fff; font-weight:600; cursor:pointer; }
+    .toolbar button:disabled{ opacity:.6; cursor:not-allowed; }
+    #map{ width:100%; height:100%; }
+    .summary{ font-size:13px; color:#374151; padding:4px 8px; }
+    .legend{ display:flex; gap:14px; align-items:center; font-size:12px; color:#374151; }
+    .legend .dot{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+    .dot-route{ background:#0b7285; } .dot-beach{ background:#1e3a8a; } .dot-tour{ background:#065f46; } .dot-food{ background:#92400e; }
+    .status{ font-size:13px; color:#2563eb; padding-left:8px; }
+    .error{ color:#b91c1c; font-size:13px; padding-left:8px; }
+    .ol-popup{
+      position:absolute; background:#fff; box-shadow:0 10px 25px rgba(0,0,0,.15);
+      padding:10px 12px; border-radius:12px; border:1px solid #e5e7eb; min-width:260px;
     }
-    .toolbar input[type="number"] {
-      width: 90px;
-      padding: 8px;
-      border: 1px solid #cbd5e1;
-      border-radius: 10px;
-      outline: none;
-      font-size: 13px;
-    }
-    .toolbar button {
-      padding: 10px 14px;
-      border: 0;
-      border-radius: 12px;
-      background: #111827;
-      color: #fff;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    .toolbar button:disabled { opacity: 0.6; cursor: not-allowed; }
-    #map { width: 100%; height: 100%; }
-    .summary {
-      font-size: 13px; color:#374151; padding: 4px 8px;
-    }
-    .legend {
-      display: flex; gap: 14px; align-items: center; font-size: 12px; color:#374151;
-    }
-    .legend .dot { display:inline-block; width:10px; height:10px; border-radius: 50%; margin-right:6px; vertical-align: middle; }
-    .dot-route { background:#0b7285; }
-    .dot-beach { background:#1e3a8a; }
-    .dot-tour { background:#065f46; }
-    .dot-food { background:#92400e; }
-
-    /* 팝업(overlay) */
-    .ol-popup {
-      position: absolute;
-      background: #fff;
-      box-shadow: 0 10px 25px rgba(0,0,0,0.15);
-      padding: 10px 12px;
-      border-radius: 12px;
-      border: 1px solid #e5e7eb;
-      min-width: 260px;
-    }
-    .ol-popup:after, .ol-popup:before {
-      top: 100%;
-      border: solid transparent;
-      content: " ";
-      height: 0;
-      width: 0;
-      position: absolute;
-      pointer-events: none;
-    }
-    .ol-popup:after {
-      border-top-color: #fff;
-      border-width: 10px;
-      left: 24px;
-      margin-left: -10px;
-    }
-    .ol-popup:before {
-      border-top-color: rgba(0,0,0,0.08);
-      border-width: 11px;
-      left: 24px;
-      margin-left: -11px;
-    }
-    .error {
-      color:#b91c1c; font-size: 13px; padding-left: 8px;
-    }
+    .ol-popup:after,.ol-popup:before{ top:100%; border:solid transparent; content:" "; height:0; width:0; position:absolute; pointer-events:none; }
+    .ol-popup:after{ border-top-color:#fff; border-width:10px; left:24px; margin-left:-10px; }
+    .ol-popup:before{ border-top-color:rgba(0,0,0,.08); border-width:11px; left:24px; margin-left:-11px; }
   </style>
 </head>
 <body>
@@ -116,6 +52,7 @@
         <span><span class="dot dot-tour"></span> 관광지</span>
         <span><span class="dot dot-food"></span> 맛집</span>
       </div>
+      <div id="statusBox" class="status"></div>
       <div id="errorBox" class="error"></div>
       <div class="summary" id="summaryBox"></div>
     </div>
@@ -125,27 +62,22 @@
   <div id="popup" class="ol-popup" style="display:none;"></div>
 
   <script>
-    // ----- 기본 지도 세팅 -----
+    // ====== 서버 주소 설정 ======
+    // GitHub Pages 등 별도 도메인에서 쓸 때 아래를 여러분 Render 주소로 바꾸세요.
+    // 예) "https://coastal-drive.onrender.com"
+    const BASE_URL = ""; // 같은 도메인/프록시면 빈 문자열 유지
+
+    // ====== OpenLayers 기본 지도 ======
     const map = new ol.Map({
       target: 'map',
-      layers: [
-        new ol.layer.Tile({
-          source: new ol.source.OSM()
-        })
-      ],
-      view: new ol.View({
-        center: ol.proj.fromLonLat([127.8, 36.5]), // 한국 가운데 대략
-        zoom: 7
-      })
+      layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
+      view: new ol.View({ center: ol.proj.fromLonLat([127.8, 36.5]), zoom: 7 })
     });
 
-    // GeoJSON 레이어들
     const routeSource = new ol.source.Vector();
     const routeLayer = new ol.layer.Vector({
       source: routeSource,
-      style: new ol.style.Style({
-        stroke: new ol.style.Stroke({ color: '#0b7285', width: 4 })
-      })
+      style: new ol.style.Style({ stroke: new ol.style.Stroke({ color:'#0b7285', width:4 }) })
     });
 
     const waypointsSource = new ol.source.Vector();
@@ -153,13 +85,10 @@
       source: waypointsSource,
       style: (feature) => {
         const order = feature.get('order');
-        const circle = new ol.style.Circle({ radius: 8, fill: new ol.style.Fill({ color: '#1e3a8a' }), stroke: new ol.style.Stroke({ color:'#fff', width:2 })});
-        const text = new ol.style.Text({
-          text: String(order || ''),
-          font: 'bold 11px sans-serif',
-          fill: new ol.style.Fill({ color:'#fff' })
+        return new ol.style.Style({
+          image: new ol.style.Circle({ radius:8, fill:new ol.style.Fill({ color:'#1e3a8a' }), stroke:new ol.style.Stroke({ color:'#fff', width:2 }) }),
+          text: new ol.style.Text({ text:String(order||''), font:'bold 11px sans-serif', fill:new ol.style.Fill({ color:'#fff' }) })
         });
-        return new ol.style.Style({ image: circle, text: text });
       }
     });
 
@@ -168,60 +97,40 @@
       source: poisSource,
       style: (feature) => {
         const ct = feature.get('contenttypeid');
-        // 관광지(12) 초록, 맛집(39) 갈색
         const fill = (ct === '12') ? '#065f46' : (ct === '39' ? '#92400e' : '#374151');
         return new ol.style.Style({
-          image: new ol.style.Circle({
-            radius: 6,
-            fill: new ol.style.Fill({ color: fill }),
-            stroke: new ol.style.Stroke({ color:'#ffffff', width:2 })
-          })
+          image: new ol.style.Circle({ radius:6, fill:new ol.style.Fill({ color:fill }), stroke:new ol.style.Stroke({ color:'#fff', width:2 }) })
         });
       }
     });
 
-    map.addLayer(routeLayer);
-    map.addLayer(waypointsLayer);
-    map.addLayer(poisLayer);
+    map.addLayer(routeLayer); map.addLayer(waypointsLayer); map.addLayer(poisLayer);
 
-    // ----- Hover 팝업 Overlay -----
+    // ====== Hover 팝업 ======
     const popupEl = document.getElementById('popup');
-    const overlay = new ol.Overlay({
-      element: popupEl,
-      offset: [0, -14],
-      positioning: 'bottom-left',
-      stopEvent: false
-    });
+    const overlay = new ol.Overlay({ element: popupEl, offset:[0,-14], positioning:'bottom-left', stopEvent:false });
     map.addOverlay(overlay);
 
     let hoverFeature = null;
-
-    function showPopup(feature, coordinate) {
-      const props = feature.getProperties();
-      // 우선순위: POI -> 경유지
-      if (props.popup_html) {
-        popupEl.innerHTML = props.popup_html;
-      } else if (props.kind === 'beach_waypoint') {
-        const title = props.title || '경유지(해수욕장)';
-        const addr = props.addr1 ? `<div>주소: ${props.addr1}</div>` : '';
-        const tel = props.tel ? `<div>전화: ${props.tel}</div>` : '';
-        const info = `<b>${title}</b><div>순서: ${props.order}</div>${addr}${tel}<div>t=${(props.t ?? '').toFixed ? props.t.toFixed(3): props.t}, 측면이탈=${(props.perp_km ?? '').toFixed ? props.perp_km.toFixed(2): props.perp_km} km</div>`;
-        popupEl.innerHTML = info;
-      } else {
-        // 경로 선분 등: 팝업 없음
-        popupEl.style.display = 'none';
-        return;
-      }
-      popupEl.style.display = 'block';
+    function showPopup(feature, coordinate){
+      const p = feature.getProperties();
+      if (p.popup_html) {
+        popupEl.innerHTML = p.popup_html;
+      } else if (p.kind === 'beach_waypoint') {
+        const t = (p.t ?? '').toFixed ? p.t.toFixed(3) : p.t;
+        const perp = (p.perp_km ?? '').toFixed ? p.perp_km.toFixed(2) : p.perp_km;
+        popupEl.innerHTML =
+          `<b>${p.title || '경유지(해수욕장)'}</b>
+           ${p.addr1 ? `<div>주소: ${p.addr1}</div>`:''}
+           ${p.tel ? `<div>전화: ${p.tel}</div>`:''}
+           <div>순서: ${p.order} · t=${t} · 측면이탈=${perp} km</div>`;
+      } else { popupEl.style.display='none'; return; }
+      popupEl.style.display='block';
       overlay.setPosition(coordinate);
     }
+    function hidePopup(){ popupEl.style.display='none'; overlay.setPosition(undefined); }
 
-    function hidePopup() {
-      popupEl.style.display = 'none';
-      overlay.setPosition(undefined);
-    }
-
-    map.on('pointermove', (evt) => {
+    map.on('pointermove', (evt)=>{
       if (evt.dragging) return;
       const pixel = map.getEventPixel(evt.originalEvent);
       const feature = map.forEachFeatureAtPixel(pixel, f => f);
@@ -229,8 +138,7 @@
         map.getTargetElement().style.cursor = 'pointer';
         if (feature !== hoverFeature) {
           hoverFeature = feature;
-          const coordinate = evt.coordinate;
-          showPopup(feature, coordinate);
+          showPopup(feature, evt.coordinate);
         }
       } else {
         map.getTargetElement().style.cursor = '';
@@ -239,7 +147,7 @@
       }
     });
 
-    // ----- UI 엘리먼트 -----
+    // ====== UI ======
     const $origin = document.getElementById('origin');
     const $destination = document.getElementById('destination');
     const $corridor = document.getElementById('corridor');
@@ -247,87 +155,107 @@
     const $detourRel = document.getElementById('detourRel');
     const $routeBtn = document.getElementById('routeBtn');
     const $summary = document.getElementById('summaryBox');
-    const $errorBox = document.getElementById('errorBox');
+    const $status = document.getElementById('statusBox');
+    const $error = document.getElementById('errorBox');
 
-    function setBusy(b) {
+    function setBusy(b, msg=''){
       $routeBtn.disabled = b;
       $routeBtn.textContent = b ? '계산 중…' : '경로 계산';
+      $status.textContent = msg || '';
     }
+    function setError(msg){ $error.textContent = msg || ''; }
 
-    function addGeoJSONToSource(geojson, source, projFrom='EPSG:4326', projTo='EPSG:3857') {
-      // OpenLayers는 기본이 EPSG:3857, 서버 GeoJSON은 [lon,lat]=4326
+    function addGeoJSONToSource(geojson, source, projFrom='EPSG:4326', projTo='EPSG:3857'){
       const format = new ol.format.GeoJSON();
-      const feats = format.readFeatures(geojson, {
-        dataProjection: projFrom,
-        featureProjection: projTo
-      });
-      source.clear(true);
-      source.addFeatures(feats);
+      const feats = format.readFeatures(geojson, { dataProjection:projFrom, featureProjection:projTo });
+      source.clear(true); source.addFeatures(feats);
     }
-
-    function fitToAll() {
+    function fitToAll(){
       const extent = ol.extent.createEmpty();
       ol.extent.extend(extent, routeSource.getExtent());
       ol.extent.extend(extent, waypointsSource.getExtent());
       ol.extent.extend(extent, poisSource.getExtent());
-      if (extent && extent.every(v => isFinite(v))) {
-        map.getView().fit(extent, { padding:[30,30,30,30], duration: 500, maxZoom: 14 });
-      }
+      if (extent && extent.every(v => isFinite(v))) map.getView().fit(extent, { padding:[30,30,30,30], duration:500, maxZoom:14 });
     }
 
-    async function fetchRoute() {
-      $errorBox.textContent = '';
-      $summary.textContent = '';
-      setBusy(true);
-      try {
-        const originVal = $origin.value.trim();
-        const destVal = $destination.value.trim();
-        if (!originVal || !destVal) {
-          throw new Error('출발지와 도착지를 입력하세요.');
-        }
-        const payload = {
-          origin: originVal,
-          destination: destVal,
-          corridor_km: Number($corridor.value || 30),
-          detour_abs_km: Number($detourAbs.value || 50),
-          detour_rel: Number($detourRel.value || 0.35),
-          max_waypoints: 3
-        };
-        const res = await fetch('/api/route', {
-          method: 'POST',
-          headers: { 'Content-Type':'application/json' },
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json();
-        if (!res.ok || !data.ok) {
-          throw new Error(data.error || '경로 계산 실패');
-        }
+    // ====== 웜업 & 재시도 유틸 ======
+    const sleep = (ms)=>new Promise(r=>setTimeout(r, ms));
 
-        // 지도 반영
+    async function withRetries(fn, {attempts=3, delaysMs=[1500, 3000, 6000], label='작업'}){
+      let lastErr;
+      for (let i=0;i<attempts;i++){
+        try { return await fn(); }
+        catch(e){
+          lastErr = e;
+          if (i < attempts-1){
+            setBusy(true, `${label} 재시도 ${i+2}/${attempts}… (${delaysMs[i]}ms 대기)`);
+            await sleep(delaysMs[i] || 2000);
+          }
+        }
+      }
+      throw lastErr;
+    }
+
+    async function warmUp(){
+      const url = (BASE_URL || "") + "/";
+      return withRetries(async ()=>{
+        const res = await fetch(url, { method:'GET', cache:'no-store' });
+        if (!res.ok){ throw new Error('웜업 실패'); }
+        return true;
+      }, { attempts:3, delaysMs:[1500, 3000, 6000], label:'서버 깨우는 중' });
+    }
+
+    async function postRoute(payload){
+      const url = (BASE_URL || "") + "/api/route";
+      return withRetries(async ()=>{
+        const res = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) });
+        const data = await res.json();
+        if (!res.ok || !data.ok){ throw new Error(data.error || '경로 계산 실패'); }
+        return data;
+      }, { attempts:3, delaysMs:[2000, 4000, 8000], label:'경로 계산' });
+    }
+
+    // ====== 메인 액션 ======
+    async function fetchRoute(){
+      setError(''); $summary.textContent = '';
+      const originVal = $origin.value.trim();
+      const destVal = $destination.value.trim();
+      if (!originVal || !destVal){ setError('출발지와 도착지를 입력하세요.'); return; }
+
+      const payload = {
+        origin: originVal, destination: destVal,
+        corridor_km: Number($corridor.value || 30),
+        detour_abs_km: Number($detourAbs.value || 50),
+        detour_rel: Number($detourRel.value || 0.35),
+        max_waypoints: 3
+      };
+
+      try{
+        setBusy(true, '서버 깨우는 중…');
+        await warmUp();
+
+        setBusy(true, '경로 계산 중…');
+        const data = await postRoute(payload);
+
         addGeoJSONToSource(data.route_geojson, routeSource);
         addGeoJSONToSource(data.waypoints_geojson, waypointsSource);
         addGeoJSONToSource(data.pois_geojson, poisSource);
 
-        // 요약
         const s = data.summary || {};
-        $summary.textContent =
-          `직행 ${s.direct_km}km → 최종 ${s.final_km}km (우회 +${s.detour_km}km) · 경유지 ${s.waypoints_count}개 ` +
-          `· 코리도 ${s.corridor_km}km / 우회한도 ${s.detour_abs_km}km · 상대 ${s.detour_rel}`;
-
+        $summary.textContent = `직행 ${s.direct_km}km → 최종 ${s.final_km}km (우회 +${s.detour_km}km) · 경유지 ${s.waypoints_count}개 · 코리도 ${s.corridor_km}km / 우회한도 ${s.detour_abs_km}km · 상대 ${s.detour_rel}`;
         fitToAll();
-      } catch (err) {
-        console.error(err);
-        $errorBox.textContent = String(err.message || err);
-      } finally {
+        setBusy(false);
+      }catch(e){
+        console.error(e);
+        setError(String(e.message || e));
         setBusy(false);
       }
     }
 
     document.getElementById('routeBtn').addEventListener('click', fetchRoute);
 
-    // 데모 입력을 원하면 아래 두 줄의 주석을 풀고, 페이지 로드시 자동 실행되게 할 수 있어요.
-    // $origin.value = '세종특별자치시청';
-    // $destination.value = '속초시청';
+    // 데모 원하면 주석 해제
+    // $origin.value='세종특별자치시청'; $destination.value='속초시청';
     // fetchRoute();
   </script>
 </body>
