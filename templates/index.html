@@ -4,11 +4,8 @@
   <meta charset="utf-8" />
   <title>바다따라: 해안도로 감성 드라이브</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-
-  <!-- OpenLayers -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-
   <style>
     html, body { margin:0; padding:0; height:100%; font-family: system-ui, -apple-system, Segoe UI, Roboto, Noto Sans KR, Arial, sans-serif; }
     .app { display:grid; grid-template-rows:auto 1fr; height:100%; }
@@ -26,7 +23,6 @@
     .legend{ display:flex; gap:14px; align-items:center; font-size:12px; color:#374151; }
     .legend .dot{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; }
     .dot-route{ background:#0b7285; } .dot-beach{ background:#1e3a8a; } .dot-tour{ background:#065f46; } .dot-food{ background:#92400e; }
-    .status{ font-size:13px; color:#2563eb; padding-left:8px; }
     .error{ color:#b91c1c; font-size:13px; padding-left:8px; }
     .ol-popup{
       position:absolute; background:#fff; box-shadow:0 10px 25px rgba(0,0,0,.15);
@@ -52,7 +48,6 @@
         <span><span class="dot dot-tour"></span> 관광지</span>
         <span><span class="dot dot-food"></span> 맛집</span>
       </div>
-      <div id="statusBox" class="status"></div>
       <div id="errorBox" class="error"></div>
       <div class="summary" id="summaryBox"></div>
     </div>
@@ -62,150 +57,123 @@
   <div id="popup" class="ol-popup" style="display:none;"></div>
 
   <script>
-    // ====== 서버 주소 ======
-    const BASE_URL = ""; // Render 같은 외부 배포시 "https://coastal-drive.onrender.com" 로 바꿔주세요.
+    const BASE_URL = ""; // 동일 도메인(백엔드와 같은 Render 서비스)에서 서빙시키므로 빈 문자열 유지
 
-    // ====== 지도 세팅 ======
+    // 지도
     const map = new ol.Map({
       target: 'map',
       layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
       view: new ol.View({ center: ol.proj.fromLonLat([127.8, 36.5]), zoom: 7 })
     });
-
     const routeSource = new ol.source.Vector();
-    const routeLayer = new ol.layer.Vector({
-      source: routeSource,
-      style: new ol.style.Style({ stroke: new ol.style.Stroke({ color:'#0b7285', width:4 }) })
-    });
-
     const waypointsSource = new ol.source.Vector();
-    const waypointsLayer = new ol.layer.Vector({
-      source: waypointsSource,
-      style: (feature) => {
-        const order = feature.get('order');
-        return new ol.style.Style({
-          image: new ol.style.Circle({ radius:8, fill:new ol.style.Fill({ color:'#1e3a8a' }), stroke:new ol.style.Stroke({ color:'#fff', width:2 }) }),
-          text: new ol.style.Text({ text:String(order||''), font:'bold 11px sans-serif', fill:new ol.style.Fill({ color:'#fff' }) })
-        });
-      }
-    });
-
     const poisSource = new ol.source.Vector();
-    const poisLayer = new ol.layer.Vector({
+
+    map.addLayer(new ol.layer.Vector({ source: routeSource, style: new ol.style.Style({ stroke: new ol.style.Stroke({ color:'#0b7285', width:4 }) }) }));
+    map.addLayer(new ol.layer.Vector({
+      source: waypointsSource,
+      style: (f)=>new ol.style.Style({
+        image:new ol.style.Circle({ radius:8, fill:new ol.style.Fill({ color:'#1e3a8a' }), stroke:new ol.style.Stroke({ color:'#fff', width:2 }) }),
+        text:new ol.style.Text({ text:String(f.get('order')||''), font:'bold 11px sans-serif', fill:new ol.style.Fill({ color:'#fff' }) })
+      })
+    }));
+    map.addLayer(new ol.layer.Vector({
       source: poisSource,
-      style: (feature) => {
-        const ct = feature.get('contenttypeid');
-        const fill = (ct === '12') ? '#065f46' : (ct === '39' ? '#92400e' : '#374151');
-        return new ol.style.Style({
-          image: new ol.style.Circle({ radius:6, fill:new ol.style.Fill({ color:fill }), stroke:new ol.style.Stroke({ color:'#fff', width:2 }) })
-        });
+      style: (f)=>{
+        const ct=f.get('contenttypeid'); const fill=(ct==='12')?'#065f46':(ct==='39'?'#92400e':'#374151');
+        return new ol.style.Style({ image:new ol.style.Circle({ radius:6, fill:new ol.style.Fill({ color:fill }), stroke:new ol.style.Stroke({ color:'#fff', width:2 }) }) });
       }
-    });
+    }));
 
-    map.addLayer(routeLayer); map.addLayer(waypointsLayer); map.addLayer(poisLayer);
-
-    // ====== Hover 팝업 ======
-    const popupEl = document.getElementById('popup');
-    const overlay = new ol.Overlay({ element: popupEl, offset:[0,-14], positioning:'bottom-left', stopEvent:false });
+    // Hover 팝업
+    const popupEl=document.getElementById('popup');
+    const overlay=new ol.Overlay({ element:popupEl, offset:[0,-14], positioning:'bottom-left', stopEvent:false });
     map.addOverlay(overlay);
-
-    let hoverFeature = null;
+    let hoverFeature=null;
     function showPopup(feature, coordinate){
-      const p = feature.getProperties();
-      if (p.popup_html) {
-        popupEl.innerHTML = p.popup_html;
-      } else if (p.kind === 'beach_waypoint') {
-        // 🔹 여기 부분 수정됨
-        const t = (typeof p.t === 'number') ? p.t.toFixed(3) : p.t;
-        const perp = (typeof p.perp_km === 'number') ? p.perp_km.toFixed(2) : p.perp_km;
-        popupEl.innerHTML =
-          `<b>${p.title || '경유지(해수욕장)'}</b>
-           ${p.addr1 ? `<div>주소: ${p.addr1}</div>`:''}
-           ${p.tel ? `<div>전화: ${p.tel}</div>`:''}
+      const p=feature.getProperties();
+      if (p.popup_html){
+        popupEl.innerHTML=p.popup_html;
+      } else if (p.kind==='beach_waypoint'){
+        const t=(typeof p.t==='number')?p.t.toFixed(3):p.t;
+        const perp=(typeof p.perp_km==='number')?p.perp_km.toFixed(2):p.perp_km;
+        popupEl.innerHTML=
+          `<b>${p.title||'경유지(해수욕장)'}</b>
+           ${p.addr1?`<div>주소: ${p.addr1}</div>`:''}
+           ${p.tel?`<div>전화: ${p.tel}</div>`:''}
            <div>순서: ${p.order} · t=${t} · 측면이탈=${perp} km</div>`;
       } else { popupEl.style.display='none'; return; }
-      popupEl.style.display='block';
-      overlay.setPosition(coordinate);
+      popupEl.style.display='block'; overlay.setPosition(coordinate);
     }
     function hidePopup(){ popupEl.style.display='none'; overlay.setPosition(undefined); }
 
-    map.on('pointermove', (evt)=>{
+    map.on('pointermove',(evt)=>{
       if (evt.dragging) return;
-      const pixel = map.getEventPixel(evt.originalEvent);
-      const feature = map.forEachFeatureAtPixel(pixel, f => f);
-      if (feature) {
-        map.getTargetElement().style.cursor = 'pointer';
-        if (feature !== hoverFeature) {
-          hoverFeature = feature;
-          showPopup(feature, evt.coordinate);
-        }
+      const feature=map.forEachFeatureAtPixel(map.getEventPixel(evt.originalEvent), f=>f);
+      if (feature){
+        map.getTargetElement().style.cursor='pointer';
+        if (feature!==hoverFeature){ hoverFeature=feature; showPopup(feature, evt.coordinate); }
       } else {
-        map.getTargetElement().style.cursor = '';
-        hoverFeature = null;
-        hidePopup();
+        map.getTargetElement().style.cursor=''; hoverFeature=null; hidePopup();
       }
     });
 
-    // ====== UI ======
-    const $origin = document.getElementById('origin');
-    const $destination = document.getElementById('destination');
-    const $corridor = document.getElementById('corridor');
-    const $detourAbs = document.getElementById('detourAbs');
-    const $detourRel = document.getElementById('detourRel');
-    const $routeBtn = document.getElementById('routeBtn');
-    const $summary = document.getElementById('summaryBox');
-    const $status = document.getElementById('statusBox');
-    const $error = document.getElementById('errorBox');
+    // UI
+    const $origin=document.getElementById('origin');
+    const $destination=document.getElementById('destination');
+    const $corridor=document.getElementById('corridor');
+    const $detourAbs=document.getElementById('detourAbs');
+    const $detourRel=document.getElementById('detourRel');
+    const $routeBtn=document.getElementById('routeBtn');
+    const $summary=document.getElementById('summaryBox');
+    const $error=document.getElementById('errorBox');
 
-    function setBusy(b, msg=''){
-      $routeBtn.disabled = b;
-      $routeBtn.textContent = b ? '계산 중…' : '경로 계산';
-      $status.textContent = msg || '';
-    }
-    function setError(msg){ $error.textContent = msg || ''; }
-
-    function addGeoJSONToSource(geojson, source, projFrom='EPSG:4326', projTo='EPSG:3857'){
-      const format = new ol.format.GeoJSON();
-      const feats = format.readFeatures(geojson, { dataProjection:projFrom, featureProjection:projTo });
+    function setBusy(b){ $routeBtn.disabled=b; $routeBtn.textContent=b?'계산 중…':'경로 계산'; }
+    function setError(msg){ $error.textContent=msg||''; }
+    function addGeoJSONToSource(geojson, source){
+      const format=new ol.format.GeoJSON();
+      const feats=format.readFeatures(geojson,{ dataProjection:'EPSG:4326', featureProjection:'EPSG:3857' });
       source.clear(true); source.addFeatures(feats);
     }
     function fitToAll(){
-      const extent = ol.extent.createEmpty();
+      const extent=ol.extent.createEmpty();
       ol.extent.extend(extent, routeSource.getExtent());
       ol.extent.extend(extent, waypointsSource.getExtent());
       ol.extent.extend(extent, poisSource.getExtent());
-      if (extent && extent.every(v => isFinite(v))) map.getView().fit(extent, { padding:[30,30,30,30], duration:500, maxZoom:14 });
+      if (extent && extent.every(v=>isFinite(v))) map.getView().fit(extent,{ padding:[30,30,30,30], duration:500, maxZoom:14 });
     }
 
-    // ====== 서버 웜업 및 요청 ======
     async function fetchRoute(){
-      setError(''); $summary.textContent='';
-      const originVal=$origin.value.trim(); const destVal=$destination.value.trim();
-      if (!originVal||!destVal){ setError('출발지와 도착지를 입력하세요.'); return; }
-      const payload={origin:originVal,destination:destVal,
-        corridor_km:Number($corridor.value||30),
-        detour_abs_km:Number($detourAbs.value||50),
-        detour_rel:Number($detourRel.value||0.35),
-        max_waypoints:3};
-
+      setError(''); $summary.textContent=''; setBusy(true);
       try{
-        setBusy(true,'경로 계산 중…');
-        const res=await fetch((BASE_URL||"")+"/api/route",{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        const originVal=$origin.value.trim(); const destVal=$destination.value.trim();
+        if(!originVal||!destVal) throw new Error('출발지와 도착지를 입력하세요.');
+        const payload={
+          origin:originVal, destination:destVal,
+          corridor_km:Number($corridor.value||30),
+          detour_abs_km:Number($detourAbs.value||50),
+          detour_rel:Number($detourRel.value||0.35),
+          max_waypoints:3
+        };
+        const res=await fetch((BASE_URL||'')+'/api/route',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) });
         const data=await res.json();
         if(!res.ok||!data.ok) throw new Error(data.error||'경로 계산 실패');
 
-        addGeoJSONToSource(data.route_geojson,routeSource);
-        addGeoJSONToSource(data.waypoints_geojson,waypointsSource);
-        addGeoJSONToSource(data.pois_geojson,poisSource);
+        addGeoJSONToSource(data.route_geojson, routeSource);
+        addGeoJSONToSource(data.waypoints_geojson, waypointsSource);
+        addGeoJSONToSource(data.pois_geojson, poisSource);
 
         const s=data.summary||{};
-        $summary.textContent=`직행 ${s.direct_km}km → 최종 ${s.final_km}km (우회 +${s.detour_km}km) · 경유지 ${s.waypoints_count}개`;
-
-        fitToAll(); setBusy(false);
-      }catch(e){ console.error(e); setError(String(e.message||e)); setBusy(false); }
+        $summary.textContent=`직행 ${s.direct_km}km → 최종 ${s.final_km}km (우회 +${s.detour_km}km) · 경유지 ${s.waypoints_count}개 · 코리도 ${s.corridor_km}km / 우회한도 ${s.detour_abs_km}km · 상대 ${s.detour_rel}`;
+        fitToAll();
+      }catch(e){ setError(String(e.message||e)); }
+      finally{ setBusy(false); }
     }
 
     document.getElementById('routeBtn').addEventListener('click', fetchRoute);
+
+    // 데모 자동 실행을 원하면 아래 주석 해제
+    // $origin.value='세종특별자치시청'; $destination.value='속초시청'; fetchRoute();
   </script>
 </body>
 </html>
