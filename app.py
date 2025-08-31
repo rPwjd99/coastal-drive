@@ -5,18 +5,196 @@ import json
 import time
 from typing import List, Dict, Tuple, Any
 import requests
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, render_template_string
 from flask_cors import CORS
 
-app = Flask(__name__, static_folder=None)  # 직접 index.html 서빙
+app = Flask(__name__, static_folder=None)
 CORS(app)
 
-# ==== 키 ====
+# ===== 내장 index.html (파일이 없으면 이걸로 서빙) =====
+INDEX_HTML = r"""<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>바다따라: 해안도로 감성 드라이브</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
+  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
+  <style>
+    html, body { margin:0; padding:0; height:100%; font-family: system-ui, -apple-system, Segoe UI, Roboto, Noto Sans KR, Arial, sans-serif; }
+    .app { display:grid; grid-template-rows:auto 1fr; height:100%; }
+    .toolbar {
+      padding:10px 12px; display:grid;
+      grid-template-columns:1.2fr 1.2fr auto auto auto auto;
+      gap:8px; align-items:center; border-bottom:1px solid #e5e7eb; background:#fff; position:sticky; top:0; z-index:10;
+    }
+    .toolbar input[type="text"]{ width:100%; padding:10px 12px; border:1px solid #cbd5e1; border-radius:10px; font-size:14px; }
+    .toolbar input[type="number"]{ width:90px; padding:8px; border:1px solid #cbd5e1; border-radius:10px; font-size:13px; }
+    .toolbar button{ padding:10px 14px; border:0; border-radius:12px; background:#111827; color:#fff; font-weight:600; cursor:pointer; }
+    .toolbar button:disabled{ opacity:.6; cursor:not-allowed; }
+    #map{ width:100%; height:100%; }
+    .summary{ font-size:13px; color:#374151; padding:4px 8px; }
+    .legend{ display:flex; gap:14px; align-items:center; font-size:12px; color:#374151; }
+    .legend .dot{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+    .dot-route{ background:#0b7285; } .dot-beach{ background:#1e3a8a; } .dot-tour{ background:#065f46; } .dot-food{ background:#92400e; }
+    .error{ color:#b91c1c; font-size:13px; padding-left:8px; }
+    .ol-popup{
+      position:absolute; background:#fff; box-shadow:0 10px 25px rgba(0,0,0,.15);
+      padding:10px 12px; border-radius:12px; border:1px solid #e5e7eb; min-width:260px;
+    }
+    .ol-popup:after,.ol-popup:before{ top:100%; border:solid transparent; content:" "; height:0; width:0; position:absolute; pointer-events:none; }
+    .ol-popup:after{ border-top-color:#fff; border-width:10px; left:24px; margin-left:-10px; }
+    .ol-popup:before{ border-top-color:rgba(0,0,0,.08); border-width:11px; left:24px; margin-left:-11px; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="toolbar">
+      <input id="origin" type="text" placeholder="출발지 (예: 세종특별자치시청)" />
+      <input id="destination" type="text" placeholder="도착지 (예: 속초시청)" />
+      <input id="corridor" type="number" value="30" step="1" min="5" title="코리도(km)" />
+      <input id="detourAbs" type="number" value="50" step="1" min="5" title="절대우회(km)" />
+      <input id="detourRel" type="number" value="0.35" step="0.01" min="0.05" title="상대우회배수" />
+      <button id="routeBtn">경로 계산</button>
+      <div class="legend">
+        <span><span class="dot dot-route"></span> 경로</span>
+        <span><span class="dot dot-beach"></span> 해수욕장 경유지</span>
+        <span><span class="dot dot-tour"></span> 관광지</span>
+        <span><span class="dot dot-food"></span> 맛집</span>
+      </div>
+      <div id="errorBox" class="error"></div>
+      <div class="summary" id="summaryBox"></div>
+    </div>
+    <div id="map"></div>
+  </div>
+
+  <div id="popup" class="ol-popup" style="display:none;"></div>
+
+  <script>
+    const BASE_URL = ""; // 동일 도메인 호출
+
+    // 지도
+    const map = new ol.Map({
+      target: 'map',
+      layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
+      view: new ol.View({ center: ol.proj.fromLonLat([127.8, 36.5]), zoom: 7 })
+    });
+    const routeSource = new ol.source.Vector();
+    const waypointsSource = new ol.source.Vector();
+    const poisSource = new ol.source.Vector();
+
+    map.addLayer(new ol.layer.Vector({ source: routeSource, style: new ol.style.Style({ stroke: new ol.style.Stroke({ color:'#0b7285', width:4 }) }) }));
+    map.addLayer(new ol.layer.Vector({
+      source: waypointsSource,
+      style: (f)=>new ol.style.Style({
+        image:new ol.style.Circle({ radius:8, fill:new ol.style.Fill({ color:'#1e3a8a' }), stroke:new ol.style.Stroke({ color:'#fff', width:2 }) }),
+        text:new ol.style.Text({ text:String(f.get('order')||''), font:'bold 11px sans-serif', fill:new ol.style.Fill({ color:'#fff' }) })
+      })
+    }));
+    map.addLayer(new ol.layer.Vector({
+      source: poisSource,
+      style: (f)=>{
+        const ct=f.get('contenttypeid'); const fill=(ct==='12')?'#065f46':(ct==='39'?'#92400e':'#374151');
+        return new ol.style.Style({ image:new ol.style.Circle({ radius:6, fill:new ol.style.Fill({ color:fill }), stroke:new ol.style.Stroke({ color:'#fff', width:2 }) }) });
+      }
+    }));
+
+    // Hover 팝업
+    const popupEl=document.getElementById('popup');
+    const overlay=new ol.Overlay({ element:popupEl, offset:[0,-14], positioning:'bottom-left', stopEvent:false });
+    map.addOverlay(overlay);
+    let hoverFeature=null;
+    function showPopup(feature, coordinate){
+      const p=feature.getProperties();
+      if (p.popup_html){
+        popupEl.innerHTML=p.popup_html;
+      } else if (p.kind==='beach_waypoint'){
+        const t=(typeof p.t==='number')?p.t.toFixed(3):p.t;
+        const perp=(typeof p.perp_km==='number')?p.perp_km.toFixed(2):p.perp_km;
+        popupEl.innerHTML=
+          `<b>${p.title||'경유지(해수욕장)'}</b>
+           ${p.addr1?`<div>주소: ${p.addr1}</div>`:''}
+           ${p.tel?`<div>전화: ${p.tel}</div>`:''}
+           <div>순서: ${p.order} · t=${t} · 측면이탈=${perp} km</div>`;
+      } else { popupEl.style.display='none'; return; }
+      popupEl.style.display='block'; overlay.setPosition(coordinate);
+    }
+    function hidePopup(){ popupEl.style.display='none'; overlay.setPosition(undefined); }
+    map.on('pointermove',(evt)=>{
+      if (evt.dragging) return;
+      const feature=map.forEachFeatureAtPixel(map.getEventPixel(evt.originalEvent), f=>f);
+      if (feature){
+        map.getTargetElement().style.cursor='pointer';
+        if (feature!==hoverFeature){ hoverFeature=feature; showPopup(feature, evt.coordinate); }
+      } else { map.getTargetElement().style.cursor=''; hoverFeature=null; hidePopup(); }
+    });
+
+    // UI
+    const $origin=document.getElementById('origin');
+    const $destination=document.getElementById('destination');
+    const $corridor=document.getElementById('corridor');
+    const $detourAbs=document.getElementById('detourAbs');
+    const $detourRel=document.getElementById('detourRel');
+    const $routeBtn=document.getElementById('routeBtn');
+    const $summary=document.getElementById('summaryBox');
+    const $error=document.getElementById('errorBox');
+
+    function setBusy(b){ $routeBtn.disabled=b; $routeBtn.textContent=b?'계산 중…':'경로 계산'; }
+    function setError(msg){ $error.textContent=msg||''; }
+    function addGeoJSONToSource(geojson, source){
+      const format=new ol.format.GeoJSON();
+      const feats=format.readFeatures(geojson,{ dataProjection:'EPSG:4326', featureProjection:'EPSG:3857' });
+      source.clear(true); source.addFeatures(feats);
+    }
+    function fitToAll(){
+      const extent=ol.extent.createEmpty();
+      ol.extent.extend(extent, routeSource.getExtent());
+      ol.extent.extend(extent, waypointsSource.getExtent());
+      ol.extent.extend(extent, poisSource.getExtent());
+      if (extent && extent.every(v=>isFinite(v))) map.getView().fit(extent,{ padding:[30,30,30,30], duration:500, maxZoom:14 });
+    }
+
+    async function fetchRoute(){
+      setError(''); $summary.textContent=''; setBusy(true);
+      try{
+        const originVal=$origin.value.trim(); const destVal=$destination.value.trim();
+        if(!originVal||!destVal) throw new Error('출발지와 도착지를 입력하세요.');
+        const payload={
+          origin:originVal, destination:destVal,
+          corridor_km:Number($corridor.value||30),
+          detour_abs_km:Number($detourAbs.value||50),
+          detour_rel:Number($detourRel.value||0.35),
+          max_waypoints:3
+        };
+        const res=await fetch((BASE_URL||'')+'/api/route',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) });
+        const data=await res.json();
+        if(!res.ok||!data.ok) throw new Error(data.error||'경로 계산 실패');
+
+        addGeoJSONToSource(data.route_geojson, routeSource);
+        addGeoJSONToSource(data.waypoints_geojson, waypointsSource);
+        addGeoJSONToSource(data.pois_geojson, poisSource);
+
+        const s=data.summary||{};
+        $summary.textContent=`직행 ${s.direct_km}km → 최종 ${s.final_km}km (우회 +${s.detour_km}km) · 경유지 ${s.waypoints_count}개 · 코리도 ${s.corridor_km}km / 우회한도 ${s.detour_abs_km}km · 상대 ${s.detour_rel}`;
+        fitToAll();
+      }catch(e){ setError(String(e.message||e)); }
+      finally{ setBusy(false); }
+    }
+
+    document.getElementById('routeBtn').addEventListener('click', fetchRoute);
+    // 데모 자동 실행 원하면:
+    // $origin.value='세종특별자치시청'; $destination.value='속초시청'; fetchRoute();
+  </script>
+</body>
+</html>
+"""
+
+# ===== API 키 =====
 ORS_API_KEY = os.getenv("ORS_API_KEY", "5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953")
 VWORLD_API_KEY = os.getenv("VWORLD_API_KEY", "9E77283D-954A-3077-B7C8-9BD5ADB33255")
 TOURAPI_KEY = os.getenv("TOURAPI_KEY", "e1tU33wjMx2nynKjH8yDBm/S4YNne6B8mpCOWtzMH9TSONF71XG/xAwPqyv1fANpgeOvbPY+Le+gM6cYCnWV8w==")
 
-# ==== 디폴트 파라미터 ====
+# ===== 기본 파라미터 =====
 DEFAULT_CORRIDOR_KM   = 30.0
 DEFAULT_DETOUR_ABS_KM = 50.0
 DEFAULT_DETOUR_REL    = 0.35
@@ -147,6 +325,9 @@ def ors_route_distance_and_geojson(coords_lonlat: List[Tuple[float, float]]) -> 
     return total_m / 1000.0, data
 
 # ---- 후보 수집/선정 ----
+def projection_t_and_cross_km_wrapper(start, end, p):  # (유닛 테스트/가독용)
+    return projection_t_and_cross_km(start, end, p)
+
 def collect_beach_candidates_on_line(start: Tuple[float,float], end: Tuple[float,float], corridor_km: float) -> List[Dict[str, Any]]:
     s_lon, s_lat = start; d_lon, d_lat = end
     candidates: Dict[str, Dict[str, Any]] = {}
@@ -176,15 +357,13 @@ def collect_beach_candidates_on_line(start: Tuple[float,float], end: Tuple[float
             except Exception:
                 continue
         time.sleep(0.15)
-    lst = list(candidates.values())
-    lst.sort(key=lambda x: x["t"])
+    lst = list(candidates.values()); lst.sort(key=lambda x: x["t"])
     return lst
 
 def greedy_pick_waypoints(start: Tuple[float,float], end: Tuple[float,float],
                           candidates: List[Dict[str,Any]], direct_km: float,
                           detour_abs_km: float, detour_rel: float, max_waypoints: int) -> List[Dict[str,Any]]:
-    chosen: List[Dict[str,Any]] = []
-    cur_coords = [start]
+    chosen: List[Dict[str,Any]] = []; cur_coords = [start]
     for cand in candidates:
         trial_coords = cur_coords + [(cand["lon"], cand["lat"])] + [end]
         dist_km, _ = ors_route_distance_and_geojson(trial_coords)
@@ -206,7 +385,7 @@ def greedy_pick_waypoints(start: Tuple[float,float], end: Tuple[float,float],
         if best: chosen = [best]
     return chosen
 
-# ---- POI & 팝업 ----
+# ---- POI ----
 def build_popup_html(item: Dict[str,Any], dist_km: float) -> str:
     title = item.get("title", ""); addr = item.get("addr1", ""); tel = item.get("tel", "")
     img = item.get("firstimage", ""); parking = item.get("parking", "") or item.get("parkingfood", "")
@@ -255,9 +434,10 @@ def collect_pois_along_route(route_coords: List[Tuple[float,float]]) -> Dict[str
             time.sleep(0.12)
     return {"type":"FeatureCollection", "features": features}
 
-# ---- API ----
+# ===== API =====
 @app.route("/api/route", methods=["POST"])
 def api_route():
+    print("[/api/route] request in")  # 로그
     data = request.get_json(force=True)
     origin = data.get("origin"); destination = data.get("destination")
     if not origin or not destination:
@@ -325,13 +505,13 @@ def api_route():
         ]
     }
 
-    # 선택: 파일로 저장
     try:
         with open("coastal_route_result.geojson","w",encoding="utf-8") as f: json.dump(route_geo,f,ensure_ascii=False)
         with open("pois_result.geojson","w",encoding="utf-8") as f: json.dump(pois_geo,f,ensure_ascii=False)
     except Exception:
         pass
 
+    print(f"[/api/route] ok: waypoints={len(chosen)}, direct={direct_km:.1f}km final={final_km:.1f}km")
     return jsonify({
         "ok": True,
         "summary": {
@@ -348,17 +528,19 @@ def api_route():
         "pois_geojson": pois_geo
     })
 
-# ---- 정적: index.html 서빙 (동일 도메인) ----
+# ===== 루트: index.html 서빙 (파일 우선, 없으면 내장본) =====
 @app.route("/")
 def serve_index():
-    # 프로젝트 루트에 index.html 파일 두세요.
-    return send_from_directory(".", "index.html")
+    try:
+        # Render 작업디렉토리: /opt/render/project/src
+        return send_from_directory(".", "index.html")
+    except Exception:
+        return render_template_string(INDEX_HTML)
 
-# 헬스엔드포인트가 필요하면 아래 추가
 @app.route("/healthz")
 def healthz():
     return "OK"
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "5000"))  # Render 호환
+    port = int(os.environ.get("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
