@@ -2,18 +2,16 @@
 # Flask 백엔드: ORS 경유지(해수욕장 1~3개) 자동선정 + TourAPI POI 팝업 정보
 # 규칙:
 # 1) 방향성: 출발→도착 벡터에 대한 선분 투영값 t(0~1) 필터 + t 단조 증가(정렬)
-# 2) 라인 근접도: 출발-도착 직선에서 측면 이탈 거리 <= 30km(코리도)
-# 3) 우회비용 제한: 각 경유 추가 시 detour_km > 50km 또는 detour_ratio > 0.35 이면 제외
-# 4) 개수 가변: 후보가 3개 이상이면 3개까지, 2개면 2개, 1개면 1개, 0개면 이전 '최소 우회 1개' 강제
+# 2) 라인 근접도: 출발-도착 직선에서 측면 이탈 거리 <= corridor_km(기본 30km)
+# 3) 우회비용 제한: 각 경유 추가 시 detour_km > detour_abs_km(기본 50) 또는 detour_ratio > detour_rel(기본 0.35)이면 제외
+# 4) 개수 가변: 후보가 3개 이상이면 3개까지, 2개면 2개, 1개면 1개, 0개면 최소 우회 1개 강제(옵션)
 # 5) 순서 고정: ORS 요청 순서 = 출발 → 해1 → 해2 → 해3 → 도착
 #
 # 출력:
 # /api/route  -> { route_geojson, waypoints, direct_km, final_km, detour_km, pois_geojson }
 #
-# 주의:
-# - 프런트에선 GeoJSON features의 properties.popup_html을 “마우스오버 시 팝업”으로 표시하세요.
-# - 본 코드는 의존성: Flask, flask_cors, requests (pip install flask flask-cors requests)
-# - 좌표계: EPSG:4326 (lon, lat)
+# 의존성: Flask, flask_cors, requests
+# 좌표계: EPSG:4326 (lon, lat)
 
 import os
 import math
@@ -35,16 +33,17 @@ VWORLD_API_KEY = os.getenv("VWORLD_API_KEY", "9E77283D-954A-3077-B7C8-9BD5ADB332
 TOURAPI_KEY = os.getenv("TOURAPI_KEY", "e1tU33wjMx2nynKjH8yDBm/S4YNne6B8mpCOWtzMH9TSONF71XG/xAwPqyv1fANpgeOvbPY+Le+gM6cYCnWV8w==")
 
 # -----------------------------
-# 설정값(요청 기준)
+# 상수(디폴트). 요청별로 값 바꾸고 싶으면 api_route에서 지역 변수로 덮어써 인자로 전달함
 # -----------------------------
-CORRIDOR_KM = 30.0        # 측면 이탈 허용(코리도) 30km
-DETOUR_ABS_KM = 50.0      # 절대 우회 허용 50km
-DETOUR_REL = 0.35         # 상대 우회 허용(직행 대비 0.35배)
-SAMPLE_POINTS = 9         # 선형 샘플링 개수(해수욕장 수집용)
-POI_RADIUS_M = 5000       # 경로 주변 POI 탐색 반경(5km)
-BEACH_SEARCH_RADIUS_M = 30000  # 해수욕장 키워드 탐색 반경(30km)
-MAX_WAYPOINTS = 3         # 최대 해수욕장 경유지 수
-FORCE_ONE_WAYPOINT = True # 후보 전멸 시 최소 우회 1개 강제
+DEFAULT_CORRIDOR_KM = 30.0
+DEFAULT_DETOUR_ABS_KM = 50.0
+DEFAULT_DETOUR_REL = 0.35
+DEFAULT_MAX_WAYPOINTS = 3
+FORCE_ONE_WAYPOINT = True
+
+SAMPLE_POINTS = 9                 # 선형 샘플링 개수(해수욕장 수집용)
+POI_RADIUS_M = 5000               # 경로 주변 POI 탐색 반경(5km)
+BEACH_SEARCH_RADIUS_M = 30000     # 해수욕장 키워드 탐색 반경(30km)
 
 # -----------------------------
 # 도우미: 지리계산(근사)
@@ -55,7 +54,6 @@ def deg2rad(d: float) -> float:
     return d * math.pi / 180.0
 
 def lonlat_to_xy_km(lon: float, lat: float, lat_ref: float) -> Tuple[float, float]:
-    # 단순 equirectangular 투영(한국 내 수백 km 수준에서 근사)
     x = EARTH_RADIUS_KM * deg2rad(lon) * math.cos(deg2rad(lat_ref))
     y = EARTH_RADIUS_KM * deg2rad(lat)
     return x, y
@@ -71,7 +69,6 @@ def haversine_km(a: Tuple[float, float], b: Tuple[float, float]) -> float:
     return 2 * EARTH_RADIUS_KM * math.asin(math.sqrt(h))
 
 def projection_t_and_cross_km(s: Tuple[float, float], d: Tuple[float, float], p: Tuple[float, float]) -> Tuple[float, float]:
-    # S->D 방향으로 P의 투영계수 t(0~1)와 측면 이탈거리(교차거리)를 km로 반환
     lon_s, lat_s = s
     lon_d, lat_d = d
     lon_p, lat_p = p
@@ -102,7 +99,7 @@ def geocode_vworld(addr: str) -> Tuple[float, float]:
         "refine": "true",
         "simple": "false",
         "format": "json",
-        "type": "ROAD",  # 도로명 우선, 실패 시 JIBUN로 재시도
+        "type": "ROAD",
         "key": VWORLD_API_KEY
     }
     r = requests.get(url, params=params, timeout=10)
@@ -115,7 +112,6 @@ def geocode_vworld(addr: str) -> Tuple[float, float]:
             return lon, lat
     except Exception:
         pass
-    # 도로명 실패 시 지번 재시도
     params["type"] = "PARCEL"
     r = requests.get(url, params=params, timeout=10)
     data = r.json()
@@ -127,7 +123,7 @@ def geocode_vworld(addr: str) -> Tuple[float, float]:
     raise ValueError(f"VWorld geocoding failed for address: {addr}")
 
 # -----------------------------
-# 외부 API: TourAPI(해수욕장/관광지/맛집)
+# 외부 API: TourAPI
 # -----------------------------
 def tourapi_search_keyword_near(lon: float, lat: float, keyword: str, radius_m: int, num_rows: int = 30) -> List[Dict[str, Any]]:
     base = "https://apis.data.go.kr/B551011/KorService1/searchKeyword1"
@@ -153,7 +149,6 @@ def tourapi_search_keyword_near(lon: float, lat: float, keyword: str, radius_m: 
         return []
 
 def tourapi_location_based(lon: float, lat: float, radius_m: int, content_type_id: int, num_rows: int = 30) -> List[Dict[str, Any]]:
-    # contentTypeId: 12=관광지, 39=음식점
     base = "https://apis.data.go.kr/B551011/KorService1/locationBasedList1"
     params = {
         "serviceKey": TOURAPI_KEY,
@@ -207,7 +202,6 @@ def ors_route_distance_and_geojson(coords_lonlat: List[Tuple[float, float]]) -> 
     }
     r = requests.post(url, headers=headers, data=json.dumps(body), timeout=20)
     data = r.json()
-    # 총거리(m) 합산
     total_m = 0.0
     try:
         for feat in data.get("features", []):
@@ -219,30 +213,30 @@ def ors_route_distance_and_geojson(coords_lonlat: List[Tuple[float, float]]) -> 
 # -----------------------------
 # 해수욕장 후보 수집 및 필터링
 # -----------------------------
-def collect_beach_candidates_on_line(start: Tuple[float,float], end: Tuple[float,float]) -> List[Dict[str, Any]]:
+def collect_beach_candidates_on_line(
+    start: Tuple[float,float],
+    end: Tuple[float,float],
+    corridor_km: float
+) -> List[Dict[str, Any]]:
     s_lon, s_lat = start
     d_lon, d_lat = end
-    candidates = {}
+    candidates: Dict[str, Dict[str, Any]] = {}
     for i in range(SAMPLE_POINTS):
-        t = (i + 1) / (SAMPLE_POINTS + 1)  # 0~1 사이 내부 샘플
+        t = (i + 1) / (SAMPLE_POINTS + 1)
         q_lon = s_lon + (d_lon - s_lon) * t
         q_lat = s_lat + (d_lat - s_lat) * t
-        # 키워드 '해수욕장'으로 30km 반경 검색
         items = tourapi_search_keyword_near(q_lon, q_lat, "해수욕장", BEACH_SEARCH_RADIUS_M, num_rows=50)
         for it in items:
             try:
-                title = it.get("title", "").strip()
+                title = (it.get("title") or "").strip()
                 contentid = str(it.get("contentid"))
                 mapx = float(it.get("mapx"))
                 mapy = float(it.get("mapy"))
                 if not contentid or not title:
                     continue
-                # t/측면거리 계산
                 t_proj, dist_perp = projection_t_and_cross_km(start, end, (mapx, mapy))
-                # 기본 필터: 0<=t<=1, 측면 30km 이내
-                if 0.0 <= t_proj <= 1.0 and dist_perp <= CORRIDOR_KM:
+                if 0.0 <= t_proj <= 1.0 and dist_perp <= corridor_km:
                     key = contentid
-                    # 같은 contentid 중 가장 선형에 가까운 것 우선(측면 거리 최소)
                     prev = candidates.get(key)
                     if (prev is None) or (dist_perp < prev["dist_perp_km"]):
                         candidates[key] = {
@@ -259,30 +253,33 @@ def collect_beach_candidates_on_line(start: Tuple[float,float], end: Tuple[float
                         }
             except Exception:
                 continue
-        # API 과호출 방지 딜레이
         time.sleep(0.15)
-    # t 오름차순 정렬
     lst = list(candidates.values())
     lst.sort(key=lambda x: x["t"])
     return lst
 
-def greedy_pick_waypoints(start: Tuple[float,float], end: Tuple[float,float], candidates: List[Dict[str,Any]], direct_km: float) -> List[Dict[str,Any]]:
-    chosen = []
+def greedy_pick_waypoints(
+    start: Tuple[float,float],
+    end: Tuple[float,float],
+    candidates: List[Dict[str,Any]],
+    direct_km: float,
+    detour_abs_km: float,
+    detour_rel: float,
+    max_waypoints: int
+) -> List[Dict[str,Any]]:
+    chosen: List[Dict[str,Any]] = []
     cur_coords = [start]
     for cand in candidates:
         trial_coords = cur_coords + [(cand["lon"], cand["lat"])] + [end]
         dist_km, _ = ors_route_distance_and_geojson(trial_coords)
         detour_km = dist_km - direct_km
         detour_ratio = detour_km / max(direct_km, 1e-6)
-        if detour_km <= DETOUR_ABS_KM and detour_ratio <= DETOUR_REL:
-            # 채택
+        if detour_km <= detour_abs_km and detour_ratio <= detour_rel:
             chosen.append(cand)
             cur_coords.insert(len(cur_coords), (cand["lon"], cand["lat"]))
-            if len(chosen) >= MAX_WAYPOINTS:
+            if len(chosen) >= max_waypoints:
                 break
-        # 과호출 방지
         time.sleep(0.15)
-    # 강제 1개 로직
     if not chosen and FORCE_ONE_WAYPOINT and candidates:
         best = None
         best_detour = 1e9
@@ -324,19 +321,18 @@ def build_popup_html(item: Dict[str,Any], dist_km: float) -> str:
     return "<br/>".join(lines)
 
 def nearest_distance_to_route_km(route_coords: List[Tuple[float,float]], pt: Tuple[float,float]) -> float:
-    # 간단 근사: 경로 좌표 샘플과의 최소 하버사인 거리
     best = 1e9
-    for lon, lat in route_coords[:: max(1, len(route_coords)//200) ]:
+    step = max(1, len(route_coords)//200)
+    for lon, lat in route_coords[::step]:
         d = haversine_km((lon,lat), pt)
         if d < best:
             best = d
     return best
 
 def collect_pois_along_route(route_coords: List[Tuple[float,float]]) -> Dict[str,Any]:
-    # 경로를 일정 간격으로 샘플링하며 관광지(12), 음식점(39)을 수집
     seen = {}
     features = []
-    step = max(1, len(route_coords)//25)  # 최대 25지점에서만 호출
+    step = max(1, len(route_coords)//25)
     for i in range(0, len(route_coords), step):
         lon, lat = route_coords[i]
         for ctid in (12, 39):
@@ -347,7 +343,6 @@ def collect_pois_along_route(route_coords: List[Tuple[float,float]]) -> Dict[str
                     if not cid or cid in seen:
                         continue
                     seen[cid] = True
-                    # 상세 소개(영업/주차 등)
                     intro = tourapi_detail_intro(cid, str(ctid))
                     it.update(intro)
                     poi_lon = float(it.get("mapx"))
@@ -382,28 +377,16 @@ def collect_pois_along_route(route_coords: List[Tuple[float,float]]) -> Dict[str
 # -----------------------------
 @app.route("/api/route", methods=["POST"])
 def api_route():
-    """
-    입력(JSON):
-    {
-      "origin": "세종특별자치시청" 또는 {"lon":127.289, "lat":36.480},
-      "destination": "속초시청" 또는 {"lon":128.594, "lat":38.207}
-    }
-    선택:
-      "max_waypoints": 1~3 (기본 3), "corridor_km": 30, "detour_abs_km": 50, "detour_rel": 0.35
-    """
     data = request.get_json(force=True)
     origin = data.get("origin")
     destination = data.get("destination")
-    max_wp = int(data.get("max_waypoints", MAX_WAYPOINTS))
-    corridor_km = float(data.get("corridor_km", CORRIDOR_KM))
-    detour_abs_km = float(data.get("detour_abs_km", DETOUR_ABS_KM))
-    detour_rel = float(data.get("detour_rel", DETOUR_REL))
 
-    global CORRIDOR_KM, DETOUR_ABS_KM, DETOUR_REL, MAX_WAYPOINTS
-    CORRIDOR_KM = corridor_km
-    DETOUR_ABS_KM = detour_abs_km
-    DETOUR_REL = detour_rel
-    MAX_WAYPOINTS = max(1, min(3, max_wp))
+    # 요청별 파라미터를 지역변수로만 사용
+    corridor_km = float(data.get("corridor_km", DEFAULT_CORRIDOR_KM))
+    detour_abs_km = float(data.get("detour_abs_km", DEFAULT_DETOUR_ABS_KM))
+    detour_rel = float(data.get("detour_rel", DEFAULT_DETOUR_REL))
+    max_waypoints = int(data.get("max_waypoints", DEFAULT_MAX_WAYPOINTS))
+    max_waypoints = max(1, min(3, max_waypoints))
 
     # 출발/도착 좌표 파싱
     def parse_point(obj):
@@ -431,13 +414,16 @@ def api_route():
 
     # 해수욕장 후보 수집 및 t/코리도 필터
     try:
-        candidates = collect_beach_candidates_on_line(start, end)
+        candidates = collect_beach_candidates_on_line(start, end, corridor_km)
     except Exception as e:
         return jsonify({"ok": False, "error": f"Collect beaches failed: {e}"}), 502
 
     # 그리디로 1~3개 선정(우회비용 제한)
     try:
-        chosen = greedy_pick_waypoints(start, end, candidates, direct_km)
+        chosen = greedy_pick_waypoints(
+            start, end, candidates, direct_km,
+            detour_abs_km, detour_rel, max_waypoints
+        )
     except Exception as e:
         return jsonify({"ok": False, "error": f"Greedy selection failed: {e}"}), 502
 
@@ -454,7 +440,6 @@ def api_route():
                 route_coords.extend(feat["geometry"]["coordinates"])
     except Exception:
         pass
-    # [lon,lat] -> List[Tuple[lon,lat]]
     route_coords = [(p[0], p[1]) for p in route_coords]
 
     # 경로 주변 POI 수집(관광지/맛집)
@@ -481,7 +466,7 @@ def api_route():
 
     waypoints_geojson = {"type":"FeatureCollection", "features": wp_features}
 
-    # 파일 저장(프로젝트 루트)
+    # 파일 저장(선택)
     try:
         with open("coastal_route_result.geojson", "w", encoding="utf-8") as f:
             json.dump(route_geo, f, ensure_ascii=False)
@@ -497,9 +482,9 @@ def api_route():
             "final_km": round(final_km, 3),
             "detour_km": round(detour_km, 3),
             "waypoints_count": len(chosen),
-            "corridor_km": CORRIDOR_KM,
-            "detour_abs_km": DETOUR_ABS_KM,
-            "detour_rel": DETOUR_REL
+            "corridor_km": corridor_km,
+            "detour_abs_km": detour_abs_km,
+            "detour_rel": detour_rel
         },
         "route_geojson": route_geo,
         "waypoints_geojson": waypoints_geojson,
@@ -511,5 +496,4 @@ def health():
     return "CoastalDrive ORS+TourAPI backend OK"
 
 if __name__ == "__main__":
-    # Windows 방화벽 경고 시 허용 필요
     app.run(host="0.0.0.0", port=5000, debug=True)
