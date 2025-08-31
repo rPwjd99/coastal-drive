@@ -11,7 +11,9 @@ from flask_cors import CORS
 app = Flask(__name__, static_folder=None)
 CORS(app)
 
-# ===== 내장 index.html (파일이 없으면 이걸로 서빙) =====
+# =========================
+# 내장 index.html (파일 없을 때 사용)
+# =========================
 INDEX_HTML = r"""<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -182,30 +184,33 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
 
     document.getElementById('routeBtn').addEventListener('click', fetchRoute);
-    // 데모 자동 실행 원하면:
-    // $origin.value='세종특별자치시청'; $destination.value='속초시청'; fetchRoute();
+    // $origin.value='세종특별자치시청'; $destination.value='속초시청'; fetchRoute(); // 데모 자동 실행용
   </script>
 </body>
 </html>
 """
 
-# ===== API 키 =====
-ORS_API_KEY = os.getenv("ORS_API_KEY", "5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953")
-VWORLD_API_KEY = os.getenv("VWORLD_API_KEY", "9E77283D-954A-3077-B7C8-9BD5ADB33255")
-TOURAPI_KEY = os.getenv("TOURAPI_KEY", "e1tU33wjMx2nynKjH8yDBm/S4YNne6B8mpCOWtzMH9TSONF71XG/xAwPqyv1fANpgeOvbPY+Le+gM6cYCnWV8w==")
+# =========================
+# API 키/디폴트 파라미터
+# =========================
+ORS_API_KEY   = os.getenv("ORS_API_KEY",   "5b3ce3597851110001cf62486d543846e80049df9c7a9e10ecef2953")
+VWORLD_API_KEY= os.getenv("VWORLD_API_KEY","9E77283D-954A-3077-B7C8-9BD5ADB33255")
+TOURAPI_KEY   = os.getenv("TOURAPI_KEY",   "e1tU33wjMx2nynKjH8yDBm/S4YNne6B8mpCOWtzMH9TSONF71XG/xAwPqyv1fANpgeOvbPY+Le+gM6cYCnWV8w==")
 
-# ===== 기본 파라미터 =====
 DEFAULT_CORRIDOR_KM   = 30.0
 DEFAULT_DETOUR_ABS_KM = 50.0
 DEFAULT_DETOUR_REL    = 0.35
 DEFAULT_MAX_WAYPOINTS = 3
 FORCE_ONE_WAYPOINT    = True
 
-SAMPLE_POINTS            = 9
-POI_RADIUS_M             = 5000
-BEACH_SEARCH_RADIUS_M    = 30000
-EARTH_RADIUS_KM          = 6371.0088
+SAMPLE_POINTS         = 9
+POI_RADIUS_M          = 5000
+BEACH_SEARCH_RADIUS_M = 30000
+EARTH_RADIUS_KM       = 6371.0088
 
+# =========================
+# 지리 계산
+# =========================
 def deg2rad(d: float) -> float:
     return d * math.pi / 180.0
 
@@ -239,31 +244,96 @@ def projection_t_and_cross_km(s: Tuple[float, float], d: Tuple[float, float], p:
     dist_perp = cross / vlen
     return t, dist_perp
 
-# ---- VWorld 지오코딩 ----
-def geocode_vworld(addr: str) -> Tuple[float, float]:
-    url = "https://api.vworld.kr/req/address"
-    params = {
-        "service": "address", "request": "getCoord", "version": "2.0",
-        "crs": "EPSG:4326", "address": addr, "refine": "true",
-        "simple": "false", "format": "json", "type": "ROAD", "key": VWORLD_API_KEY
-    }
-    r = requests.get(url, params=params, timeout=10)
-    data = r.json()
+# =========================
+# 지오코딩(다중 폴백)
+# =========================
+def _json_or_raise(resp):
     try:
+        return resp.json()
+    except Exception:
+        snippet = (resp.text or "")[:200].replace("\n", " ")
+        raise RuntimeError(f"Non-JSON from {resp.url} (status {resp.status_code}): {snippet!r}")
+
+def geocode_any(query: str) -> Tuple[float, float]:
+    # 0) "127.12,36.45" 또는 "127.12 36.45" 좌표 문자열 허용
+    if isinstance(query, str):
+        q = query.strip()
+        for sep in [",", " "]:
+            if sep in q:
+                parts = [p for p in q.split(sep) if p]
+                if len(parts) == 2:
+                    try:
+                        lon = float(parts[0]); lat = float(parts[1])
+                        if -180 <= lon <= 180 and -90 <= lat <= 90:
+                            return lon, lat
+                    except Exception:
+                        pass
+                break
+
+    # 1) VWorld ROAD
+    try:
+        url = "https://api.vworld.kr/req/address"
+        params = {
+            "service": "address", "request": "getCoord", "version": "2.0",
+            "crs": "EPSG:4326", "address": query, "refine": "true",
+            "simple": "false", "format": "json", "type": "ROAD",
+            "key": VWORLD_API_KEY
+        }
+        r = requests.get(url, params=params, timeout=10)
+        data = _json_or_raise(r)
         if data.get("response", {}).get("status") == "OK":
             point = data["response"]["result"]["point"]
             return float(point["x"]), float(point["y"])
     except Exception:
         pass
-    params["type"] = "PARCEL"
-    r = requests.get(url, params=params, timeout=10)
-    data = r.json()
-    if data.get("response", {}).get("status") == "OK":
-        point = data["response"]["result"]["point"]
-        return float(point["x"]), float(point["y"])
-    raise ValueError(f"VWorld geocoding failed for address: {addr}")
 
-# ---- TourAPI ----
+    # 2) VWorld PARCEL
+    try:
+        url = "https://api.vworld.kr/req/address"
+        params = {
+            "service": "address", "request": "getCoord", "version": "2.0",
+            "crs": "EPSG:4326", "address": query, "refine": "true",
+            "simple": "false", "format": "json", "type": "PARCEL",
+            "key": VWORLD_API_KEY
+        }
+        r = requests.get(url, params=params, timeout=10)
+        data = _json_or_raise(r)
+        if data.get("response", {}).get("status") == "OK":
+            point = data["response"]["result"]["point"]
+            return float(point["x"]), float(point["y"])
+    except Exception:
+        pass
+
+    # 3) ORS Geocoding
+    try:
+        url = "https://api.openrouteservice.org/geocode/search"
+        params = {"api_key": ORS_API_KEY, "text": query, "size": 1}
+        r = requests.get(url, params=params, timeout=10)
+        data = _json_or_raise(r)
+        feats = data.get("features") or []
+        if feats:
+            coords = feats[0]["geometry"]["coordinates"]
+            return float(coords[0]), float(coords[1])
+    except Exception:
+        pass
+
+    # 4) Nominatim (OSM)
+    try:
+        url = "https://nominatim.openstreetmap.org/search"
+        params = {"q": query, "format": "json", "limit": 1}
+        headers = {"User-Agent": "CoastalDrive/1.0 (+render)"}
+        r = requests.get(url, params=params, headers=headers, timeout=10)
+        data = _json_or_raise(r)
+        if isinstance(data, list) and data:
+            return float(data[0]["lon"]), float(data[0]["lat"])
+    except Exception:
+        pass
+
+    raise ValueError(f"Geocoding failed for: {query}")
+
+# =========================
+# TourAPI
+# =========================
 def tourapi_search_keyword_near(lon: float, lat: float, keyword: str, radius_m: int, num_rows: int = 30) -> List[Dict[str, Any]]:
     base = "https://apis.data.go.kr/B551011/KorService1/searchKeyword1"
     params = {
@@ -309,7 +379,9 @@ def tourapi_detail_intro(content_id: str, content_type_id: str) -> Dict[str, Any
         pass
     return {}
 
-# ---- ORS ----
+# =========================
+# ORS 경로
+# =========================
 def ors_route_distance_and_geojson(coords_lonlat: List[Tuple[float, float]]) -> Tuple[float, Dict[str, Any]]:
     url = "https://api.openrouteservice.org/v2/directions/driving-car/geojson"
     headers = {"Authorization": ORS_API_KEY, "Content-Type": "application/json"}
@@ -324,10 +396,9 @@ def ors_route_distance_and_geojson(coords_lonlat: List[Tuple[float, float]]) -> 
         pass
     return total_m / 1000.0, data
 
-# ---- 후보 수집/선정 ----
-def projection_t_and_cross_km_wrapper(start, end, p):  # (유닛 테스트/가독용)
-    return projection_t_and_cross_km(start, end, p)
-
+# =========================
+# 후보 수집/선정
+# =========================
 def collect_beach_candidates_on_line(start: Tuple[float,float], end: Tuple[float,float], corridor_km: float) -> List[Dict[str, Any]]:
     s_lon, s_lat = start; d_lon, d_lat = end
     candidates: Dict[str, Dict[str, Any]] = {}
@@ -385,7 +456,9 @@ def greedy_pick_waypoints(start: Tuple[float,float], end: Tuple[float,float],
         if best: chosen = [best]
     return chosen
 
-# ---- POI ----
+# =========================
+# POI & 팝업
+# =========================
 def build_popup_html(item: Dict[str,Any], dist_km: float) -> str:
     title = item.get("title", ""); addr = item.get("addr1", ""); tel = item.get("tel", "")
     img = item.get("firstimage", ""); parking = item.get("parking", "") or item.get("parkingfood", "")
@@ -434,10 +507,12 @@ def collect_pois_along_route(route_coords: List[Tuple[float,float]]) -> Dict[str
             time.sleep(0.12)
     return {"type":"FeatureCollection", "features": features}
 
-# ===== API =====
+# =========================
+# API
+# =========================
 @app.route("/api/route", methods=["POST"])
 def api_route():
-    print("[/api/route] request in")  # 로그
+    print("[/api/route] request in")
     data = request.get_json(force=True)
     origin = data.get("origin"); destination = data.get("destination")
     if not origin or not destination:
@@ -453,7 +528,7 @@ def api_route():
         if isinstance(obj, dict) and "lon" in obj and "lat" in obj:
             return float(obj["lon"]), float(obj["lat"])
         elif isinstance(obj, str):
-            return geocode_vworld(obj)
+            return geocode_any(obj)  # ← 폴백 지오코딩 사용
         else:
             raise ValueError("origin/destination must be address string or {'lon':..,'lat':..}")
 
@@ -528,11 +603,12 @@ def api_route():
         "pois_geojson": pois_geo
     })
 
-# ===== 루트: index.html 서빙 (파일 우선, 없으면 내장본) =====
+# =========================
+# 루트: index.html 서빙 (파일 우선, 없으면 내장본)
+# =========================
 @app.route("/")
 def serve_index():
     try:
-        # Render 작업디렉토리: /opt/render/project/src
         return send_from_directory(".", "index.html")
     except Exception:
         return render_template_string(INDEX_HTML)
@@ -542,5 +618,5 @@ def healthz():
     return "OK"
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "5000"))
+    port = int(os.environ.get("PORT", "5000"))  # Render 호환
     app.run(host="0.0.0.0", port=port, debug=True)
