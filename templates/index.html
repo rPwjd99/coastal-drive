@@ -1,208 +1,334 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8">
-  <title>🌊 바다따라: 해안도로 감성 드라이브</title>
-  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
+  <meta charset="utf-8" />
+  <title>바다따라: 해안도로 감성 드라이브</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- OpenLayers -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
+  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
+
   <style>
-    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", sans-serif; }
-    #map { width: 100%; height: 88vh; }
-    #controls { padding: 10px; background: #f7f7f7; border-bottom: 1px solid #ccc; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-    input { width: 300px; padding: 6px; }
-    button { padding: 6px 14px; background: #2563eb; color: white; border: none; cursor: pointer; border-radius: 8px; font-weight: 700; }
-    .legend { display:flex; gap:12px; align-items:center; font-size:12px; color:#334155;}
-    .dot { width:12px; height:12px; border-radius:999px; display:inline-block; margin-right:6px; border:1px solid #fff; box-shadow:0 0 0 1px rgba(0,0,0,0.1);}
-    #poi { padding:8px 10px; }
-    .chip { font-size:11px; padding:2px 6px; border-radius:999px; background:#eef2ff; color:#3730a3; margin-left:6px; }
+    html, body { margin:0; padding:0; height:100%; font-family: system-ui, -apple-system, Segoe UI, Roboto, Noto Sans KR, Arial, sans-serif; }
+    .app {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      height: 100%;
+    }
+    .toolbar {
+      padding: 10px 12px;
+      display: grid;
+      grid-template-columns: 1.2fr 1.2fr auto auto auto auto;
+      gap: 8px;
+      align-items: center;
+      border-bottom: 1px solid #e5e7eb;
+      background: #fff;
+      position: sticky; top:0; z-index: 10;
+    }
+    .toolbar input[type="text"] {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 10px;
+      outline: none;
+      font-size: 14px;
+    }
+    .toolbar input[type="number"] {
+      width: 90px;
+      padding: 8px;
+      border: 1px solid #cbd5e1;
+      border-radius: 10px;
+      outline: none;
+      font-size: 13px;
+    }
+    .toolbar button {
+      padding: 10px 14px;
+      border: 0;
+      border-radius: 12px;
+      background: #111827;
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .toolbar button:disabled { opacity: 0.6; cursor: not-allowed; }
+    #map { width: 100%; height: 100%; }
+    .summary {
+      font-size: 13px; color:#374151; padding: 4px 8px;
+    }
+    .legend {
+      display: flex; gap: 14px; align-items: center; font-size: 12px; color:#374151;
+    }
+    .legend .dot { display:inline-block; width:10px; height:10px; border-radius: 50%; margin-right:6px; vertical-align: middle; }
+    .dot-route { background:#0b7285; }
+    .dot-beach { background:#1e3a8a; }
+    .dot-tour { background:#065f46; }
+    .dot-food { background:#92400e; }
+
+    /* 팝업(overlay) */
+    .ol-popup {
+      position: absolute;
+      background: #fff;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid #e5e7eb;
+      min-width: 260px;
+    }
+    .ol-popup:after, .ol-popup:before {
+      top: 100%;
+      border: solid transparent;
+      content: " ";
+      height: 0;
+      width: 0;
+      position: absolute;
+      pointer-events: none;
+    }
+    .ol-popup:after {
+      border-top-color: #fff;
+      border-width: 10px;
+      left: 24px;
+      margin-left: -10px;
+    }
+    .ol-popup:before {
+      border-top-color: rgba(0,0,0,0.08);
+      border-width: 11px;
+      left: 24px;
+      margin-left: -11px;
+    }
+    .error {
+      color:#b91c1c; font-size: 13px; padding-left: 8px;
+    }
   </style>
 </head>
 <body>
-  <div id="controls">
-    <input id="start" placeholder="출발지 (예: 세종특별자치시 한누리대로 2130)">
-    <input id="end" placeholder="도착지 (예: 강원도 속초시 중앙로 183)">
-    <button id="go">경로 계산</button>
-    <div class="legend">
-      <span><span class="dot" style="background:#2563eb"></span>관광지</span>
-      <span><span class="dot" style="background:#f97316"></span>맛집</span>
-      <span><span class="dot" style="background:#64748b"></span>기타</span>
-      <span><span class="dot" style="background:#22c55e"></span>출발</span>
-      <span><span class="dot" style="background:#ef4444"></span>도착</span>
-      <span><span class="chip">🅿️: 주차 가능</span></span>
+  <div class="app">
+    <div class="toolbar">
+      <input id="origin" type="text" placeholder="출발지 (예: 세종특별자치시청)" />
+      <input id="destination" type="text" placeholder="도착지 (예: 속초시청)" />
+      <input id="corridor" type="number" value="30" step="1" min="5" title="코리도(km)" />
+      <input id="detourAbs" type="number" value="50" step="1" min="5" title="절대우회(km)" />
+      <input id="detourRel" type="number" value="0.35" step="0.01" min="0.05" title="상대우회배수" />
+      <button id="routeBtn">경로 계산</button>
+      <div class="legend">
+        <span><span class="dot dot-route"></span> 경로</span>
+        <span><span class="dot dot-beach"></span> 해수욕장 경유지</span>
+        <span><span class="dot dot-tour"></span> 관광지</span>
+        <span><span class="dot dot-food"></span> 맛집</span>
+      </div>
+      <div id="errorBox" class="error"></div>
+      <div class="summary" id="summaryBox"></div>
     </div>
+    <div id="map"></div>
   </div>
-  <div id="map"></div>
-  <div id="poi"></div>
+
+  <div id="popup" class="ol-popup" style="display:none;"></div>
 
   <script>
+    // ----- 기본 지도 세팅 -----
     const map = new ol.Map({
-      target: "map",
-      layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
-      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
+      target: 'map',
+      layers: [
+        new ol.layer.Tile({
+          source: new ol.source.OSM()
+        })
+      ],
+      view: new ol.View({
+        center: ol.proj.fromLonLat([127.8, 36.5]), // 한국 가운데 대략
+        zoom: 7
+      })
     });
 
-    let routeLayer = null;
-    let poiLayer = null;
-    const markerLayer = new ol.layer.Vector({ source: new ol.source.Vector() });
-    map.addLayer(markerLayer);
+    // GeoJSON 레이어들
+    const routeSource = new ol.source.Vector();
+    const routeLayer = new ol.layer.Vector({
+      source: routeSource,
+      style: new ol.style.Style({
+        stroke: new ol.style.Stroke({ color: '#0b7285', width: 4 })
+      })
+    });
 
-    const overlayEl = document.createElement("div");
-    overlayEl.style.background = "#fff";
-    overlayEl.style.border = "1px solid #ddd";
-    overlayEl.style.borderRadius = "10px";
-    overlayEl.style.padding = "8px 10px";
-    overlayEl.style.minWidth = "260px";
-    const overlay = new ol.Overlay({ element: overlayEl, autoPan: { animation: { duration: 200 } } });
+    const waypointsSource = new ol.source.Vector();
+    const waypointsLayer = new ol.layer.Vector({
+      source: waypointsSource,
+      style: (feature) => {
+        const order = feature.get('order');
+        const circle = new ol.style.Circle({ radius: 8, fill: new ol.style.Fill({ color: '#1e3a8a' }), stroke: new ol.style.Stroke({ color:'#fff', width:2 })});
+        const text = new ol.style.Text({
+          text: String(order || ''),
+          font: 'bold 11px sans-serif',
+          fill: new ol.style.Fill({ color:'#fff' })
+        });
+        return new ol.style.Style({ image: circle, text: text });
+      }
+    });
+
+    const poisSource = new ol.source.Vector();
+    const poisLayer = new ol.layer.Vector({
+      source: poisSource,
+      style: (feature) => {
+        const ct = feature.get('contenttypeid');
+        // 관광지(12) 초록, 맛집(39) 갈색
+        const fill = (ct === '12') ? '#065f46' : (ct === '39' ? '#92400e' : '#374151');
+        return new ol.style.Style({
+          image: new ol.style.Circle({
+            radius: 6,
+            fill: new ol.style.Fill({ color: fill }),
+            stroke: new ol.style.Stroke({ color:'#ffffff', width:2 })
+          })
+        });
+      }
+    });
+
+    map.addLayer(routeLayer);
+    map.addLayer(waypointsLayer);
+    map.addLayer(poisLayer);
+
+    // ----- Hover 팝업 Overlay -----
+    const popupEl = document.getElementById('popup');
+    const overlay = new ol.Overlay({
+      element: popupEl,
+      offset: [0, -14],
+      positioning: 'bottom-left',
+      stopEvent: false
+    });
     map.addOverlay(overlay);
 
-    function clearMap() {
-      if (routeLayer) map.removeLayer(routeLayer);
-      if (poiLayer) map.removeLayer(poiLayer);
-      markerLayer.getSource().clear();
-      routeLayer = null; poiLayer = null;
+    let hoverFeature = null;
+
+    function showPopup(feature, coordinate) {
+      const props = feature.getProperties();
+      // 우선순위: POI -> 경유지
+      if (props.popup_html) {
+        popupEl.innerHTML = props.popup_html;
+      } else if (props.kind === 'beach_waypoint') {
+        const title = props.title || '경유지(해수욕장)';
+        const addr = props.addr1 ? `<div>주소: ${props.addr1}</div>` : '';
+        const tel = props.tel ? `<div>전화: ${props.tel}</div>` : '';
+        const info = `<b>${title}</b><div>순서: ${props.order}</div>${addr}${tel}<div>t=${(props.t ?? '').toFixed ? props.t.toFixed(3): props.t}, 측면이탈=${(props.perp_km ?? '').toFixed ? props.perp_km.toFixed(2): props.perp_km} km</div>`;
+        popupEl.innerHTML = info;
+      } else {
+        // 경로 선분 등: 팝업 없음
+        popupEl.style.display = 'none';
+        return;
+      }
+      popupEl.style.display = 'block';
+      overlay.setPosition(coordinate);
+    }
+
+    function hidePopup() {
+      popupEl.style.display = 'none';
       overlay.setPosition(undefined);
     }
 
-    function drawRoute(lonlatCoords) {
-      const geom = new ol.geom.LineString(lonlatCoords.map(c => ol.proj.fromLonLat(c)));
-      routeLayer = new ol.layer.Vector({
-        source: new ol.source.Vector({ features: [new ol.Feature({ geometry: geom })] }),
-        style: new ol.style.Style({ stroke: new ol.style.Stroke({ color: "#2563eb", width: 4 }) })
-      });
-      map.addLayer(routeLayer);
-      map.getView().fit(geom, { padding: [50, 50, 50, 50], maxZoom: 12 });
-    }
-
-    function markerStyle(color, label, star=false, z=1000) {
-      const img = star
-        ? new ol.style.RegularShape({ points: 5, radius: 12, radius2: 6, fill: new ol.style.Fill({ color }), stroke: new ol.style.Stroke({ color: "#fff", width: 2 }) })
-        : new ol.style.Circle({ radius: 7, fill: new ol.style.Fill({ color }), stroke: new ol.style.Stroke({ color: "#fff", width: 2 }) });
-      return new ol.style.Style({
-        zIndex: z,
-        image: img,
-        text: label ? new ol.style.Text({ text: label, offsetY: -18, fill: new ol.style.Fill({ color: "#111" }), stroke: new ol.style.Stroke({ color: "#fff", width: 3 }) }) : undefined
-      });
-    }
-
-    function addMarker(lon, lat, color, label, star=false, descHtml="") {
-      const f = new ol.Feature({ geometry: new ol.geom.Point(ol.proj.fromLonLat([lon, lat])) });
-      f.setStyle(markerStyle(color, label, star, 2000));
-      if (descHtml) f.set("desc", descHtml);
-      markerLayer.getSource().addFeature(f);
-    }
-
-    function styleForPOI(p) {
-      let baseColor = "#64748b";
-      if (p.category === "attraction") baseColor = "#2563eb";
-      else if (p.category === "food") baseColor = "#f97316";
-
-      const styles = [
-        new ol.style.Style({
-          zIndex: 1500,
-          image: new ol.style.Circle({ radius: 6, fill: new ol.style.Fill({ color: baseColor }), stroke: new ol.style.Stroke({ color: "#fff", width: 1.5 }) })
-        })
-      ];
-      if (p.has_parking === true) {
-        styles.push(new ol.style.Style({
-          zIndex: 1600,
-          text: new ol.style.Text({ text: "P", offsetY: -16, font: "bold 12px sans-serif", fill: new ol.style.Fill({ color: "#16a34a" }), stroke: new ol.style.Stroke({ color: "#ffffff", width: 3 }) })
-        }));
-      }
-      return styles;
-    }
-
-    function htmlForPOI(p) {
-      const catLabel = p.category === "food" ? "맛집" : (p.category === "attraction" ? "관광지" : "기타");
-      const img = p.firstimage ? `<img src="${p.firstimage}" style="width:100%;border-radius:8px;margin:6px 0">` : "";
-      const addr = p.addr1 ? `<div>📍 ${p.addr1}</div>` : "";
-      const phone = p.phone ? `<div>📞 ${p.phone}</div>` : "";
-      const hours = p.hours ? `<div>⏰ ${p.hours}</div>` : "";
-      const rest = p.rest ? `<div>🗓️ 휴무: ${p.rest}</div>` : "";
-      const parking = (p.has_parking === true) ? "🅿️ 주차 가능" : (p.has_parking === false ? "🅿️ 주차 불가" : (p.parking ? `🅿️ ${p.parking}` : ""));
-      const parkingLine = parking ? `<div>${parking}</div>` : "";
-      const pet = p.pet ? `<div>🐶 반려동물: ${p.pet}</div>` : "";
-      const stroller = p.stroller ? `<div>🍼 유모차: ${p.stroller}</div>` : "";
-      const home = p.homepage ? `<div><a href="${p.homepage}" target="_blank">자세히 보기</a></div>` : "";
-      return `
-        <div style="font-weight:700;margin-bottom:4px">${p.title || "이름 미상"} <span class="chip">${catLabel}</span></div>
-        ${img}
-        ${addr}${phone}${hours}${rest        ${addr}${phone}${hours}${rest}${parkingLine}${pet}${stroller}${home}
-      `;
-    }
-
-    map.on("singleclick", evt => {
-      const f = map.forEachFeatureAtPixel(evt.pixel, g => g);
-      if (!f) {
-        overlay.setPosition(undefined);
-        return;
-      }
-      const html = f.get("desc");
-      if (html) {
-        overlayEl.innerHTML = html;
-        overlay.setPosition(evt.coordinate);
-      } else {
-        overlay.setPosition(undefined);
-      }
-    });
-
-    document.getElementById("go").addEventListener("click", async () => {
-      const start = document.getElementById("start").value.trim();
-      const end = document.getElementById("end").value.trim();
-      if (!start || !end) {
-        alert("출발지와 도착지를 모두 입력하세요.");
-        return;
-      }
-
-      clearMap();
-      try {
-        const res = await fetch("/route", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ start, end })
-        });
-        const result = await res.json();
-        if (!res.ok || !result.route || !result.route.features) throw new Error(result.error || "서버 오류");
-
-        const coords = result.route.features[0].geometry.coordinates.map(([lon, lat]) => [lon, lat]);
-        drawRoute(coords);
-
-        // 출발/도착 마커
-        const first = coords[0], last = coords[coords.length - 1];
-        addMarker(first[0], first[1], "#22c55e", "출발");
-        addMarker(last[0], last[1], "#ef4444", "도착");
-
-        // 경유지 마커
-        (result.waypoints || []).forEach((w, i) => {
-          const desc = `<b>경유${i + 1}: ${w.name}</b><br>${w.address || ""}`;
-          addMarker(w.lon, w.lat, "#f59e0b", `경유${i + 1}`, true, desc);
-        });
-
-        // 관광지 마커
-        const spots = result.spots || [];
-        const features = spots.map(p => {
-          const f = new ol.Feature({
-            geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(p.mapx), parseFloat(p.mapy)]))
-          });
-          f.setStyle(styleForPOI(p));
-          f.set("desc", htmlForPOI(p));
-          return f;
-        });
-        poiLayer = new ol.layer.Vector({ source: new ol.source.Vector({ features }) });
-        map.addLayer(poiLayer);
-
-        // 안내 메시지
-        if (result.waypoints && result.waypoints.length) {
-          alert(result.waypoints.map((w, i) => `✅ 경유${i + 1}: ${w.name} / ${w.address || ""}`).join("\n"));
+    map.on('pointermove', (evt) => {
+      if (evt.dragging) return;
+      const pixel = map.getEventPixel(evt.originalEvent);
+      const feature = map.forEachFeatureAtPixel(pixel, f => f);
+      if (feature) {
+        map.getTargetElement().style.cursor = 'pointer';
+        if (feature !== hoverFeature) {
+          hoverFeature = feature;
+          const coordinate = evt.coordinate;
+          showPopup(feature, coordinate);
         }
-      } catch (e) {
-        alert("❌ 경로 요청 실패: " + e.message);
-        console.error(e);
+      } else {
+        map.getTargetElement().style.cursor = '';
+        hoverFeature = null;
+        hidePopup();
       }
     });
 
-    // 기본값
-    document.getElementById("start").value = "세종특별자치시 한누리대로 2130";
-    document.getElementById("end").value = "강원도 속초시 중앙로 183";
+    // ----- UI 엘리먼트 -----
+    const $origin = document.getElementById('origin');
+    const $destination = document.getElementById('destination');
+    const $corridor = document.getElementById('corridor');
+    const $detourAbs = document.getElementById('detourAbs');
+    const $detourRel = document.getElementById('detourRel');
+    const $routeBtn = document.getElementById('routeBtn');
+    const $summary = document.getElementById('summaryBox');
+    const $errorBox = document.getElementById('errorBox');
+
+    function setBusy(b) {
+      $routeBtn.disabled = b;
+      $routeBtn.textContent = b ? '계산 중…' : '경로 계산';
+    }
+
+    function addGeoJSONToSource(geojson, source, projFrom='EPSG:4326', projTo='EPSG:3857') {
+      // OpenLayers는 기본이 EPSG:3857, 서버 GeoJSON은 [lon,lat]=4326
+      const format = new ol.format.GeoJSON();
+      const feats = format.readFeatures(geojson, {
+        dataProjection: projFrom,
+        featureProjection: projTo
+      });
+      source.clear(true);
+      source.addFeatures(feats);
+    }
+
+    function fitToAll() {
+      const extent = ol.extent.createEmpty();
+      ol.extent.extend(extent, routeSource.getExtent());
+      ol.extent.extend(extent, waypointsSource.getExtent());
+      ol.extent.extend(extent, poisSource.getExtent());
+      if (extent && extent.every(v => isFinite(v))) {
+        map.getView().fit(extent, { padding:[30,30,30,30], duration: 500, maxZoom: 14 });
+      }
+    }
+
+    async function fetchRoute() {
+      $errorBox.textContent = '';
+      $summary.textContent = '';
+      setBusy(true);
+      try {
+        const originVal = $origin.value.trim();
+        const destVal = $destination.value.trim();
+        if (!originVal || !destVal) {
+          throw new Error('출발지와 도착지를 입력하세요.');
+        }
+        const payload = {
+          origin: originVal,
+          destination: destVal,
+          corridor_km: Number($corridor.value || 30),
+          detour_abs_km: Number($detourAbs.value || 50),
+          detour_rel: Number($detourRel.value || 0.35),
+          max_waypoints: 3
+        };
+        const res = await fetch('/api/route', {
+          method: 'POST',
+          headers: { 'Content-Type':'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          throw new Error(data.error || '경로 계산 실패');
+        }
+
+        // 지도 반영
+        addGeoJSONToSource(data.route_geojson, routeSource);
+        addGeoJSONToSource(data.waypoints_geojson, waypointsSource);
+        addGeoJSONToSource(data.pois_geojson, poisSource);
+
+        // 요약
+        const s = data.summary || {};
+        $summary.textContent =
+          `직행 ${s.direct_km}km → 최종 ${s.final_km}km (우회 +${s.detour_km}km) · 경유지 ${s.waypoints_count}개 ` +
+          `· 코리도 ${s.corridor_km}km / 우회한도 ${s.detour_abs_km}km · 상대 ${s.detour_rel}`;
+
+        fitToAll();
+      } catch (err) {
+        console.error(err);
+        $errorBox.textContent = String(err.message || err);
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    document.getElementById('routeBtn').addEventListener('click', fetchRoute);
+
+    // 데모 입력을 원하면 아래 두 줄의 주석을 풀고, 페이지 로드시 자동 실행되게 할 수 있어요.
+    // $origin.value = '세종특별자치시청';
+    // $destination.value = '속초시청';
+    // fetchRoute();
   </script>
 </body>
 </html>
