@@ -83,16 +83,10 @@
 </div>
 
 <script>
-  // Map init ---------------------------------------------------------------
   const map = new ol.Map({
     target: 'map',
-    layers: [
-      new ol.layer.Tile({ source: new ol.source.OSM() })
-    ],
-    view: new ol.View({
-      center: ol.proj.fromLonLat([127.5, 36.3]),
-      zoom: 7
-    })
+    layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
+    view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.3]), zoom: 7 })
   });
 
   const routeSource = new ol.source.Vector();
@@ -107,7 +101,6 @@
   const markerLayer = new ol.layer.Vector({ source: markerSource });
   map.addLayer(markerLayer);
 
-  // Styles -----------------------------------------------------------------
   function styleDot(color, radius=6) {
     return new ol.style.Style({
       image: new ol.style.Circle({
@@ -128,13 +121,9 @@
     stroke: new ol.style.Stroke({ width: 4 })
   });
 
-  // Popup ------------------------------------------------------------------
   const popupEl = document.createElement('div');
   popupEl.className = 'popup';
-  const overlay = new ol.Overlay({
-    element: popupEl,
-    autoPan: { animation: { duration: 250 } }
-  });
+  const overlay = new ol.Overlay({ element: popupEl, autoPan: { animation: { duration: 250 } } });
   map.addOverlay(overlay);
 
   function showPopup(coord3857, html) {
@@ -143,7 +132,7 @@
   }
 
   map.on('singleclick', (e) => {
-    map.forEachFeatureAtPixel(e.pixel, (feature, layer) => {
+    map.forEachFeatureAtPixel(e.pixel, (feature) => {
       const props = feature.getProperties() || {};
       if (props.popup) {
         showPopup(e.coordinate, props.popup);
@@ -151,7 +140,6 @@
     });
   });
 
-  // UI elements ------------------------------------------------------------
   const $o = document.getElementById('origin');
   const $d = document.getElementById('destination');
   const $btn = document.getElementById('btnRoute');
@@ -162,11 +150,7 @@
   const $tgCafe = document.getElementById('tgCafe');
   const $btnReload = document.getElementById('btnReload');
 
-  function setMsg(t) {
-    $status.hidden = false;
-    $msg.textContent = t;
-  }
-
+  function setMsg(t) { $status.hidden = false; $msg.textContent = t; }
   function lonlatTo3857(lon, lat) { return ol.proj.fromLonLat([lon, lat]); }
 
   function addMarker(lon, lat, style, title, addr) {
@@ -198,7 +182,6 @@
     const f = new ol.Feature(new ol.geom.LineString(coords3857));
     f.setStyle(styleRoute);
     routeSource.addFeature(f);
-    // Fit
     const ext = routeSource.getExtent();
     if (ext && isFinite(ext[0])) {
       map.getView().fit(ext, { duration: 350, padding: [30, 30, 30, 30], maxZoom: 13 });
@@ -223,7 +206,6 @@
       $tgFood.checked ? fetchJSON(`/api/food?${qs({ lat: center.lat, lon: center.lon, radius_km: radiusKm })}`) : { results: [] },
       $tgCafe.checked ? fetchJSON(`/api/cafe?${qs({ lat: center.lat, lon: center.lon, radius_km: radiusKm })}`) : { results: [] },
     ]);
-
     (spots.results || []).forEach(s => addPOI(s.lon, s.lat, styleSpot, s.title, s.address, s.image));
     (food.results || []).forEach(s => addPOI(s.lon, s.lat, styleFood, s.title, s.address, s.image));
     (cafes.results || []).forEach(s => addPOI(s.lon, s.lat, styleCafe, s.title, s.address, s.image));
@@ -235,10 +217,7 @@
       overlay.setPosition(undefined);
       const origin = $o.value.trim();
       const destination = $d.value.trim();
-      if (!origin || !destination) {
-        setMsg('출발지와 도착지를 입력하세요.');
-        return;
-      }
+      if (!origin || !destination) { setMsg('출발지와 도착지를 입력하세요.'); return; }
       $btn.disabled = true;
       setMsg('경로 계산 중...');
 
@@ -252,7 +231,6 @@
       const line = (fc.features[0].geometry.coordinates);
       drawRoute(line);
 
-      // Markers: origin, dest, waypoints
       const O = res.origin, D = res.destination;
       addMarker(O.lon, O.lat, styleOrigin, '출발', O.address);
       addMarker(D.lon, D.lat, styleDest, '도착', D.address);
@@ -260,7 +238,6 @@
 
       setMsg(`경로 계산 완료. 총 세그먼트: ${res.geojson.features[0].properties.segments}`);
 
-      // Load POIs around destination (default 5km)
       setMsg('주변 관광지/맛집/카페 불러오는 중...');
       await loadPOIs({ lat: D.lat, lon: D.lon }, 5);
       setMsg('완료.');
@@ -271,8 +248,8 @@
     }
   }
 
-  $btn.addEventListener('click', computeRoute);
-  $btnReload.addEventListener('click', async () => {
+  document.getElementById('btnRoute').addEventListener('click', computeRoute);
+  document.getElementById('btnReload').addEventListener('click', async () => {
     const dest = markerSource.getFeatures().find(f => {
       const p = f.getProperties() || {};
       return (p.popup || '').includes('도착');
@@ -283,12 +260,7 @@
     setMsg('주변 정보를 새로 불러왔습니다.');
   });
 
-  // Convenience: press Enter in inputs to run
-  [$o, $d].forEach(inp => {
-    inp.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') computeRoute();
-    });
-  });
+  [$o, $d].forEach(inp => inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') computeRoute(); }));
 </script>
 </body>
 </html>
