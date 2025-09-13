@@ -2,7 +2,7 @@
 # 실행 예:
 #   Windows: set PORT=10000 && python app.py
 #   macOS/Linux: export PORT=10000 && python app.py
-# Render(권장): gunicorn -w 1 -k gthread -b 0.0.0.0:$PORT app:app
+# Render(권장): gunicorn -w 1 -k gthread --threads 8 --timeout 120 --keep-alive 30 -b 0.0.0.0:$PORT app:app
 
 import os
 import math
@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from flask import Flask, request, jsonify, send_from_directory, redirect, Response
+from flask_cors import CORS
 
 try:
     from dotenv import load_dotenv
@@ -19,14 +20,14 @@ try:
 except Exception:
     pass
 
-# beaches_coordinates.py 에서 다음 형태를 기대합니다.
-# beach_coords = {"해변명": (lon, lat), ...}
+# beaches_coordinates.py: beach_coords = {"해변명": (lon, lat), ...}
 try:
     from beaches_coordinates import beach_coords
 except Exception:
     beach_coords = {}
 
 app = Flask(__name__, static_folder="static")
+CORS(app)
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("coastal-drive")
 
@@ -37,22 +38,15 @@ ORS_API_KEY = os.getenv("ORS_API_KEY")
 TOURAPI_KEY = os.getenv("TOURAPI_KEY") or "e1tU33wjMx2nynKjH8yDBm/S4YNne6B8mpCOWtzMH9TSONF71XG/xAwPqyv1fANpgeOvbPY+Le+gM6cYCnWV8w=="
 
 # ------------------------
-# index.html 서빙(없으면 임시페이지)
+# index.html 서빙 (없으면 임시 페이지 제공)
 # ------------------------
 def _find_index_html() -> Optional[Path]:
-    cand = APP_DIR / "index.html"
-    if cand.is_file():
-        return cand
-    cand = APP_DIR / "templates" / "index.html"
-    if cand.is_file():
-        return cand
-    cand = APP_DIR / "static" / "index.html"
-    if cand.is_file():
-        return cand
+    for p in [APP_DIR / "index.html", APP_DIR / "templates" / "index.html", APP_DIR / "static" / "index.html"]:
+        if p.is_file():
+            return p
     return None
 
 def _fallback_index_html() -> str:
-    # 최소 동작용 임시 페이지 (지도 + 경로 버튼)
     return """<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -90,7 +84,6 @@ def _fallback_index_html() -> str:
       view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
     });
     let routeLayer = null;
-
     function drawRoute(coordsLonLat) {
       const coords3857 = coordsLonLat.map(([lon, lat]) => ol.proj.fromLonLat([lon, lat]));
       if (routeLayer) map.removeLayer(routeLayer);
@@ -103,7 +96,6 @@ def _fallback_index_html() -> str:
       map.addLayer(routeLayer);
       map.getView().fit(new ol.geom.LineString(coords3857), { padding: [50,50,50,50], maxZoom: 12 });
     }
-
     document.getElementById('btnRoute').addEventListener('click', async () => {
       const start = document.getElementById('start').value.trim();
       const end = document.getElementById('end').value.trim();
@@ -139,15 +131,19 @@ def index():
 def favicon():
     return "", 204
 
+@app.route("/healthz")
+def healthz():
+    return jsonify({"ok": True})
+
 # ------------------------
 # 공통 유틸
 # ------------------------
 def haversine(lat1, lon1, lat2, lon2) -> float:
     R = 6371.0
     dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
+    dlon = math.radians(lat2 - lon1)
     a = math.sin(dlat/2.0)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2.0)**2
-    return 2.0 * R * math.asin(math.sqrt(a))  # km
+    return 2.0 * R * math.asin(math.sqrt(a))
 
 def geocode_google(address: str) -> Optional[Tuple[float, float]]:
     if not GOOGLE_API_KEY or not address:
@@ -156,7 +152,7 @@ def geocode_google(address: str) -> Optional[Tuple[float, float]]:
         r = requests.get(
             "https://maps.googleapis.com/maps/api/geocode/json",
             params={"address": address, "key": GOOGLE_API_KEY},
-            timeout=15,
+            timeout=10,
         )
         j = r.json()
         loc = j["results"][0]["geometry"]["location"]
@@ -171,7 +167,7 @@ def reverse_geocode_google(lat: float, lon: float) -> str:
         r = requests.get(
             "https://maps.googleapis.com/maps/api/geocode/json",
             params={"latlng": f"{lat},{lon}", "key": GOOGLE_API_KEY},
-            timeout=15,
+            timeout=10,
         )
         return r.json()["results"][0]["formatted_address"]
     except Exception:
@@ -295,7 +291,7 @@ def get_ors_route_multi(points: List[Tuple[float, float]]) -> Tuple[Dict[str, An
         return {"error": str(e)}, 500
 
 # ------------------------
-# TourAPI 검색 및 상세(탄력 반경/샘플링 + 재시도)
+# TourAPI 검색 및 상세 (탄력 반경/샘플링 + 재시도)
 # ------------------------
 def _tourapi_location_based(lon: float, lat: float, content_type_id: Optional[int] = None, num_rows: int = 10, radius_m: int = 5000) -> List[Dict[str, Any]]:
     params = {
@@ -314,35 +310,23 @@ def _tourapi_location_based(lon: float, lat: float, content_type_id: Optional[in
     if content_type_id:
         params["contentTypeId"] = content_type_id
     try:
-        r = requests.get("https://apis.data.go.kr/B551011/KorService1/locationBasedList1", params=params, timeout=20)
+        r = requests.get("https://apis.data.go.kr/B551011/KorService1/locationBasedList1", params=params, timeout=10)
         items = r.json().get("response", {}).get("body", {}).get("items", {}).get("item", []) or []
         return items
     except Exception:
         return []
 
-def _tourapi_detail_common(content_id: str) -> Dict[str, Any]:
-    params = {
-        "serviceKey": TOURAPI_KEY, "contentId": content_id,
-        "defaultYN": "Y", "firstImageYN": "Y",
-        "addrinfoYN": "Y", "mapinfoYN": "Y",
-        "overviewYN": "N", "_type": "json",
-        "MobileOS": "ETC", "MobileApp": "SeaRoute",
-    }
-    try:
-        r = requests.get("https://apis.data.go.kr/B551011/KorService1/detailCommon1", params=params, timeout=20)
-        items = r.json().get("response", {}).get("body", {}).get("items", {}).get("item", []) or []
-        return items[0] if items else {}
-    except Exception:
-        return {}
-
 def _tourapi_detail_intro(content_id: str, content_type_id: int) -> Dict[str, Any]:
     params = {
-        "serviceKey": TOURAPI_KEY, "contentId": content_id,
-        "contentTypeId": content_type_id, "_type": "json",
-        "MobileOS": "ETC", "MobileApp": "SeaRoute",
+        "serviceKey": TOURAPI_KEY,
+        "contentId": content_id,
+        "contentTypeId": content_type_id,
+        "_type": "json",
+        "MobileOS": "ETC",
+        "MobileApp": "SeaRoute",
     }
     try:
-        r = requests.get("https://apis.data.go.kr/B551011/KorService1/detailIntro1", params=params, timeout=20)
+        r = requests.get("https://apis.data.go.kr/B551011/KorService1/detailIntro1", params=params, timeout=10)
         items = r.json().get("response", {}).get("body", {}).get("items", {}).get("item", []) or []
         return items[0] if items else {}
     except Exception:
@@ -387,7 +371,6 @@ def search_tour_items_along_route(geojson: Dict[str, Any], limit_each: int = 25)
         step = max(1, len(coords) // step_goal)
         for idx in range(0, len(coords), step):
             lon, lat = coords[idx]
-            # 관광지(12)
             for it in _tourapi_location_based(lon, lat, content_type_id=12, num_rows=10, radius_m=radius_m):
                 cid = str(it.get("contentid") or "")
                 if not cid or cid in seen:
@@ -397,7 +380,6 @@ def search_tour_items_along_route(geojson: Dict[str, Any], limit_each: int = 25)
                 tours.append(_normalize_detail(it, intro, "tour"))
                 if len(tours) >= limit_each:
                     break
-            # 음식점(39)
             for it in _tourapi_location_based(lon, lat, content_type_id=39, num_rows=10, radius_m=radius_m):
                 cid = str(it.get("contentid") or "")
                 if not cid or cid in seen:
@@ -411,9 +393,7 @@ def search_tour_items_along_route(geojson: Dict[str, Any], limit_each: int = 25)
                 break
         return tours, foods
 
-    # 1차: 반경 5km, 경로 200지점
     tour_items, food_items = collect(radius_m=5000, step_goal=200)
-    # 2차: 결과 부족 시 반경 8km, 경로 300지점으로 보강
     if len(tour_items) + len(food_items) < 10:
         t2, f2 = collect(radius_m=8000, step_goal=300)
         if len(tour_items) < len(t2): tour_items = t2
@@ -440,24 +420,19 @@ def _handle_route():
     if not start or not end:
         return jsonify({"error": "주소 변환 실패"}), 400
 
-    # 방향성·코리도·우회비용 기반 경유지(최대 3)
     way_sel = find_waypoints_along_direction(start, end, max_n=max_wps)
-    # 후보가 없으면 과거 1경유 방식으로 fallback
     if not way_sel and max_wps >= 1 and beach_coords:
         legacy = find_best_beach_waypoint_legacy(start, end)
         if legacy:
             way_sel = [(legacy[0], legacy[1], legacy[2], 0.5)]
 
-    # ORS 경로
     points = [start] + [(lat, lon) for (_, lat, lon, _) in way_sel] + [end]
     route_data, status = get_ors_route_multi(points)
     if status != 200 or "error" in route_data:
         return jsonify({"error": route_data.get("error", f"OpenRouteService 실패({status})")}), status
 
-    # 경로 주변 TourAPI
     spots = search_tour_items_along_route(route_data)
 
-    # 경유지 정보(주소 포함)
     wp_objs = []
     for i, (name, lat, lon, t) in enumerate(way_sel, start=1):
         wp_objs.append({
@@ -468,10 +443,9 @@ def _handle_route():
     resp = {
         "route": route_data,
         "waypoints_used": wp_objs,
-        "spots": spots["all"],  # 구버전 호환
+        "spots": spots["all"],
         "spots_grouped": { "tour": spots["tour"], "food": spots["food"] }
     }
-    # 호환 키
     if len(wp_objs) >= 1: resp["waypoint"] = wp_objs[0]
     if len(wp_objs) >= 2: resp["waypoint2"] = wp_objs[1]
     if len(wp_objs) >= 3: resp["waypoint3"] = wp_objs[2]
@@ -488,10 +462,11 @@ def route():
 def api_route():
     return _handle_route()
 
-@app.route("/healthz")
-def healthz():
-    return jsonify({"ok": True})
-
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "10000"))
+    port_env = os.getenv("PORT")
+    if not port_env:
+        # 로컬 개발 시만 10000 사용. Render에서는 반드시 $PORT가 설정되어야 함.
+        log.warning("PORT env not set; falling back to 10000 (local dev).")
+    port = int(port_env or "10000")
+    log.info(f"Starting on 0.0.0.0:{port}")
     app.run(host="0.0.0.0", port=port)
