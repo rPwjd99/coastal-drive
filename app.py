@@ -2,15 +2,16 @@
 # 실행 예:
 #   Windows: set PORT=10000 && python app.py
 #   macOS/Linux: export PORT=10000 && python app.py
-# Render (권장): gunicorn -w 1 -k gthread -b 0.0.0.0:$PORT app:app
+# Render(권장): gunicorn -w 1 -k gthread -b 0.0.0.0:$PORT app:app
 
 import os
 import math
 import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from flask import Flask, request, jsonify, send_from_directory, redirect
+from flask import Flask, request, jsonify, send_from_directory, redirect, Response
 
 try:
     from dotenv import load_dotenv
@@ -28,9 +29,118 @@ app = Flask(__name__, static_folder="static")
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("coastal-drive")
 
+APP_DIR = Path(__file__).resolve().parent
+
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 ORS_API_KEY = os.getenv("ORS_API_KEY")
 TOURAPI_KEY = os.getenv("TOURAPI_KEY") or "e1tU33wjMx2nynKjH8yDBm/S4YNne6B8mpCOWtzMH9TSONF71XG/xAwPqyv1fANpgeOvbPY+Le+gM6cYCnWV8w=="
+
+# ------------------------
+# index.html 안전 서빙 유틸
+# ------------------------
+def _find_index_html() -> Optional[Path]:
+    # 1) 루트
+    cand = APP_DIR / "index.html"
+    if cand.is_file():
+        return cand
+    # 2) templates/index.html
+    cand = APP_DIR / "templates" / "index.html"
+    if cand.is_file():
+        return cand
+    # 3) static/index.html
+    cand = APP_DIR / "static" / "index.html"
+    if cand.is_file():
+        return cand
+    return None
+
+def _fallback_index_html() -> str:
+    # 최소 동작용 임시 페이지 (지도 + 경로 버튼). index.html이 없어도 200으로 응답.
+    return """<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Coastal Drive</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
+  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
+  <style>
+    body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,'Noto Sans KR',sans-serif; }
+    #controls { padding:10px; background:#f7f7f7; border-bottom:1px solid #ddd; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    #controls input { width:280px; padding:8px 10px; border:1px solid #ccc; border-radius:6px; }
+    #controls button { padding:8px 14px; border:0; border-radius:6px; background:#111; color:#fff; cursor:pointer; }
+    #map { width:100%; height: calc(100vh - 64px); }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <input id="start" placeholder="출발지 (예: 세종시청)">
+    <input id="end" placeholder="도착지 (예: 속초시청)">
+    <button id="btnRoute" type="button">경로 계산</button>
+    <label>경유 최대
+      <select id="maxwps">
+        <option value="3" selected>3</option>
+        <option value="2">2</option>
+        <option value="1">1</option>
+        <option value="0">0</option>
+      </select>
+    </label>
+  </div>
+  <div id="map"></div>
+  <script>
+    const map = new ol.Map({
+      target: "map",
+      layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
+      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
+    });
+    let routeLayer = null;
+
+    function drawRoute(coordsLonLat) {
+      const coords3857 = coordsLonLat.map(([lon, lat]) => ol.proj.fromLonLat([lon, lat]));
+      if (routeLayer) map.removeLayer(routeLayer);
+      routeLayer = new ol.layer.Vector({
+        source: new ol.source.Vector({
+          features: [ new ol.Feature({ geometry: new ol.geom.LineString(coords3857) }) ]
+        }),
+        style: new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#0066ff', width: 4 }) })
+      });
+      map.addLayer(routeLayer);
+      map.getView().fit(new ol.geom.LineString(coords3857), { padding: [50,50,50,50], maxZoom: 12 });
+    }
+
+    document.getElementById('btnRoute').addEventListener('click', async () => {
+      const start = document.getElementById('start').value.trim();
+      const end = document.getElementById('end').value.trim();
+      const max_waypoints = document.getElementById('maxwps').value;
+      if (!start || !end) { alert('출발지와 도착지를 모두 입력하세요.'); return; }
+      try {
+        const res = await fetch('/route', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ start, end, max_waypoints })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.route) throw new Error(data.error || '경로 요청 실패');
+        const coords = data.route.features[0].geometry.coordinates;
+        drawRoute(coords);
+      } catch (err) {
+        alert('경로 요청 실패: ' + (err.message || err));
+        console.error(err);
+      }
+    });
+  </script>
+</body>
+</html>"""
+
+@app.route("/", methods=["GET", "HEAD"])
+def index():
+    p = _find_index_html()
+    if p:
+        return send_from_directory(p.parent.as_posix(), p.name)
+    # 파일이 없어도 404가 아닌 임시 페이지로 응답
+    return Response(_fallback_index_html(), mimetype="text/html")
+
+@app.route("/favicon.ico")
+def favicon():
+    return "", 204
 
 # ------------------------
 # 기본 유틸
@@ -81,16 +191,14 @@ def _coerce_json() -> Dict[str, Any]:
     return {}
 
 # ------------------------
-# 방향성·코리도 기반 경유지(해수욕장) 선택
+# 투영/코리도/우회비용 기반 경유지 선택 (최대 3개)
 # ------------------------
 def _ll_to_xy_km(lat: float, lon: float, lat0: float, lon0: float) -> Tuple[float, float]:
-    # 단순 등각 보정: 경도 -> cos(lat0)
     x = (lon - lon0) * math.cos(math.radians(lat0)) * 111.32
     y = (lat - lat0) * 110.57
     return x, y
 
 def _projection_metrics(start: Tuple[float, float], end: Tuple[float, float], p: Tuple[float, float]) -> Tuple[float, float]:
-    # 입력은 (lat, lon)
     (slat, slon), (elat, elon), (plat, plon) = start, end, p
     lat0 = (slat + elat) / 2.0
     lon0 = (slon + elon) / 2.0
@@ -103,21 +211,22 @@ def _projection_metrics(start: Tuple[float, float], end: Tuple[float, float], p:
     denom = vx*vx + vy*vy
     if denom <= 0:
         return 0.0, float("inf")
-    t = (ux*vx + uy*vy) / denom  # 선분상의 상대 위치
-    # 선분과의 수직(측면) 거리
+    t = (ux*vx + uy*vy) / denom
     cross = abs(vx*uy - vy*ux)
     vnorm = math.sqrt(denom)
     perp_km = cross / vnorm if vnorm > 0 else float("inf")
     return t, perp_km
 
 def _approx_chain_length(points: List[Tuple[float, float]], end: Tuple[float, float]) -> float:
-    # points: [start, w1, w2, ...] (lat,lon)
     seq = points + [end]
     total = 0.0
     for i in range(len(seq)-1):
         a, b = seq[i], seq[i+1]
         total += haversine(a[0], a[1], b[0], b[1])
     return total
+
+def max_direct(val: float) -> float:
+    return max(val, 1e-6)
 
 def find_waypoints_along_direction(
     start: Tuple[float, float],
@@ -127,24 +236,19 @@ def find_waypoints_along_direction(
     max_abs_detour_km: float = 50.0,
     max_rel_detour: float = 0.35,
 ) -> List[Tuple[str, float, float, float]]:
-    """
-    반환: [(name, lat, lon, t), ...] t는 투영값(0~1)
-    """
-    # 1) 후보 추출: 0<t<1, 코리도 내
-    cands: List[Tuple[float, str, float, float]] = []  # (t, name, lat, lon)
+    cands: List[Tuple[float, str, float, float]] = []
     for name, (lon, lat) in beach_coords.items():
         t, offset = _projection_metrics(start, end, (lat, lon))
         if 0.0 < t < 1.0 and offset <= corridor_km:
             cands.append((t, name, lat, lon))
-    cands.sort(key=lambda x: x[0])  # t 오름차순
+    cands.sort(key=lambda x: x[0])
 
     if not cands:
         return []
 
-    # 2) 우회비용 제어로 선별
     sel: List[Tuple[str, float, float, float]] = []
     base_direct = haversine(start[0], start[1], end[0], end[1])
-    chain_points: List[Tuple[float, float]] = [start]  # lat,lon
+    chain_points: List[Tuple[float, float]] = [start]
 
     for t, name, lat, lon in cands:
         tentative_points = chain_points + [(lat, lon)]
@@ -158,38 +262,27 @@ def find_waypoints_along_direction(
 
     return sel
 
-def max_direct(val: float) -> float:
-    return max(val, 1e-6)  # 0 나눗셈 방지
-
-# 기존 1경유 fallback 로직(사용자 이전 성공 코드 보전)
 def find_best_beach_waypoint_legacy(start: Tuple[float,float], end: Tuple[float,float]) -> Optional[Tuple[str,float,float]]:
     start_lat, start_lon = start
     end_lat, end_lon = end
     lat_cands, lon_cands = [], []
     for name, (lon, lat) in beach_coords.items():
-        # 간단 경계(한반도+제주)
         if not ((35 <= lat <= 38 and 128 <= lon <= 131) or (33 <= lat <= 35 and 126 <= lon <= 129) or (34 <= lat <= 38 and 124 <= lon <= 126)):
             continue
-        # 위도 정렬
         if abs(lat - start_lat) < 0.2 and (end_lon - start_lon) * (lon - start_lon) > 0:
             lat_cands.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
-        # 경도 정렬
         if abs(lon - start_lon) < 0.2 and (end_lat - start_lat) * (lat - start_lat) > 0:
             lon_cands.append((name, lat, lon, haversine(end_lat, end_lon, lat, lon)))
     best_lat = min(lat_cands, key=lambda x: x[3]) if lat_cands else None
     best_lon = min(lon_cands, key=lambda x: x[3]) if lon_cands else None
     if best_lat and best_lon:
-        return (best_lat if best_lat[3] <= best_lon[3] else best_lon)[:3]  # (name, lat, lon)
+        return (best_lat if best_lat[3] <= best_lon[3] else best_lon)[:3]
     return (best_lat or best_lon)[:3] if (best_lat or best_lon) else None
 
 # ------------------------
 # ORS 라우팅
 # ------------------------
 def get_ors_route_multi(points: List[Tuple[float, float]]) -> Tuple[Dict[str, Any], int]:
-    """
-    points: [(lat,lon), ...]  start, [wp1, wp2, wp3], end
-    ORS expects [lon,lat]
-    """
     if not ORS_API_KEY:
         return {"error": "ORS_API_KEY is missing"}, 500
     coords = [[lon, lat] for (lat, lon) in points]
@@ -205,7 +298,7 @@ def get_ors_route_multi(points: List[Tuple[float, float]]) -> Tuple[Dict[str, An
         return {"error": str(e)}, 500
 
 # ------------------------
-# TourAPI 검색 및 상세 병합
+# TourAPI 검색 및 상세
 # ------------------------
 def _tourapi_location_based(lon: float, lat: float, content_type_id: Optional[int] = None, num_rows: int = 10) -> List[Dict[str, Any]]:
     params = {
@@ -267,7 +360,6 @@ def _tourapi_detail_intro(content_id: str, content_type_id: int) -> Dict[str, An
         return {}
 
 def _normalize_detail(item: Dict[str, Any], intro: Dict[str, Any], category: str) -> Dict[str, Any]:
-    # 공통
     res = {
         "contentid": item.get("contentid"),
         "title": item.get("title"),
@@ -276,13 +368,12 @@ def _normalize_detail(item: Dict[str, Any], intro: Dict[str, Any], category: str
         "mapy": item.get("mapy"),
         "firstimage": item.get("firstimage"),
         "tel": item.get("tel") or "",
-        "category": category,  # "tour" or "food"
+        "category": category,
         "homepage": item.get("homepage") or "",
         "parking_info": "",
         "openhour": "",
         "restday": "",
     }
-    # 상세 intro 매핑
     if category == "tour":
         res["openhour"] = intro.get("usetime") or ""
         res["restday"] = intro.get("restdate") or ""
@@ -291,13 +382,11 @@ def _normalize_detail(item: Dict[str, Any], intro: Dict[str, Any], category: str
         res["openhour"] = intro.get("opentimefood") or ""
         res["restday"] = intro.get("restdatefood") or ""
         res["parking_info"] = intro.get("parkingfood") or ""
-    # 주차가능 여부
     p = (res["parking_info"] or "").strip()
     res["has_parking"] = bool(p) and ("불가" not in p and "없" not in p)
     return res
 
 def search_tour_items_along_route(geojson: Dict[str, Any], limit_each: int = 25) -> Dict[str, List[Dict[str, Any]]]:
-    # 경로 좌표 추출
     try:
         coords = geojson["features"][0]["geometry"]["coordinates"]
     except Exception:
@@ -307,12 +396,10 @@ def search_tour_items_along_route(geojson: Dict[str, Any], limit_each: int = 25)
     tour_items: List[Dict[str, Any]] = []
     food_items: List[Dict[str, Any]] = []
 
-    # 경로를 따라 일정 간격으로 샘플링
-    step = max(1, len(coords) // 200)  # 너무 많은 호출 방지
+    step = max(1, len(coords) // 200)
     for idx in range(0, len(coords), step):
         lon, lat = coords[idx]
 
-        # 관광지(12)
         for item in _tourapi_location_based(lon, lat, content_type_id=12, num_rows=10):
             cid = str(item.get("contentid"))
             if not cid or cid in seen:
@@ -323,7 +410,6 @@ def search_tour_items_along_route(geojson: Dict[str, Any], limit_each: int = 25)
             if len(tour_items) >= limit_each:
                 break
 
-        # 음식점(39)
         for item in _tourapi_location_based(lon, lat, content_type_id=39, num_rows=10):
             cid = str(item.get("contentid"))
             if not cid or cid in seen:
@@ -343,15 +429,6 @@ def search_tour_items_along_route(geojson: Dict[str, Any], limit_each: int = 25)
 # ------------------------
 # 라우팅 핸들러
 # ------------------------
-@app.route("/")
-def index():
-    # 루트에 놓인 index.html 서빙 (templates 불필요)
-    return send_from_directory(".", "index.html")
-
-@app.route("/favicon.ico")
-def favicon():
-    return "", 204
-
 def _handle_route():
     data = _coerce_json()
     start_in = data.get("start") or data.get("origin") or data.get("from")
@@ -362,31 +439,24 @@ def _handle_route():
     if not start_in or not end_in:
         return jsonify({"error": "start/end 누락"}), 400
 
-    # 주소 → 좌표
     start = geocode_google(start_in) if isinstance(start_in, str) else start_in
     end = geocode_google(end_in) if isinstance(end_in, str) else end_in
     if not start or not end:
         return jsonify({"error": "주소 변환 실패"}), 400
 
-    # 방향성·코리도·우회비용 기반 경유지(최대 3)
     way_sel = find_waypoints_along_direction(start, end, max_n=max_wps)
-    # 후보가 하나도 없으면 과거 1경유 방식으로 fallback (완전 무경유 회피)
     if not way_sel and max_wps >= 1:
         legacy = find_best_beach_waypoint_legacy(start, end)
         if legacy:
-            # (name, lat, lon)
             way_sel = [(legacy[0], legacy[1], legacy[2], 0.5)]
 
-    # ORS 요청용 좌표 나열
     points = [start] + [(lat, lon) for (_, lat, lon, _) in way_sel] + [end]
     route_data, status = get_ors_route_multi(points)
     if status != 200 or "error" in route_data:
         return jsonify({"error": route_data.get("error", f"OpenRouteService 실패({status})")}), status
 
-    # TourAPI 검색(관광지/맛집)
     spots = search_tour_items_along_route(route_data)
 
-    # 경유지 주소 역지오코딩
     wp_objs = []
     for i, (name, lat, lon, t) in enumerate(way_sel, start=1):
         wp_objs.append({
@@ -398,17 +468,12 @@ def _handle_route():
             "address": reverse_geocode_google(lat, lon) or ""
         })
 
-    # 호환 키(waypoint, waypoint2, waypoint3) + 확장(waypoints_used)
     resp = {
         "route": route_data,
         "waypoints_used": wp_objs,
-        "spots": spots["all"],               # 구버전 호환(단일 리스트)
-        "spots_grouped": {                   # 신버전(카테고리 분리)
-            "tour": spots["tour"],
-            "food": spots["food"],
-        }
+        "spots": spots["all"],
+        "spots_grouped": { "tour": spots["tour"], "food": spots["food"] }
     }
-    # 구버전 키 유지
     if len(wp_objs) >= 1:
         resp["waypoint"] = wp_objs[0]
     if len(wp_objs) >= 2:
