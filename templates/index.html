@@ -7,14 +7,12 @@
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
   <style>
     body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, 'Noto Sans KR', sans-serif; }
-    #controls { padding: 10px; background: #f7f7f7; border-bottom: 1px solid #ccc; display:flex; gap:8px; align-items:center; }
-    #controls input { width: 300px; padding: 8px 10px; border:1px solid #ccc; border-radius:6px; }
-    #controls button { padding: 8px 14px; border:0; border-radius:6px; background:#111; color:#fff; cursor:pointer; }
-    #map { width: 100%; height: calc(100vh - 58px); }
-    .ol-popup {
-      position: absolute; background: white; border: 1px solid #999; border-radius: 6px;
-      padding: 8px 10px; min-width: 220px; box-shadow: 0 2px 6px rgba(0,0,0,0.2);
-    }
+    #controls { padding:10px; background:#f7f7f7; border-bottom:1px solid #ddd; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    #controls input { width:280px; padding:8px 10px; border:1px solid #ccc; border-radius:6px; }
+    #controls button { padding:8px 14px; border:0; border-radius:6px; background:#111; color:#fff; cursor:pointer; }
+    #map { width:100%; height: calc(100vh - 64px); }
+    .legend { display:flex; gap:12px; align-items:center; font-size:12px; margin-left:8px; }
+    .dot { width:10px; height:10px; border-radius:50%; display:inline-block; vertical-align:middle; margin-right:6px; border:1px solid #fff; box-shadow:0 0 0 1px #0003; }
   </style>
 </head>
 <body>
@@ -22,61 +20,140 @@
     <input id="start" placeholder="출발지 (예: 세종시청)">
     <input id="end" placeholder="도착지 (예: 속초시청)">
     <button id="btnRoute" type="button">경로 계산</button>
+    <label>경유 최대
+      <select id="maxwps">
+        <option value="3" selected>3</option>
+        <option value="2">2</option>
+        <option value="1">1</option>
+        <option value="0">0</option>
+      </select>
+    </label>
+    <div class="legend">
+      <span class="dot" style="background:#1e90ff"></span>관광지
+      <span class="dot" style="background:#2ecc71"></span>맛집
+      <span class="dot" style="background:#ffd400; border-radius:2px; width:10px; height:10px;"></span>주차가능 표시(테두리)
+    </div>
   </div>
   <div id="map"></div>
-  <div id="popup" class="ol-popup" style="display:none;"></div>
 
   <script>
+    // 지도 기본
     const map = new ol.Map({
       target: "map",
       layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
       view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
     });
 
-    let routeLayer = null;
-    let spotLayer = null;
-    const popupEl = document.getElementById('popup');
-    const overlay = new ol.Overlay({ element: popupEl, autoPan: true, offset: [0, -12] });
-    map.addOverlay(overlay);
+    // 레이어들
+    let routeLayer, wayLayer, tourLayer, foodLayer, popupOverlay;
+    const popupEl = document.createElement('div');
+    popupEl.className = 'ol-popup';
+    popupEl.style.position = 'absolute';
+    popupEl.style.background = '#fff';
+    popupEl.style.border = '1px solid #999';
+    popupEl.style.borderRadius = '6px';
+    popupEl.style.padding = '8px 10px';
+    popupEl.style.minWidth = '240px';
+    popupEl.style.boxShadow = '0 2px 6px rgba(0,0,0,0.2)';
+    popupEl.style.display = 'none';
+    popupOverlay = new ol.Overlay({ element: popupEl, autoPan: true, offset: [0, -12] });
+    map.addOverlay(popupOverlay);
 
     function drawRoute(coordsLonLat) {
       const coords3857 = coordsLonLat.map(([lon, lat]) => ol.proj.fromLonLat([lon, lat]));
       if (routeLayer) map.removeLayer(routeLayer);
       routeLayer = new ol.layer.Vector({
         source: new ol.source.Vector({
-          features: [new ol.Feature({ geometry: new ol.geom.LineString(coords3857) })]
+          features: [ new ol.Feature({ geometry: new ol.geom.LineString(coords3857) }) ]
         }),
-        style: new ol.style.Style({
-          stroke: new ol.style.Stroke({ color: 'blue', width: 4 })
-        })
+        style: new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#0066ff', width: 4 }) })
       });
       map.addLayer(routeLayer);
       map.getView().fit(new ol.geom.LineString(coords3857), { padding: [50,50,50,50], maxZoom: 12 });
     }
 
-    function drawSpots(spots) {
-      if (spotLayer) map.removeLayer(spotLayer);
-      const feats = (spots || []).map(s => {
-        const lon = parseFloat(s.mapx), lat = parseFloat(s.mapy);
-        if (isNaN(lon) || isNaN(lat)) return null;
-        const f = new ol.Feature({ geometry: new ol.geom.Point(ol.proj.fromLonLat([lon, lat])) });
-        const img = s.firstimage ? `<div><img src="${s.firstimage}" width="160" loading="lazy"></div>` : '';
-        const home = s.homepage ? `<div><a href="${s.homepage}" target="_blank">자세히 보기</a></div>` : '';
-        f.set('desc', `<b>${s.title || '이름 없음'}</b><br>${s.addr1 || ''}${img}${home}`);
+    function drawWaypoints(waypoints) {
+      if (wayLayer) map.removeLayer(wayLayer);
+      const feats = (waypoints || []).map(wp => {
+        const f = new ol.Feature({ geometry: new ol.geom.Point(ol.proj.fromLonLat([wp.lon, wp.lat])) });
+        f.set('desc', `<b>${wp.order}경유: ${wp.name}</b><br>${wp.address || ''}`);
+        f.set('label', String(wp.order));
         return f;
-      }).filter(Boolean);
-
-      spotLayer = new ol.layer.Vector({
-        source: new ol.source.Vector({ features: feats }),
-        style: new ol.style.Style({
-          image: new ol.style.Circle({
-            radius: 6,
-            fill: new ol.style.Fill({ color: 'red' }),
-            stroke: new ol.style.Stroke({ color: 'white', width: 1 })
-          })
-        })
       });
-      map.addLayer(spotLayer);
+      wayLayer = new ol.layer.Vector({
+        source: new ol.source.Vector({ features: feats }),
+        style: feature => {
+          const label = feature.get('label') || '';
+          return new ol.style.Style({
+            image: new ol.style.Circle({ radius: 8, fill: new ol.style.Fill({ color: '#ff6b00' }), stroke: new ol.style.Stroke({ color:'#fff', width:2 }) }),
+            text: new ol.style.Text({ text: label, fill: new ol.style.Fill({ color:'#fff' }), stroke: new ol.style.Stroke({ color:'#000', width:3 }) })
+          });
+        }
+      });
+      map.addLayer(wayLayer);
+    }
+
+    function styleForSpot(category, hasParking) {
+      const baseColor = category === 'food' ? '#2ecc71' : '#1e90ff';
+      const image = new ol.style.Circle({
+        radius: 6,
+        fill: new ol.style.Fill({ color: baseColor }),
+        stroke: new ol.style.Stroke({ color: '#fff', width: 1 })
+      });
+      const styles = [ new ol.style.Style({ image }) ];
+      if (hasParking) {
+        // 테두리(주차가능 표시)
+        styles.push(new ol.style.Style({
+          image: new ol.style.Circle({
+            radius: 9,
+            fill: new ol.style.Fill({ color: 'rgba(0,0,0,0)' }),
+            stroke: new ol.style.Stroke({ color: '#ffd400', width: 2 })
+          })
+        }));
+      }
+      return styles;
+    }
+
+    function drawSpots(grouped) {
+      // 관광지
+      if (tourLayer) map.removeLayer(tourLayer);
+      const tourFeats = (grouped.tour || []).map(s => {
+        const f = new ol.Feature({ geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(s.mapx), parseFloat(s.mapy)])) });
+        const img = s.firstimage ? `<div><img src="${s.firstimage}" width="160" loading="lazy"></div>` : '';
+        const tel = s.tel ? `<div>☎ ${s.tel}</div>` : '';
+        const open = s.openhour ? `<div>⏰ ${s.openhour}</div>` : '';
+        const rest = s.restday ? `<div>🗓 휴무: ${s.restday}</div>` : '';
+        const park = s.parking_info ? `<div>🅿 ${s.parking_info}</div>` : '';
+        const home = s.homepage ? `<div><a href="${s.homepage}" target="_blank">자세히 보기</a></div>` : '';
+        f.set('desc', `<b>[관광지] ${s.title || '이름 없음'}</b><br>${s.addr1 || ''}${img}${tel}${open}${rest}${park}${home}`);
+        f.set('category', 'tour'); f.set('has_parking', !!s.has_parking);
+        return f;
+      });
+      tourLayer = new ol.layer.Vector({
+        source: new ol.source.Vector({ features: tourFeats }),
+        style: feature => styleForSpot(feature.get('category'), feature.get('has_parking'))
+      });
+      map.addLayer(tourLayer);
+
+      // 맛집
+      if (foodLayer) map.removeLayer(foodLayer);
+      const foodFeats = (grouped.food || []).map(s => {
+        const f = new ol.Feature({ geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(s.mapx), parseFloat(s.mapy)])) });
+        const img = s.firstimage ? `<div><img src="${s.firstimage}" width="160" loading="lazy"></div>` : '';
+        const tel = s.tel ? `<div>☎ ${s.tel}</div>` : '';
+        const open = s.openhour ? `<div>⏰ ${s.openhour}</div>` : '';
+        const rest = s.restday ? `<div>🗓 휴무: ${s.restday}</div>` : '';
+        const park = s.parking_info ? `<div>🅿 ${s.parking_info}</div>` : '';
+        const home = s.homepage ? `<div><a href="${s.homepage}" target="_blank">자세히 보기</a></div>` : '';
+        f.set('desc', `<b>[맛집] ${s.title || '이름 없음'}</b><br>${s.addr1 || ''}${img}${tel}${open}${rest}${park}${home}`);
+        f.set('category', 'food'); f.set('has_parking', !!s.has_parking);
+        return f;
+      });
+      foodLayer = new ol.layer.Vector({
+        source: new ol.source.Vector({ features: foodFeats }),
+        style: feature => styleForSpot(feature.get('category'), feature.get('has_parking'))
+      });
+      map.addLayer(foodLayer);
     }
 
     map.on('singleclick', function(evt) {
@@ -84,7 +161,7 @@
       if (feature && feature.get('desc')) {
         popupEl.innerHTML = feature.get('desc');
         popupEl.style.display = 'block';
-        overlay.setPosition(evt.coordinate);
+        popupOverlay.setPosition(evt.coordinate);
       } else {
         popupEl.style.display = 'none';
       }
@@ -93,6 +170,7 @@
     document.getElementById('btnRoute').addEventListener('click', async () => {
       const start = document.getElementById('start').value.trim();
       const end = document.getElementById('end').value.trim();
+      const max_waypoints = document.getElementById('maxwps').value;
       if (!start || !end) {
         alert('출발지와 도착지를 모두 입력하세요.');
         return;
@@ -101,17 +179,28 @@
         const res = await fetch('/route', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ start, end })
+          body: JSON.stringify({ start, end, max_waypoints })
         });
         const data = await res.json();
         if (!res.ok || !data.route) throw new Error(data.error || '경로 요청 실패');
 
         const coords = data.route.features[0].geometry.coordinates;
         drawRoute(coords);
-        drawSpots(data.spots || []);
+        drawWaypoints(data.waypoints_used || []);
 
-        if (data.waypoint && data.waypoint.name) {
-          alert(`경유 해안지점: ${data.waypoint.name}\n${data.waypoint.address || ''}`);
+        // 그룹형 스팟(관광/맛집 구분) 그리기
+        if (data.spots_grouped) {
+          drawSpots(data.spots_grouped);
+        } else if (data.spots) {
+          // 구버전 호환: 모두 관광지 스타일로
+          drawSpots({ tour: data.spots, food: [] });
+        }
+
+        // 경유지 안내
+        const wps = data.waypoints_used || [];
+        if (wps.length) {
+          const lines = wps.map(w => `${w.order}경유: ${w.name} ${w.address ? ' - ' + w.address : ''}`);
+          alert(`경유지\n${lines.join('\n')}`);
         }
       } catch (err) {
         alert('경로 요청 실패: ' + (err.message || err));
