@@ -38,17 +38,15 @@
   <div id="map"></div>
 
   <script>
-    // 지도
     const map = new ol.Map({
       target: "map",
       layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
       view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
     });
 
-    // 레이어
     let routeLayer, wayLayer, tourLayer, foodLayer;
 
-    // 팝업 오버레이 (DOM에 반드시 부착)
+    // 팝업 (DOM 부착 필수)
     const popupEl = document.createElement('div');
     popupEl.className = 'ol-popup';
     popupEl.style.zIndex = '1000';
@@ -160,7 +158,6 @@
       map.addLayer(foodLayer);
     }
 
-    // 클릭 팝업
     map.on('singleclick', function(evt) {
       const feature = map.forEachFeatureAtPixel(evt.pixel, f => f);
       if (feature && feature.get('desc')) {
@@ -196,12 +193,6 @@
           drawSpots(data.spots_grouped);
         } else if (data.spots) {
           drawSpots({ tour: data.spots, food: [] });
-        }
-
-        const wps = data.waypoints_used || [];
-        if (wps.length) {
-          const lines = wps.map(w => `${w.order}경유: ${w.name}${w.address ? ' - ' + w.address : ''}`);
-          console.log(lines.join('\n'));
         }
       } catch (err) {
         alert('경로 요청 실패: ' + (err.message || err));
