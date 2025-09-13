@@ -26,9 +26,8 @@
     .legend .food i{background:var(--food)}
     .legend .wp i{background:var(--wp)}
     .legend .se i{background:linear-gradient(90deg,var(--start),var(--end))}
-    /* Overlay loading */
     #loading{position:fixed;inset:0;background:rgba(255,255,255,.6);display:none;align-items:center;justify-content:center;font-weight:600;color:#333;z-index:9999}
-    /* OpenLayers popup */
+    .ol-overlaycontainer,.ol-overlaycontainer-stopevent{z-index:1000 !important}
     .ol-popup{position:absolute;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.3);padding:10px 12px;border-radius:8px;border:1px solid #ccc;min-width:240px}
     .ol-popup:after,.ol-popup:before{top:100%;border:solid transparent;content:"";height:0;width:0;position:absolute;pointer-events:none}
     .ol-popup:after{border-top-color:#fff;border-width:10px;left:48px;margin-left:-10px}
@@ -52,6 +51,9 @@
         <option value="0">0</option>
       </select>
     </label>
+    <label>코리도(km)
+      <input id="corridor" type="number" value="30" min="5" max="50" style="width:80px">
+    </label>
     <label><input type="checkbox" id="showTour" checked> 관광지</label>
     <label><input type="checkbox" id="showFood" checked> 맛집</label>
     <label><input type="checkbox" id="showWP" checked> 경유지</label>
@@ -68,9 +70,8 @@
 
   <script>
     // ==============================
-    // 설정: 같은 도메인에서는 빈 문자열 유지
-    // GitHub Pages 등 분리 배포 시 백엔드 URL로 변경
-    // 예: const API_BASE = "https://coastal-drive.onrender.com";
+    // API 베이스: 같은 도메인이면 빈 문자열 유지.
+    // 분리 배포 시 예) const API_BASE = "https://coastal-drive.onrender.com";
     // ==============================
     const API_BASE = "";
 
@@ -104,15 +105,23 @@
     function escapeHtml(t){return (t||"").toString().replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
     function fmtDist(m){ if(!isFinite(m)) return ""; if(m>=1000) return (m/1000).toFixed(1)+" km"; return Math.round(m)+" m"; }
     function fmtDur(s){ if(!isFinite(s)) return ""; const h=Math.floor(s/3600), m=Math.round((s%3600)/60); return (h?`${h}시간 `:"")+`${m}분`; }
-
     function setLoading(on){ document.getElementById('loading').style.display = on ? 'flex' : 'none'; }
 
-    function drawRoute(coordsLonLat){
+    function drawRoute(coordsLonLat, summary, counts){
       const coords3857 = coordsLonLat.map(([lon,lat])=>ol.proj.fromLonLat([lon,lat]));
       if(routeLayer) map.removeLayer(routeLayer);
+      const routeFeature = new ol.Feature({ geometry: new ol.geom.LineString(coords3857) });
+      routeFeature.setProperties({
+        category: 'route',
+        distance: summary?.distance || NaN,
+        duration: summary?.duration || NaN,
+        tourCount: counts?.tour || 0,
+        foodCount: counts?.food || 0
+      });
       routeLayer = new ol.layer.Vector({
-        source: new ol.source.Vector({ features: [ new ol.Feature({ geometry: new ol.geom.LineString(coords3857) }) ] }),
-        style: routeStyle, zIndex: 10
+        source: new ol.source.Vector({ features:[routeFeature] }),
+        style: routeStyle,
+        zIndex: 10
       });
       map.addLayer(routeLayer);
       map.getView().fit(new ol.geom.LineString(coords3857), { padding:[50,50,50,50], maxZoom: 12 });
@@ -134,44 +143,40 @@
 
     function addWaypoints(wps, startCoord, endCoord){
       clearWaypoints();
-      // 경유지
       if(Array.isArray(wps)){
-        let order = 1;
+        let order=1;
         for(const wp of wps){
-          const lon = parseFloat(wp.lon), lat = parseFloat(wp.lat);
+          const lon=parseFloat(wp.lon), lat=parseFloat(wp.lat);
           if(!isFinite(lon)||!isFinite(lat)) continue;
-          const f = new ol.Feature({
-            geometry: new ol.geom.Point(ol.proj.fromLonLat([lon,lat])),
-            title: `경유지${order++}: ${escapeHtml(wp.name||'')}`,
-            addr1: wp.address||'',
-            category: 'waypoint'
+          const f=new ol.Feature({
+            geometry:new ol.geom.Point(ol.proj.fromLonLat([lon,lat])),
+            title:`경유지${order++}: ${escapeHtml(wp.name||'')}`,
+            addr1:wp.address||'',
+            category:'waypoint'
           });
           f.setStyle(wpStyle);
           wpLayer.getSource().addFeature(f);
         }
       }
-      // 출발/도착
       if(startCoord){
         const [slon,slat]=startCoord;
-        const f = new ol.Feature({ geometry: new ol.geom.Point(ol.proj.fromLonLat([slon,slat])), title:'출발지', category:'start' });
-        f.setStyle(startStyle);
-        seLayer.getSource().addFeature(f);
+        const f=new ol.Feature({ geometry:new ol.geom.Point(ol.proj.fromLonLat([slon,slat])), title:'출발지', category:'start' });
+        f.setStyle(startStyle); seLayer.getSource().addFeature(f);
       }
       if(endCoord){
         const [elon,elat]=endCoord;
-        const f = new ol.Feature({ geometry: new ol.geom.Point(ol.proj.fromLonLat([elon,elat])), title:'도착지', category:'end' });
-        f.setStyle(endStyle);
-        seLayer.getSource().addFeature(f);
+        const f=new ol.Feature({ geometry:new ol.geom.Point(ol.proj.fromLonLat([elon,elat])), title:'도착지', category:'end' });
+        f.setStyle(endStyle); seLayer.getSource().addFeature(f);
       }
     }
 
-    // 팝업
-    const popupEl = document.createElement('div');
-    popupEl.className = 'ol-popup';
-    const overlay = new ol.Overlay({ element: popupEl, autoPan: { animation: { duration: 250 } } });
-    map.addOverlay(overlay);
+    // 클릭 팝업(관광지/맛집/경유지)
+    const clickPopupEl = document.createElement('div');
+    clickPopupEl.className = 'ol-popup';
+    const clickOverlay = new ol.Overlay({ element: clickPopupEl, autoPan: { animation: { duration: 250 } } });
+    map.addOverlay(clickOverlay);
 
-    function makePopupHTML(p){
+    function makeSpotPopupHTML(p){
       const catMap = {food:'맛집', tour:'관광지', waypoint:'경유지', start:'출발지', end:'도착지'};
       const cat = catMap[p.category] || '';
       const title = escapeHtml(p.title || '정보');
@@ -197,12 +202,48 @@
 
     map.on('singleclick', (evt)=>{
       let feature=null;
-      map.forEachFeatureAtPixel(evt.pixel, f=>{ feature=f; return true; });
-      if(!feature){ overlay.setPosition(undefined); return; }
+      map.forEachFeatureAtPixel(evt.pixel, f=>{ feature=f; return true; }, {hitTolerance: 6});
+      if(!feature){ clickOverlay.setPosition(undefined); return; }
       const props = feature.getProperties();
-      const coord = feature.getGeometry().getCoordinates();
-      popupEl.innerHTML = makePopupHTML(props);
-      overlay.setPosition(coord);
+      const geom = feature.getGeometry();
+      if(geom.getType() !== 'Point'){ clickOverlay.setPosition(undefined); return; }
+      clickPopupEl.innerHTML = makeSpotPopupHTML(props);
+      clickOverlay.setPosition(geom.getCoordinates());
+    });
+
+    // 라인 호버 팝업(경로 요약 + 스팟 개수)
+    const hoverPopupEl = document.createElement('div');
+    hoverPopupEl.className = 'ol-popup';
+    const hoverOverlay = new ol.Overlay({ element: hoverPopupEl, autoPan: false });
+    map.addOverlay(hoverOverlay);
+
+    function makeRoutePopupHTML(p){
+      const dist = fmtDist(p.distance);
+      const dur  = fmtDur(p.duration);
+      const tc = p.tourCount || 0, fc = p.foodCount || 0;
+      return `
+        <div class="popup-title">경로 요약</div>
+        거리 ${dist} · 예상 ${dur}<br>
+        관광지 ${tc} · 맛집 ${fc}
+      `;
+    }
+
+    map.on('pointermove',(evt)=>{
+      if (map.hasFeatureAtPixel(evt.pixel, {hitTolerance: 8}) === false){
+        hoverOverlay.setPosition(undefined);
+        map.getTargetElement().style.cursor='';
+        return;
+      }
+      let feat=null;
+      map.forEachFeatureAtPixel(evt.pixel, f=>{ feat=f; return true; }, {hitTolerance: 8});
+      if(feat && feat.get('category')==='route'){
+        hoverPopupEl.innerHTML = makeRoutePopupHTML(feat.getProperties());
+        hoverOverlay.setPosition(evt.coordinate);
+        map.getTargetElement().style.cursor='pointer';
+      }else{
+        hoverOverlay.setPosition(undefined);
+        map.getTargetElement().style.cursor='';
+      }
     });
 
     // 토글
@@ -210,8 +251,8 @@
     document.getElementById('showFood').addEventListener('change',e=>foodLayer.setVisible(e.target.checked));
     document.getElementById('showWP').addEventListener('change',e=>wpLayer.setVisible(e.target.checked));
 
-    // 입력에서 Enter로 실행
-    ['start','end'].forEach(id=>{
+    // 입력 Enter 실행
+    ['start','end','corridor'].forEach(id=>{
       document.getElementById(id).addEventListener('keydown',e=>{
         if(e.key==='Enter') document.getElementById('btnRoute').click();
       });
@@ -221,36 +262,40 @@
       const start = document.getElementById('start').value.trim();
       const end   = document.getElementById('end').value.trim();
       const max_waypoints = document.getElementById('maxwps').value;
+      const corridor_km   = parseFloat(document.getElementById('corridor').value || '30') || 30;
       if(!start || !end){ alert('출발지와 도착지를 모두 입력하세요.'); return; }
       setLoading(true);
       document.getElementById('summary').textContent = '';
       try{
         const res = await fetch(`${API_BASE}/route`,{
           method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ start, end, max_waypoints })
+          body: JSON.stringify({ start, end, max_waypoints, corridor_km })
         });
         const data = await res.json();
         if(!res.ok || !data.route) throw new Error(data.error || '경로 요청 실패');
 
         const feat = data.route.features[0];
         const coords = feat.geometry.coordinates;   // [lon,lat] 배열
-        drawRoute(coords);
+        const summary = (feat.properties && feat.properties.summary) ? feat.properties.summary : null;
 
         // 요약 표시 (거리/시간)
-        const summary = (feat.properties && feat.properties.summary) ? feat.properties.summary : null;
         if(summary){
           const dist = fmtDist(summary.distance || NaN);
           const dur  = fmtDur(summary.duration || NaN);
           document.getElementById('summary').textContent = (dist||dur) ? `거리 ${dist} · 예상 ${dur}` : '';
         }
 
-        // 스팟
+        // 스팟 표시 (30km 기본)
         addSpots(Array.isArray(data.spots) ? data.spots : []);
 
-        // 경유지 + 출발/도착 마커
-        const startLL = coords.length ? coords[0] : null;          // [lon,lat]
+        // 경유지 + 출발/도착
+        const startLL = coords.length ? coords[0] : null;
         const endLL   = coords.length ? coords[coords.length-1] : null;
         addWaypoints(data.waypoints_used || [], startLL ? [startLL[0], startLL[1]] : null, endLL ? [endLL[0], endLL[1]] : null);
+
+        // 경로 라인 + 라인 호버 팝업용 카운트
+        const counts = { tour: (data.spots_grouped?.tour||[]).length, food: (data.spots_grouped?.food||[]).length };
+        drawRoute(coords, summary, counts);
 
       }catch(err){
         console.error(err);
