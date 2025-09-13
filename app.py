@@ -19,7 +19,8 @@ try:
 except Exception:
     pass
 
-# beach_coords: {"해변명": (lon, lat), ...}
+# beaches_coordinates.py 에서 다음 형태를 기대합니다.
+# beach_coords = {"해변명": (lon, lat), ...}
 try:
     from beaches_coordinates import beach_coords
 except Exception:
@@ -36,25 +37,22 @@ ORS_API_KEY = os.getenv("ORS_API_KEY")
 TOURAPI_KEY = os.getenv("TOURAPI_KEY") or "e1tU33wjMx2nynKjH8yDBm/S4YNne6B8mpCOWtzMH9TSONF71XG/xAwPqyv1fANpgeOvbPY+Le+gM6cYCnWV8w=="
 
 # ------------------------
-# index.html 안전 서빙 유틸
+# index.html 서빙(없으면 임시페이지)
 # ------------------------
 def _find_index_html() -> Optional[Path]:
-    # 1) 루트
     cand = APP_DIR / "index.html"
     if cand.is_file():
         return cand
-    # 2) templates/index.html
     cand = APP_DIR / "templates" / "index.html"
     if cand.is_file():
         return cand
-    # 3) static/index.html
     cand = APP_DIR / "static" / "index.html"
     if cand.is_file():
         return cand
     return None
 
 def _fallback_index_html() -> str:
-    # 최소 동작용 임시 페이지 (지도 + 경로 버튼). index.html이 없어도 200으로 응답.
+    # 최소 동작용 임시 페이지 (지도 + 경로 버튼)
     return """<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -135,7 +133,6 @@ def index():
     p = _find_index_html()
     if p:
         return send_from_directory(p.parent.as_posix(), p.name)
-    # 파일이 없어도 404가 아닌 임시 페이지로 응답
     return Response(_fallback_index_html(), mimetype="text/html")
 
 @app.route("/favicon.ico")
@@ -143,7 +140,7 @@ def favicon():
     return "", 204
 
 # ------------------------
-# 기본 유틸
+# 공통 유틸
 # ------------------------
 def haversine(lat1, lon1, lat2, lon2) -> float:
     R = 6371.0
@@ -298,14 +295,14 @@ def get_ors_route_multi(points: List[Tuple[float, float]]) -> Tuple[Dict[str, An
         return {"error": str(e)}, 500
 
 # ------------------------
-# TourAPI 검색 및 상세
+# TourAPI 검색 및 상세(탄력 반경/샘플링 + 재시도)
 # ------------------------
-def _tourapi_location_based(lon: float, lat: float, content_type_id: Optional[int] = None, num_rows: int = 10) -> List[Dict[str, Any]]:
+def _tourapi_location_based(lon: float, lat: float, content_type_id: Optional[int] = None, num_rows: int = 10, radius_m: int = 5000) -> List[Dict[str, Any]]:
     params = {
         "serviceKey": TOURAPI_KEY,
         "mapX": lon,
         "mapY": lat,
-        "radius": 5000,
+        "radius": radius_m,
         "listYN": "Y",
         "arrange": "E",
         "numOfRows": num_rows,
@@ -325,16 +322,11 @@ def _tourapi_location_based(lon: float, lat: float, content_type_id: Optional[in
 
 def _tourapi_detail_common(content_id: str) -> Dict[str, Any]:
     params = {
-        "serviceKey": TOURAPI_KEY,
-        "contentId": content_id,
-        "defaultYN": "Y",
-        "firstImageYN": "Y",
-        "addrinfoYN": "Y",
-        "mapinfoYN": "Y",
-        "overviewYN": "N",
-        "_type": "json",
-        "MobileOS": "ETC",
-        "MobileApp": "SeaRoute",
+        "serviceKey": TOURAPI_KEY, "contentId": content_id,
+        "defaultYN": "Y", "firstImageYN": "Y",
+        "addrinfoYN": "Y", "mapinfoYN": "Y",
+        "overviewYN": "N", "_type": "json",
+        "MobileOS": "ETC", "MobileApp": "SeaRoute",
     }
     try:
         r = requests.get("https://apis.data.go.kr/B551011/KorService1/detailCommon1", params=params, timeout=20)
@@ -345,12 +337,9 @@ def _tourapi_detail_common(content_id: str) -> Dict[str, Any]:
 
 def _tourapi_detail_intro(content_id: str, content_type_id: int) -> Dict[str, Any]:
     params = {
-        "serviceKey": TOURAPI_KEY,
-        "contentId": content_id,
-        "contentTypeId": content_type_id,
-        "_type": "json",
-        "MobileOS": "ETC",
-        "MobileApp": "SeaRoute",
+        "serviceKey": TOURAPI_KEY, "contentId": content_id,
+        "contentTypeId": content_type_id, "_type": "json",
+        "MobileOS": "ETC", "MobileApp": "SeaRoute",
     }
     try:
         r = requests.get("https://apis.data.go.kr/B551011/KorService1/detailIntro1", params=params, timeout=20)
@@ -392,36 +381,43 @@ def search_tour_items_along_route(geojson: Dict[str, Any], limit_each: int = 25)
     except Exception:
         return {"tour": [], "food": [], "all": []}
 
-    seen = set()
-    tour_items: List[Dict[str, Any]] = []
-    food_items: List[Dict[str, Any]] = []
-
-    step = max(1, len(coords) // 200)
-    for idx in range(0, len(coords), step):
-        lon, lat = coords[idx]
-
-        for item in _tourapi_location_based(lon, lat, content_type_id=12, num_rows=10):
-            cid = str(item.get("contentid"))
-            if not cid or cid in seen:
-                continue
-            seen.add(cid)
-            intro = _tourapi_detail_intro(cid, 12)
-            tour_items.append(_normalize_detail(item, intro, "tour"))
-            if len(tour_items) >= limit_each:
+    def collect(radius_m: int, step_goal: int):
+        seen = set()
+        tours, foods = [], []
+        step = max(1, len(coords) // step_goal)
+        for idx in range(0, len(coords), step):
+            lon, lat = coords[idx]
+            # 관광지(12)
+            for it in _tourapi_location_based(lon, lat, content_type_id=12, num_rows=10, radius_m=radius_m):
+                cid = str(it.get("contentid") or "")
+                if not cid or cid in seen:
+                    continue
+                seen.add(cid)
+                intro = _tourapi_detail_intro(cid, 12)
+                tours.append(_normalize_detail(it, intro, "tour"))
+                if len(tours) >= limit_each:
+                    break
+            # 음식점(39)
+            for it in _tourapi_location_based(lon, lat, content_type_id=39, num_rows=10, radius_m=radius_m):
+                cid = str(it.get("contentid") or "")
+                if not cid or cid in seen:
+                    continue
+                seen.add(cid)
+                intro = _tourapi_detail_intro(cid, 39)
+                foods.append(_normalize_detail(it, intro, "food"))
+                if len(foods) >= limit_each:
+                    break
+            if len(tours) >= limit_each and len(foods) >= limit_each:
                 break
+        return tours, foods
 
-        for item in _tourapi_location_based(lon, lat, content_type_id=39, num_rows=10):
-            cid = str(item.get("contentid"))
-            if not cid or cid in seen:
-                continue
-            seen.add(cid)
-            intro = _tourapi_detail_intro(cid, 39)
-            food_items.append(_normalize_detail(item, intro, "food"))
-            if len(food_items) >= limit_each:
-                break
-
-        if len(tour_items) >= limit_each and len(food_items) >= limit_each:
-            break
+    # 1차: 반경 5km, 경로 200지점
+    tour_items, food_items = collect(radius_m=5000, step_goal=200)
+    # 2차: 결과 부족 시 반경 8km, 경로 300지점으로 보강
+    if len(tour_items) + len(food_items) < 10:
+        t2, f2 = collect(radius_m=8000, step_goal=300)
+        if len(tour_items) < len(t2): tour_items = t2
+        if len(food_items) < len(f2): food_items = f2
 
     all_items = tour_items + food_items
     return {"tour": tour_items, "food": food_items, "all": all_items}
@@ -444,42 +440,41 @@ def _handle_route():
     if not start or not end:
         return jsonify({"error": "주소 변환 실패"}), 400
 
+    # 방향성·코리도·우회비용 기반 경유지(최대 3)
     way_sel = find_waypoints_along_direction(start, end, max_n=max_wps)
-    if not way_sel and max_wps >= 1:
+    # 후보가 없으면 과거 1경유 방식으로 fallback
+    if not way_sel and max_wps >= 1 and beach_coords:
         legacy = find_best_beach_waypoint_legacy(start, end)
         if legacy:
             way_sel = [(legacy[0], legacy[1], legacy[2], 0.5)]
 
+    # ORS 경로
     points = [start] + [(lat, lon) for (_, lat, lon, _) in way_sel] + [end]
     route_data, status = get_ors_route_multi(points)
     if status != 200 or "error" in route_data:
         return jsonify({"error": route_data.get("error", f"OpenRouteService 실패({status})")}), status
 
+    # 경로 주변 TourAPI
     spots = search_tour_items_along_route(route_data)
 
+    # 경유지 정보(주소 포함)
     wp_objs = []
     for i, (name, lat, lon, t) in enumerate(way_sel, start=1):
         wp_objs.append({
-            "order": i,
-            "name": name,
-            "lat": lat,
-            "lon": lon,
-            "t": t,
+            "order": i, "name": name, "lat": lat, "lon": lon, "t": t,
             "address": reverse_geocode_google(lat, lon) or ""
         })
 
     resp = {
         "route": route_data,
         "waypoints_used": wp_objs,
-        "spots": spots["all"],
+        "spots": spots["all"],  # 구버전 호환
         "spots_grouped": { "tour": spots["tour"], "food": spots["food"] }
     }
-    if len(wp_objs) >= 1:
-        resp["waypoint"] = wp_objs[0]
-    if len(wp_objs) >= 2:
-        resp["waypoint2"] = wp_objs[1]
-    if len(wp_objs) >= 3:
-        resp["waypoint3"] = wp_objs[2]
+    # 호환 키
+    if len(wp_objs) >= 1: resp["waypoint"] = wp_objs[0]
+    if len(wp_objs) >= 2: resp["waypoint2"] = wp_objs[1]
+    if len(wp_objs) >= 3: resp["waypoint3"] = wp_objs[2]
 
     return jsonify(resp), 200
 
