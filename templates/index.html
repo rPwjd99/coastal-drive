@@ -1,379 +1,98 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8">
-  <title>바다따라: 해안도로 감성 드라이브</title>
-  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
+  <meta charset="utf-8" />
+  <title>바다따라: 해안도로 경로 추천 (Coastal Drive)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { margin: 0; font-family: sans-serif; }
-    #controls {
-      padding: 10px;
-      background: #f7f7f7;
-      border-bottom: 1px solid #ccc;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      align-items: center;
-    }
-    input {
-      width: 300px;
-      padding: 6px;
-      margin-right: 10px;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      outline: none;
-    }
-    button {
-      padding: 6px 14px;
-      background: #0078ff;
-      color: white;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-    }
-    button:disabled { opacity: 0.6; cursor: not-allowed; }
-    #map { width: 100%; height: calc(100vh - 60px); }
-    #status {
-      position: absolute; top: 70px; right: 12px; z-index: 1000;
-      background: #fff; border: 1px solid #ddd; border-radius: 6px;
-      padding: 8px 10px; font-size: 13px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-      max-width: 360px;
-    }
-    .legend { margin-top: 6px; display: flex; gap: 8px; flex-wrap: wrap; }
-    .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border: 1px solid #e5e5e5; border-radius: 999px; background: #fafafa; font-size: 12px; }
-    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-    .dot.route { background: #2563eb; }
-    .dot.origin { background: #10b981; }
-    .dot.dest { background: #ef4444; }
-    .dot.wp { background: #f59e0b; }
-    .dot.spot { background: #111827; }
-    .dot.food { background: #7c3aed; }
-    .dot.cafe { background: #be185d; }
-
-    .ol-popup {
-      background: #fff; border: 1px solid #ddd; border-radius: 6px;
-      padding: 8px 10px; min-width: 220px; box-shadow: 0 4px 14px rgba(0,0,0,0.12);
-    }
-    .ol-popup .title { font-weight: 600; margin-bottom: 4px; }
-    .ol-popup img { width: 100%; height: auto; border-radius: 4px; display: block; margin-bottom: 6px; object-fit: cover; }
+    html, body { height:100%; margin:0; font-family:system-ui, -apple-system, Segoe UI, Roboto, 'Noto Sans KR', sans-serif; }
+    header { padding: 12px 16px; border-bottom: 1px solid #eee; display:flex; gap:12px; align-items:center; }
+    header h1 { font-size:16px; margin:0; }
+    .panel { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .panel input { padding:8px 10px; border:1px solid #ccc; border-radius:6px; min-width:280px; }
+    .panel button { padding:9px 14px; border:0; border-radius:6px; cursor:pointer; }
+    .primary { background:#111; color:#fff; }
+    #map { width:100%; height: calc(100% - 62px); }
+    #status { position:absolute; top:64px; left:16px; background:#0009; color:#fff; padding:8px 10px; border-radius:6px; font-size:12px; z-index:10; display:none; }
   </style>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
+  <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
 </head>
 <body>
-  <div id="controls">
-    <input id="start" placeholder="출발지 (예: 세종시청)">
-    <input id="end" placeholder="도착지 (예: 속초시청)">
-    <button id="btnRoute">경로 계산</button>
-    <button id="btnReload">주변 다시 불러오기</button>
-    <label><input type="checkbox" id="tgSpots" checked> 관광지</label>
-    <label><input type="checkbox" id="tgFood" checked> 맛집</label>
-    <label><input type="checkbox" id="tgCafe" checked> 카페</label>
-  </div>
+  <header>
+    <h1>바다따라</h1>
+    <form id="routeForm" class="panel">
+      <input id="origin" placeholder="출발지 (예: 세종특별자치시청)" />
+      <input id="destination" placeholder="도착지 (예: 속초시청)" />
+      <button id="btnRoute" class="primary" type="button">경로 계산</button>
+    </form>
+  </header>
   <div id="map"></div>
-  <div id="status" hidden>
-    <div id="msg">준비됨</div>
-    <div class="legend">
-      <div class="chip"><span class="dot route"></span>경로</div>
-      <div class="chip"><span class="dot origin"></span>출발</div>
-      <div class="chip"><span class="dot dest"></span>도착</div>
-      <div class="chip"><span class="dot wp"></span>경유(해변)</div>
-      <div class="chip"><span class="dot spot"></span>관광지</div>
-      <div class="chip"><span class="dot food"></span>맛집</div>
-      <div class="chip"><span class="dot cafe"></span>카페</div>
-    </div>
-  </div>
+  <div id="status"></div>
 
   <script>
-    // 지도 초기화
+    // OpenLayers 기본 지도
     const map = new ol.Map({
-      target: "map",
-      layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
-      view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
+      target: 'map',
+      layers: [
+        new ol.layer.Tile({ source: new ol.source.OSM() })
+      ],
+      view: new ol.View({ center: ol.proj.fromLonLat([127.0, 37.5]), zoom: 7 })
     });
 
-    // 소스/레이어
-    const routeSource = new ol.source.Vector();
-    const routeLayer = new ol.layer.Vector({ source: routeSource });
+    const routeLayer = new ol.layer.Vector({ source: new ol.source.Vector() });
     map.addLayer(routeLayer);
 
-    const markerSource = new ol.source.Vector();
-    const markerLayer = new ol.layer.Vector({ source: markerSource });
-    map.addLayer(markerLayer);
+    function showStatus(msg) {
+      const el = document.getElementById('status');
+      el.textContent = msg;
+      el.style.display = 'block';
+      clearTimeout(showStatus._t);
+      showStatus._t = setTimeout(() => el.style.display = 'none', 4000);
+    }
 
-    const poiSource = new ol.source.Vector();
-    const poiLayer = new ol.layer.Vector({ source: poiSource });
-    map.addLayer(poiLayer);
+    function drawGeoJSON(fc) {
+      routeLayer.getSource().clear();
+      const format = new ol.format.GeoJSON();
+      const feats = format.readFeatures(fc, { featureProjection: 'EPSG:3857' });
+      routeLayer.getSource().addFeatures(feats);
+      if (feats.length) {
+        const extent = routeLayer.getSource().getExtent();
+        map.getView().fit(extent, { padding: [40,40,40,40], duration: 400 });
+      }
+    }
 
-    // 스타일
-    function styleDot(color, radius=6) {
-      return new ol.style.Style({
-        image: new ol.style.Circle({
-          radius, fill: new ol.style.Fill({ color }),
-          stroke: new ol.style.Stroke({ color: '#ffffff', width: 1.5 })
-        })
+    async function requestRoute(origin, destination) {
+      const resp = await fetch('/api/route', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ origin, destination })
       });
-    }
-    const styleOrigin = styleDot('#10b981', 7);
-    const styleDest   = styleDot('#ef4444', 7);
-    const styleWP     = styleDot('#f59e0b', 6);
-    const styleSpot   = styleDot('#111827', 5);
-    const styleFood   = styleDot('#7c3aed', 5);
-    const styleCafe   = styleDot('#be185d', 5);
-
-    const styleRoute = new ol.style.Style({
-      stroke: new ol.style.Stroke({ width: 4 })
-    });
-
-    // 팝업
-    const popupEl = document.createElement('div');
-    popupEl.className = 'ol-popup';
-    const overlay = new ol.Overlay({ element: popupEl, autoPan: { animation: { duration: 200 } } });
-    map.addOverlay(overlay);
-    function showPopup(coord3857, html) { popupEl.innerHTML = html; overlay.setPosition(coord3857); }
-    map.on('singleclick', (e) => {
-      map.forEachFeatureAtPixel(e.pixel, (feature) => {
-        const props = feature.getProperties() || {};
-        if (props.popup) showPopup(e.coordinate, props.popup);
-      });
-    });
-
-    // DOM
-    const $start = document.getElementById('start');
-    const $end = document.getElementById('end');
-    const $btn = document.getElementById('btnRoute');
-    const $reload = document.getElementById('btnReload');
-    const $status = document.getElementById('status');
-    const $msg = document.getElementById('msg');
-    const $tgSpots = document.getElementById('tgSpots');
-    const $tgFood = document.getElementById('tgFood');
-    const $tgCafe = document.getElementById('tgCafe');
-
-    function setMsg(t) { $status.hidden = false; $msg.textContent = t; }
-    function lonlatTo3857(lon, lat) { return ol.proj.fromLonLat([lon, lat]); }
-
-    // 유틸: 엔드포인트 자동 감지(/api/route 우선, 실패 시 /route 시도)
-    async function postRouteAuto(payload) {
-      const endpoints = ['/api/route', '/route'];
-      let lastErr = null;
-      for (const ep of endpoints) {
-        try {
-          const res = await fetch(ep, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
-          const data = await res.json().catch(() => ({}));
-          // 응답 형태 판정: 새(app.py) 또는 예전(/route) 모두 지원
-          const hasGeo = data && data.geojson && data.geojson.features;
-          const hasOld = data && data.route && data.route.features;
-          if (res.ok && (hasGeo || hasOld)) return data;
-          // 일부 서버는 ok 필드가 없을 수 있음
-          if ((hasGeo || hasOld) && data.ok !== false) return data;
-          lastErr = new Error(data && data.error ? data.error : 'route endpoint error');
-        } catch (e) {
-          lastErr = e;
-        }
+      const j = await resp.json().catch(() => ({}));
+      if (!resp.ok || !j.ok) {
+        throw new Error(j.error || `요청 실패(${resp.status})`);
       }
-      throw lastErr || new Error('route endpoints not available');
+      return j;
     }
 
-    // 유틸: 응답 정규화
-    function normalizeRouteResponse(data) {
-      const fc = data.geojson || data.route || null;
-      const coordsLonLat = (fc && fc.features && fc.features[0] && fc.features[0].geometry && Array.isArray(fc.features[0].geometry.coordinates))
-        ? fc.features[0].geometry.coordinates : [];
-
-      // waypoints: 배열 또는 단일 객체 모두 처리
-      let waypoints = [];
-      if (Array.isArray(data.waypoints)) waypoints = data.waypoints;
-      else if (data.waypoint) waypoints = [data.waypoint];
-
-      // origin/destination 유무
-      const origin = data.origin || null;
-      const destination = data.destination || null;
-
-      // spots(서버가 같이 줄 수도 있음)
-      const spots = Array.isArray(data.spots) ? data.spots : null;
-
-      return { coordsLonLat, waypoints, origin, destination, spots };
-    }
-
-    // 마커 유틸
-    function addMarker(lon, lat, style, title, addr) {
-      const f = new ol.Feature(new ol.geom.Point(lonlatTo3857(lon, lat)));
-      f.setStyle(style);
-      if (title || addr) {
-        const html = `<div class="title">${title || ''}</div>${addr ? `<div>${addr}</div>` : ''}`;
-        f.set('popup', html);
-      }
-      markerSource.addFeature(f);
-      return f;
-    }
-
-    function addPOI(lon, lat, style, title, addr, image) {
-      const f = new ol.Feature(new ol.geom.Point(lonlatTo3857(lon, lat)));
-      f.setStyle(style);
-      let html = '';
-      if (image) html += `<img src="${image}" alt="">`;
-      html += `<div class="title">${title || ''}</div>`;
-      if (addr) html += `<div>${addr}</div>`;
-      f.set('popup', html);
-      poiSource.addFeature(f);
-      return f;
-    }
-
-    // 경로 그리기
-    function drawRoute(coordsLonLat) {
-      routeSource.clear();
-      const coords3857 = coordsLonLat.map(([lon, lat]) => lonlatTo3857(lon, lat));
-      const f = new ol.Feature(new ol.geom.LineString(coords3857));
-      f.setStyle(styleRoute);
-      routeSource.addFeature(f);
-      const ext = routeSource.getExtent();
-      if (ext && isFinite(ext[0])) {
-        map.getView().fit(ext, { padding: [50,50,50,50], maxZoom: 12, duration: 300 });
-      }
-    }
-
-    // 주변 POI 로드: /api/* 엔드포인트가 있으면 사용, 없으면 스킵
-    async function loadPOIsAround(lat, lon, radiusKm=5) {
-      poiSource.clear();
-      const qs = (obj) => new URLSearchParams(obj).toString();
-
-      async function tryFetch(url) {
-        try {
-          const res = await fetch(url);
-          if (!res.ok) return null;
-          const data = await res.json().catch(() => ({}));
-          if (data && data.ok !== false && Array.isArray(data.results)) return data.results;
-          return null;
-        } catch { return null; }
-      }
-
-      const spots = (await tryFetch(`/api/tourspot?${qs({lat, lon, radius_km: radiusKm})}`)) || [];
-      const food  = (await tryFetch(`/api/food?${qs({lat, lon, radius_km: radiusKm})}`)) || [];
-      const cafes = (await tryFetch(`/api/cafe?${qs({lat, lon, radius_km: radiusKm})}`)) || [];
-
-      // 최대 100개씩만 표시
-      spots.slice(0, 100).forEach(s => addPOI(parseFloat(s.lon), parseFloat(s.lat), styleSpot, s.title, s.address, s.image));
-      food.slice(0, 100).forEach(s  => addPOI(parseFloat(s.lon), parseFloat(s.lat), styleFood, s.title, s.address, s.image));
-      cafes.slice(0, 100).forEach(s => addPOI(parseFloat(s.lon), parseFloat(s.lat), styleCafe, s.title, s.address, s.image));
-    }
-
-    // 메인 동작
-    async function calculateRoute() {
-      const start = $start.value.trim();
-      const end = $end.value.trim();
-      if (!start || !end) { alert("출발지와 도착지를 모두 입력하세요."); return; }
-
-      try {
-        $btn.disabled = true;
-        setMsg('경로 계산 중...');
-        markerSource.clear();
-        poiSource.clear();
-        overlay.setPosition(undefined);
-
-        const raw = await postRouteAuto({ origin: start, destination: end, start, end });
-        const norm = normalizeRouteResponse(raw);
-
-        if (!norm.coordsLonLat.length) throw new Error('경로 좌표가 비어 있습니다.');
-        drawRoute(norm.coordsLonLat);
-
-        // 출발/도착 마커
-        if (norm.origin && typeof norm.origin.lon === 'number' && typeof norm.origin.lat === 'number') {
-          addMarker(norm.origin.lon, norm.origin.lat, styleOrigin, '출발', norm.origin.address || '');
-        } else {
-          // 응답에 없으면 라인의 양 끝으로 대체
-          const first = norm.coordsLonLat[0], last = norm.coordsLonLat[norm.coordsLonLat.length - 1];
-          if (first) addMarker(first[0], first[1], styleOrigin, '출발', '');
-          if (last)  addMarker(last[0], last[1], styleDest,   '도착', '');
-        }
-        if (norm.destination && typeof norm.destination.lon === 'number' && typeof norm.destination.lat === 'number') {
-          addMarker(norm.destination.lon, norm.destination.lat, styleDest, '도착', norm.destination.address || '');
-        }
-
-        // 경유지(1개 또는 2개 모두 처리)
-        const wps = Array.isArray(norm.waypoints) ? norm.waypoints : [];
-        wps.forEach((w, i) => {
-          const lon = parseFloat(w.lon); const lat = parseFloat(w.lat);
-          if (isFinite(lon) && isFinite(lat)) {
-            addMarker(lon, lat, styleWP, `경유지 ${i+1}: ${w.name || ''}`, '');
-          }
-        });
-
-        // 결과 안내
-        if (wps.length >= 2) {
-          alert(`경유 해안지점: ${wps[0].name || ''}${wps[1] ? ', ' + (wps[1].name || '') : ''}`);
-        } else if (wps.length === 1) {
-          alert(`경유 해안지점: ${wps[0].name || ''}`);
-        } else {
-          alert('경유지 없이 직접 경로가 계산되었습니다.');
-        }
-
-        // 관광지/맛집/카페
-        setMsg('주변 정보 불러오는 중...');
-        if (Array.isArray(norm.spots) && norm.spots.length) {
-          // 서버가 spots를 동봉해 준 구버전 형태 지원
-          norm.spots.slice(0, 100).forEach(spot => {
-            const lon = parseFloat(spot.mapx ?? spot.lon);
-            const lat = parseFloat(spot.mapy ?? spot.lat);
-            if (!isFinite(lon) || !isFinite(lat)) return;
-            const title = spot.title || '';
-            const addr  = spot.addr1 || spot.address || '';
-            const img   = spot.firstimage || spot.image || '';
-            addPOI(lon, lat, styleSpot, title, addr, img);
-          });
-        } else if (norm.destination && isFinite(norm.destination.lat) && isFinite(norm.destination.lon)) {
-          await loadPOIsAround(norm.destination.lat, norm.destination.lon, 5);
-        } else {
-          // 목적지 좌표가 없으면 라인 마지막 점 기준
-          const last = norm.coordsLonLat[norm.coordsLonLat.length - 1];
-          if (last) await loadPOIsAround(last[1], last[0], 5);
-        }
-        setMsg('완료.');
-      } catch (err) {
-        alert('경로 요청 실패: ' + err.message);
-        setMsg('오류: ' + err.message);
-        console.error(err);
-      } finally {
-        $btn.disabled = false;
-      }
-    }
-
-    // 주변 다시 불러오기
-    async function reloadAround() {
-      const feats = markerSource.getFeatures();
-      // 도착지 마커 찾기
-      let destCoord = null;
-      for (const f of feats) {
-        const props = f.getProperties() || {};
-        const html = props.popup || '';
-        if (html.includes('도착')) {
-          const coord = f.getGeometry().getCoordinates();
-          const [lon, lat] = ol.proj.toLonLat(coord);
-          destCoord = { lat, lon };
-          break;
-        }
-      }
-      if (!destCoord) {
-        alert('도착지 마커가 없습니다. 먼저 경로를 계산하세요.');
+    document.getElementById('btnRoute').addEventListener('click', async (e) => {
+      e.preventDefault();
+      const origin = document.getElementById('origin').value.trim();
+      const destination = document.getElementById('destination').value.trim();
+      if (!origin || !destination) {
+        showStatus('출발지/도착지를 입력하세요.');
         return;
       }
-      setMsg('주변 정보 새로 불러오는 중...');
-      await loadPOIsAround(destCoord.lat, destCoord.lon, 5);
-      setMsg('완료.');
-    }
-
-    // 이벤트 바인딩
-    document.getElementById('btnRoute').addEventListener('click', calculateRoute);
-    document.getElementById('btnReload').addEventListener('click', reloadAround);
-    [$start, $end].forEach(inp => inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') calculateRoute(); }));
-
-    // 레이어 스타일 적용
-    routeLayer.setStyle(styleRoute);
-    markerLayer.setStyle(null); // 개별 피처 스타일 사용
-    poiLayer.setStyle(null);    // 개별 피처 스타일 사용
+      showStatus('경로 계산 중…');
+      try {
+        const res = await requestRoute(origin, destination);
+        drawGeoJSON(res.route_geojson);
+        showStatus(`완료: ${(res.distance_m/1000).toFixed(1)}km, 약 ${(res.duration_s/60).toFixed(0)}분`);
+      } catch (err) {
+        console.error(err);
+        showStatus(String(err.message || err));
+      }
+    });
   </script>
 </body>
 </html>
