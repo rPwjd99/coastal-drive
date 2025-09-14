@@ -31,10 +31,10 @@
 </head>
 <body>
   <div id="controls">
-    <input id="start" placeholder="출발지 (예: 세종특별자치시청)">
+    <input id="start" placeholder="출발지 (예: 세종시청)">
     <input id="end" placeholder="도착지 (예: 속초시청)">
     <button id="btnRoute" type="button">경로 계산</button>
-    <button id="btnDiag" type="button" title="경로 중간 좌표에서 TourAPI를 호출해 진단">TourAPI 진단</button>
+    <button id="btnDiag" type="button" title="경로 전체에서 TourAPI 후보 수집 결과 진단">TourAPI 진단</button>
     <div id="summary"></div>
   </div>
   <div id="map"></div>
@@ -63,7 +63,7 @@
     const wpStyle    = new ol.style.Style({ image: new ol.style.RegularShape({ points: 5, radius: 9, fill: new ol.style.Fill({ color:'#ff6f00' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
     const startStyle = new ol.style.Style({ image: new ol.style.RegularShape({ points: 4, radius: 7, angle: Math.PI/4, fill: new ol.style.Fill({ color:'#6a1b9a' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
 
-    // 도착지 깃발 SVG
+    // 도착지 깃발
     const endStyle = new ol.style.Style({
       image: new ol.style.Icon({ src: "data:image/svg+xml;utf8," + encodeURI(
         `<svg xmlns='http://www.w3.org/2000/svg' width='28' height='32' viewBox='0 0 28 32'>
@@ -87,35 +87,29 @@
 
     function makeSpotPopupHTML(p){
       const catMap={food:'맛집', tour:'관광지', waypoint:'경유지', start:'출발지', end:'도착지'};
-      const cat = catMap[p.category] || '';
-      const title = escapeHtml(p.title || '정보');
-      const addr  = escapeHtml(p.addr1 || '');
-      const tel   = escapeHtml(p.tel || '');
-      const hours = escapeHtml(p.openhour || '');
-      const rest  = escapeHtml(p.restday || '');
-      const park  = escapeHtml(p.parking_info || '');
-      const dist  = (p.distance_km && !isNaN(parseFloat(p.distance_km))) ? `경로 기준 거리: ${parseFloat(p.distance_km).toFixed(2)} km` : '';
-      const img   = (p.firstimage && typeof p.firstimage==='string') ? p.firstimage : '';
-      const hp    = p.homepage ? `<div class="popup-row"><a href="${escapeHtml(p.homepage)}" target="_blank" rel="noopener">홈페이지</a></div>` : '';
-      const detail= p.contentid ? `<div class="popup-row"><a href="/tour_detail/${p.contentid}" target="_blank" rel="noopener">자세히 보기</a></div>` : '';
-
+      const cat=catMap[p.category]||''; const title=escapeHtml(p.title||'정보');
+      const addr=escapeHtml(p.addr1||''); const tel=escapeHtml(p.tel||'');
+      const hours=escapeHtml(p.openhour||''); const rest=escapeHtml(p.restday||'');
+      const park=escapeHtml(p.parking_info||'');
+      const dist=(p.distance_km && !isNaN(parseFloat(p.distance_km))) ? `경로 기준 거리: ${parseFloat(p.distance_km).toFixed(2)} km` : '';
+      const img=(p.firstimage && typeof p.firstimage==='string') ? p.firstimage : '';
+      const hp=p.homepage ? `<div class="popup-row"><a href="${escapeHtml(p.homepage)}" target="_blank" rel="noopener">홈페이지</a></div>` : '';
+      const detail=p.contentid ? `<div class="popup-row"><a href="/tour_detail/${p.contentid}" target="_blank" rel="noopener">자세히 보기</a></div>` : '';
       const rows=[];
       if(addr) rows.push(`<div class="popup-row">${addr}</div>`);
       if(dist) rows.push(`<div class="popup-row">${dist}</div>`);
-      if(tel)  rows.push(`<div class="popup-row">전화: ${tel}</div>`);
-      if(hours)rows.push(`<div class="popup-row">운영시간: ${hours}</div>`);
+      if(tel) rows.push(`<div class="popup-row">전화: ${tel}</div>`);
+      if(hours) rows.push(`<div class="popup-row">운영시간: ${hours}</div>`);
       if(rest) rows.push(`<div class="popup-row">휴무: ${rest}</div>`);
       if(park) rows.push(`<div class="popup-row">주차: ${park}</div>`);
-      if(hp)   rows.push(hp);
+      if(hp) rows.push(hp);
       if(detail) rows.push(detail);
-
       return `
         <div class="popup-title">${cat?`[${cat}] `:''}${title}</div>
         ${img ? `<img class="popup-img" src="${img}" onload="this.style.display='block'" onerror="this.style.display='none'">` : ''}
         ${rows.join('')}
       `;
     }
-
     function makeRoutePopupHTML(meta){
       const rows=[];
       if(meta.distance_text || meta.duration_text){
@@ -128,13 +122,10 @@
     function drawRoute(coordsLonLat, meta){
       const coords3857 = coordsLonLat.map(([lon,lat])=>ol.proj.fromLonLat([lon,lat]));
       if(routeLayer) map.removeLayer(routeLayer);
-      routeFeature = new ol.Feature({ geometry: new ol.geom.LineString(coords3857), kind:"route", route_meta: meta });
-      routeLayer = new ol.layer.Vector({
-        source: new ol.source.Vector({ features: [routeFeature] }),
-        style: routeStyle, zIndex: 10
-      });
+      routeFeature = new ol.Feature({ geometry:new ol.geom.LineString(coords3857), kind:"route", route_meta:meta });
+      routeLayer = new ol.layer.Vector({ source:new ol.source.Vector({ features:[routeFeature] }), style:routeStyle, zIndex:10 });
       map.addLayer(routeLayer);
-      map.getView().fit(new ol.geom.LineString(coords3857), { padding:[50,50,50,50], maxZoom: 12 });
+      map.getView().fit(new ol.geom.LineString(coords3857), { padding:[50,50,50,50], maxZoom:12 });
     }
 
     function clearSpots(){ tourLayer.getSource().clear(); foodLayer.getSource().clear(); }
@@ -143,15 +134,15 @@
     function addSpotFeature(s){
       const lon=parseFloat(s.mapx), lat=parseFloat(s.mapy);
       if(!isFinite(lon)||!isFinite(lat)) return;
-      const cat = s.category || (String(s.contenttypeid)==="39" ? "food":"tour");
-      const f = new ol.Feature({
-        geometry: new ol.geom.Point(ol.proj.fromLonLat([lon,lat])),
+      const cat=s.category || (String(s.contenttypeid)==="39" ? "food":"tour");
+      const f=new ol.Feature({
+        geometry:new ol.geom.Point(ol.proj.fromLonLat([lon,lat])),
         isSpot:true, category:cat, contentid:s.contentid,
         title:s.title||"", addr1:s.addr1||"", firstimage:s.firstimage||"",
         homepage:s.homepage||"", tel:s.tel||"", openhour:s.openhour||"",
         restday:s.restday||"", parking_info:s.parking_info||"", distance_km:s.distance_km||""
       });
-      (cat==='food'? foodLayer : tourLayer).getSource().addFeature(f);
+      (cat==='food'?foodLayer:tourLayer).getSource().addFeature(f);
     }
 
     function addWaypointsAndSE(wps, startLonLat, endLonLat){
@@ -176,9 +167,11 @@
     }
 
     // ===== 호버: 포인트 우선 → 라인 보조 =====
+    const hoverEl = document.querySelector('.ol-popup');
+    const hoverOverlay = map.getOverlays().item(0); // 위에서 추가한 overlay
     let lastKey=null;
     map.on('pointermove', (evt)=>{
-      // 1) 포인트
+      // 1) 포인트 먼저
       let feature=null;
       map.forEachFeatureAtPixel(evt.pixel, (f)=>{
         const g=f.getGeometry&&f.getGeometry();
@@ -208,7 +201,7 @@
       }
     });
 
-    // 클릭 시 스팟 상세 열기
+    // 클릭 시 상세
     map.on('singleclick', (evt)=>{
       let feature=null;
       map.forEachFeatureAtPixel(evt.pixel, (f)=>{
@@ -227,10 +220,10 @@
       const tourN=counts?.tour??0, foodN=counts?.food??0, allN=counts?.all??(tourN+foodN);
       box.textContent = `거리 ${dist} · 예상 ${dur} · 관광지 ${tourN} · 맛집 ${foodN} (총 ${allN})`;
     }
-
     function setLoading(on){ document.getElementById('loading').style.display=on?'flex':'none'; }
 
     let lastRouteCoords=null;
+
     async function calcRoute(){
       const start=document.getElementById('start').value.trim();
       const end  =document.getElementById('end').value.trim();
@@ -270,18 +263,27 @@
     document.getElementById('btnRoute').addEventListener('click', calcRoute);
     ['start','end'].forEach(id=>document.getElementById(id).addEventListener('keydown',e=>{ if(e.key==='Enter') calcRoute(); }));
 
-    // 진단 버튼: 경로 중간 좌표에서 TourAPI 직접 호출
+    // ===== 경로 전체 진단: 후보 수집이 잘 되는지 확인 =====
     document.getElementById('btnDiag').addEventListener('click', async ()=>{
+      if(!Array.isArray(lastRouteCoords) || lastRouteCoords.length<2){
+        alert('먼저 경로를 계산하세요.'); return;
+      }
       try{
-        let lon=126.9780, lat=37.5665;
-        if(Array.isArray(lastRouteCoords) && lastRouteCoords.length>0){
-          const m=lastRouteCoords[Math.floor(lastRouteCoords.length/2)]; lon=m[0]; lat=m[1];
-        }
-        const r=await fetch(`${API_BASE}/debug/tourapi_near?lat=${lat}&lon=${lon}&ctype=12`);
-        const d=await r.json();
-        alert(`TourAPI 진단(관광지12)\n좌표: ${lat.toFixed(4)}, ${lon.toFixed(4)}\n시도횟수: ${d.tries?.length||0}\n반환개수: ${d.count||0}\n첫항목: ${(d.sample&&d.sample[0]?.title)||'없음'}`);
-        console.log('tries:', d.tries);
-      }catch(e){ alert('진단 호출 오류: '+e.message); }
+        const post = (ctype)=>fetch(`${API_BASE}/debug/tourapi_along`,{
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ coords:lastRouteCoords, corridor_km:30, ctype })
+        }).then(r=>r.json());
+        const [t,f] = await Promise.all([post(12), post(39)]);
+        const msg =
+          `경로 전체 진단\n`+
+          `관광지(12): 후보 ${t.cand_count||0}개\n`+
+          `맛집(39): 후보 ${f.cand_count||0}개\n`+
+          `샘플(관광지): ${(t.sample&&t.sample[0]?.title)||'없음'}`;
+        alert(msg);
+        console.log('tour sample:', t.sample); console.log('food sample:', f.sample);
+      }catch(e){
+        alert('진단 호출 오류: '+e.message);
+      }
     });
   </script>
 </body>
