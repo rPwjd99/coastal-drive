@@ -19,7 +19,6 @@
     #controls button{padding:8px 14px;border:0;border-radius:6px;background:#0078ff;color:#fff;cursor:pointer}
     #summary{margin-left:auto;color:#333;font-size:14px}
     #map{width:100%;height:calc(100vh - 56px)}
-    /* 팝업이 항상 위로 */
     .ol-overlaycontainer, .ol-overlaycontainer-stopevent { z-index: 1000 !important; }
     .ol-popup{position:absolute;background:#fff;border:1px solid #ccc;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,.25);padding:10px 12px;min-width:240px}
     .ol-popup:after,.ol-popup:before{top:100%;border:solid transparent;content:"";height:0;width:0;position:absolute;pointer-events:none}
@@ -33,9 +32,10 @@
 </head>
 <body>
   <div id="controls">
-    <input id="start" placeholder="출발지 (예: 세종시청)" />
-    <input id="end" placeholder="도착지 (예: 속초시청)" />
+    <input id="start" placeholder="출발지 (예: 세종특별자치시 한누리대로 2130)">
+    <input id="end" placeholder="도착지 (예: 강원도 속초시 중앙로 183)">
     <button id="btnRoute" type="button">경로 계산</button>
+    <button id="btnDiag" type="button" title="경로 중간 좌표에서 TourAPI를 바로 호출해 진단합니다.">TourAPI 진단</button>
     <div id="summary"></div>
   </div>
   <div id="map"></div>
@@ -58,7 +58,6 @@
     const seLayer   = new ol.layer.Vector({ source: new ol.source.Vector(), zIndex: 60 });
     map.addLayer(tourLayer); map.addLayer(foodLayer); map.addLayer(wpLayer); map.addLayer(seLayer);
 
-    // 스타일
     const routeStyle = new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#0066ff', width: 4 }) });
     const tourStyle  = new ol.style.Style({ image: new ol.style.Circle({ radius: 6, fill: new ol.style.Fill({ color: '#1976d2' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
     const foodStyle  = new ol.style.Style({ image: new ol.style.Circle({ radius: 6, fill: new ol.style.Fill({ color: '#e53935' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
@@ -76,7 +75,7 @@
 
     tourLayer.setStyle(tourStyle); foodLayer.setStyle(foodStyle); wpLayer.setStyle(wpStyle);
 
-    // ===== 팝업 오버레이 =====
+    // ===== 팝업 =====
     const hoverEl = document.createElement('div');
     hoverEl.className = 'ol-popup';
     const hoverOverlay = new ol.Overlay({ element: hoverEl, autoPan: false });
@@ -123,18 +122,13 @@
         rows.push(`<div class="popup-row">총거리 ${escapeHtml(meta.distance_text||'')} · 예상 ${escapeHtml(meta.duration_text||'')}</div>`);
       }
       rows.push(`<div class="popup-row">관광지 ${meta.tour_count||0} · 맛집 ${meta.food_count||0} (코리도 ~${meta.corridor_km||30}km)</div>`);
-      return `
-        <div class="popup-title">경로 요약</div>
-        ${rows.join('')}
-      `;
+      return `<div class="popup-title">경로 요약</div>${rows.join('')}`;
     }
 
     let routeFeature = null;
-
     function drawRouteAndSetMeta(coordsLonLat, meta){
       const coords3857 = coordsLonLat.map(([lon,lat])=>ol.proj.fromLonLat([lon,lat]));
       if(routeLayer) map.removeLayer(routeLayer);
-
       routeFeature = new ol.Feature({ geometry: new ol.geom.LineString(coords3857), kind:"route", route_meta: meta });
       routeLayer = new ol.layer.Vector({
         source: new ol.source.Vector({ features: [ routeFeature ] }),
@@ -179,21 +173,21 @@
       }
       if(endLonLat){
         const fe = new ol.Feature({ geometry:new ol.geom.Point(ol.proj.fromLonLat(endLonLat)), isSpot:false, category:'end', title:'도착지' });
-        fe.setStyle(endStyle); seLayer.getSource().addFeature(fe);
+        fe.setStyle(new ol.style.Style({ image: new ol.style.Icon({ src: "data:image/svg+xml;utf8," + encodeURI(`<svg xmlns='http://www.w3.org/2000/svg' width='28' height='32' viewBox='0 0 28 32'><path d='M6 30V2h1c4 0 8-1 12 2 3 2 5 2 8 1v14c-3 1-5 1-8-1-4-3-8-2-12-2V30z' fill='#c62828'/><circle cx='6' cy='30' r='2' fill='#555'/></svg>`) }) }));
+        seLayer.getSource().addFeature(fe);
       }
     }
 
-    // ====== 호버 로직 (포인트 우선 → 라인 보조) ======
+    // ===== 호버: 포인트 우선 → 라인 보조 =====
     let lastKey = null;
     map.on('pointermove', (evt)=>{
-      // 1) 포인트(스팟) 먼저 탐지
+      // 1) 포인트
       let feature = null;
       map.forEachFeatureAtPixel(evt.pixel, (f)=>{
         const g = f.getGeometry && f.getGeometry();
-        if (g && g.getType()==='Point'){ feature = f; return true; }
+        if(g && g.getType()==='Point'){ feature = f; return true; }
         return false;
       }, {hitTolerance: 12});
-
       if(feature && feature.get('isSpot')){
         const props = feature.getProperties();
         const key = props.contentid || props.title;
@@ -203,17 +197,15 @@
         }
         hoverOverlay.setPosition(feature.getGeometry().getCoordinates());
         map.getTargetElement().style.cursor = 'pointer';
-        return; // 스팟이 있으면 라인 팝업은 건너뜀
+        return;
       }
-
-      // 2) 라인(경로) 탐지
+      // 2) 라인
       let lineFeat = null;
       map.forEachFeatureAtPixel(evt.pixel, (f)=>{
         const g = f.getGeometry && f.getGeometry();
-        if (g && g.getType()==='LineString'){ lineFeat = f; return true; }
+        if(g && g.getType()==='LineString'){ lineFeat = f; return true; }
         return false;
       }, {hitTolerance: 10});
-
       if(lineFeat && lineFeat.get('kind')==='route'){
         const meta = lineFeat.get('route_meta') || {};
         const key = 'route';
@@ -221,7 +213,7 @@
           hoverEl.innerHTML = makeRoutePopupHTML(meta);
           lastKey = key;
         }
-        hoverOverlay.setPosition(evt.coordinate); // 포인터 위치에 표시
+        hoverOverlay.setPosition(evt.coordinate);
         map.getTargetElement().style.cursor = 'pointer';
       }else{
         hoverOverlay.setPosition(undefined);
@@ -230,12 +222,12 @@
       }
     });
 
-    // 클릭 시 스팟 상세 새 창
+    // 클릭 시 스팟 상세
     map.on('singleclick', (evt)=>{
       let feature = null;
       map.forEachFeatureAtPixel(evt.pixel, (f)=>{
         const g = f.getGeometry && f.getGeometry();
-        if (g && g.getType()==='Point'){ feature = f; return true; }
+        if(g && g.getType()==='Point'){ feature = f; return true; }
         return false;
       }, {hitTolerance: 12});
       if(feature && feature.get('isSpot')){
@@ -244,7 +236,7 @@
       }
     });
 
-    // ====== 요약 텍스트 ======
+    // ===== 요약 바 =====
     function setSummary(routeSummary, counts){
       const box = document.getElementById('summary');
       const dist = routeSummary?.distance_text || '';
@@ -257,7 +249,8 @@
 
     function setLoading(on){ document.getElementById('loading').style.display = on ? 'flex' : 'none'; }
 
-    // ====== 경로 계산 ======
+    // ===== 경로 계산 =====
+    let lastRouteCoords = null;
     async function calcRoute(){
       const start = document.getElementById('start').value.trim();
       const end   = document.getElementById('end').value.trim();
@@ -266,17 +259,16 @@
       try{
         const res = await fetch(`${API_BASE}/route`, {
           method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ start, end }) // 필요시 {corridor_km:30} 등 추가 가능
+          body: JSON.stringify({ start, end }) // corridor_km 조정 가능
         });
         const data = await res.json();
         if(!res.ok || !data.route) throw new Error(data.error || '경로 요청 실패');
 
-        // 경로
         const feat = data.route.features[0];
-        const coords = feat.geometry.coordinates;        // [lon,lat] 배열
+        const coords = feat.geometry.coordinates;  // [lon,lat] 리스트
+        lastRouteCoords = coords;
         const startLL = coords[0], endLL = coords[coords.length-1];
 
-        // 라인 메타(요약 + 개수)
         const meta = {
           distance_text: data.route_summary?.distance_text || (feat.properties?.summary ? fmtDistText(feat.properties.summary.distance) : ''),
           duration_text: data.route_summary?.duration_text || (feat.properties?.summary ? fmtDurText(feat.properties.summary.duration) : ''),
@@ -287,13 +279,9 @@
         drawRouteAndSetMeta(coords, meta);
         setSummary(data.route_summary || feat.properties?.summary || {}, data.spot_counts || {tour:(data.spots_grouped?.tour||[]).length, food:(data.spots_grouped?.food||[]).length, all:(data.spots||[]).length});
 
-        // 마커
         clearSpots();
         (data.spots || []).forEach(addSpotFeature);
         addWaypointsAndSE(data.waypoints_used || [], startLL ? [startLL[0], startLL[1]] : null, endLL ? [endLL[0], endLL[1]] : null);
-
-        // 디버그(원하면 확인)
-        // console.log('tour:', tourLayer.getSource().getFeatures().length, 'food:', foodLayer.getSource().getFeatures().length);
 
       }catch(err){
         console.error(err);
@@ -308,6 +296,29 @@
       document.getElementById(id).addEventListener('keydown', e=>{
         if(e.key==='Enter') document.getElementById('btnRoute').click();
       });
+    });
+
+    // ===== TourAPI 진단 버튼 =====
+    document.getElementById('btnDiag').addEventListener('click', async ()=>{
+      try{
+        // 경로가 있으면 중간점, 없으면 서울시청 근처
+        let lon=126.9780, lat=37.5665;
+        if(Array.isArray(lastRouteCoords) && lastRouteCoords.length>0){
+          const mid = lastRouteCoords[Math.floor(lastRouteCoords.length/2)];
+          lon = mid[0]; lat = mid[1];
+        }
+        const url = `${API_BASE}/debug/tourapi_near?lat=${lat}&lon=${lon}&ctype=12`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if(!res.ok || !data.ok){
+          alert('TourAPI 진단 실패: ' + (data.error || res.status));
+          return;
+        }
+        console.log('TourAPI tries:', data.tries);
+        alert(`TourAPI 진단(관광지12)\n좌표: ${lat.toFixed(4)}, ${lon.toFixed(4)}\n시도횟수: ${data.tries.length}\n반환개수: ${data.count}\n첫항목: ${(data.sample && data.sample[0]?.title) || '없음'}`);
+      }catch(e){
+        alert('진단 호출 오류: ' + e.message);
+      }
     });
   </script>
 </body>
