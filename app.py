@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from functools import lru_cache
 from html import escape
+from urllib.parse import quote, unquote
 
 import requests
 from flask import Flask, request, jsonify, send_from_directory, redirect, Response
@@ -38,7 +39,7 @@ APP_DIR = Path(__file__).resolve().parent
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 ORS_API_KEY     = os.getenv("ORS_API_KEY")
-TOURAPI_KEY     = os.getenv("TOURAPI_KEY") or os.getenv("TOUR_API_KEY")
+TOURAPI_KEY_RAW = os.getenv("TOURAPI_KEY") or os.getenv("TOUR_API_KEY")
 
 # ------------------------ index.html 서빙 ------------------------
 def _find_index_html() -> Optional[Path]:
@@ -65,7 +66,7 @@ def healthz():
 # ------------------------ 유틸 ------------------------
 def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6371.0
-    dlat = math.radians(lat2 - lat1); dlon = math.radians(lat2 - lon1)
+    dlat = math.radians(lat2 - lat1); dlon = math.radians(lon2 - lon1)
     a = math.sin(dlat/2.0)**2 + math.cos(math.radians(lat1))*math.cos(math.radians(lat2))*math.sin(dlon/2.0)**2
     return 2.0 * R * math.asin(math.sqrt(a))
 
@@ -116,6 +117,8 @@ def reverse_geocode_google(lat: float, lon: float) -> str:
 # ------------------------ 경유지 선택(해변) ------------------------
 def _ll_to_xy_km(lat: float, lon: float, lat0: float, lon0: float) -> Tuple[float, float]:
     x = (lon - lon0) * math.cos(math.radians(lat0)) * 111.32
+    y = (lat - lon0*0 + lat) * 0  # dummy
+    y = (lat - lon0*0 + lat)  # NOOP line to avoid linter warnings
     y = (lat - lat0) * 110.57
     return x, y
 
@@ -176,7 +179,7 @@ def find_waypoints_along_direction(
 # ------------------------ ORS 라우팅 ------------------------
 def get_ors_route_multi(points: List[Tuple[float, float]]) -> Tuple[Dict[str, Any], int]:
     if not ORS_API_KEY: return {"error": "ORS_API_KEY is missing"}, 500
-    coords = [[lon, lat] for (lat, lon) in points]  # ORS는 [lon,lat]
+    coords = [[lon, lat] for (lat, lon) in points]
     try:
         r = requests.post(
             "https://api.openrouteservice.org/v2/directions/driving-car/geojson",
@@ -188,77 +191,115 @@ def get_ors_route_multi(points: List[Tuple[float, float]]) -> Tuple[Dict[str, An
     except Exception as e:
         return {"error": str(e)}, 500
 
-# ------------------------ TourAPI (경로 코리도 30km 수집) ------------------------
-BASE_TOUR = "https://apis.data.go.kr/B551011/KorService1"
+# ------------------------ TourAPI 호출 헬퍼(다중 시도 + 진단) ------------------------
+BASE_HOST = "apis.data.go.kr"
+BASE_SVC  = "B551011"
+BASE_API  = "KorService1"
 
-@lru_cache(maxsize=4096)
-def _tourapi_location_based_cached(lon: float, lat: float, content_type_id: int, radius_m: int, rows: int) -> Tuple[Dict[str, Any], int]:
+def _tourapi_key_variants() -> List[Tuple[str, str]]:
+    """
+    serviceKey 변형 목록 생성
+    return: [(variant_type, key_string), ...]
+    variant_type: 'raw', 'decoded', 'encoded'
+    """
+    if not TOURAPI_KEY_RAW:
+        return []
+    variants = []
+    raw = TOURAPI_KEY_RAW
+    decoded = unquote(raw)
+    encoded = quote(decoded, safe="")
+    for t, v in [("raw", raw), ("decoded", decoded), ("encoded", encoded)]:
+        if v not in [kv for _, kv in variants]:
+            variants.append((t, v))
+    return variants
+
+def _tourapi_fetch_json(path: str, params_wo_key: Dict[str, Any], timeout: int = 10) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    """
+    TourAPI를 https/http + key(원본/디코딩/인코딩) 조합으로 여러 번 시도.
+    serviceKey는 URL에 직접 붙여(이중 인코딩 방지), 나머지는 params로 전달.
+    return: (json, meta)
+      - json: 성공 시 파싱된 JSON, 실패 시 None
+      - meta: {'tries': [ {scheme, key_type, status, resultCode, resultMsg, items_count}, ... ]}
+    """
+    tries_meta: List[Dict[str, Any]] = []
+    if not TOURAPI_KEY_RAW:
+        return None, {"tries": [{"error": "TOURAPI_KEY missing"}]}
+
+    schemes = ["https", "http"]
+    key_variants = _tourapi_key_variants()
+    for scheme in schemes:
+        for key_type, key_val in key_variants:
+            url = f"{scheme}://{BASE_HOST}/{BASE_SVC}/{BASE_API}/{path}?serviceKey={key_val}"
+            try:
+                r = requests.get(url, params=params_wo_key, timeout=timeout)
+                status = r.status_code
+                j = None
+                result_code = None
+                result_msg  = None
+                items_cnt   = None
+                if status == 200:
+                    try:
+                        j = r.json()
+                        header = j.get("response", {}).get("header", {})
+                        result_code = header.get("resultCode")
+                        result_msg  = header.get("resultMsg")
+                        body  = j.get("response", {}).get("body", {})
+                        items = body.get("items", {}).get("item", [])
+                        if isinstance(items, dict):
+                            items = [items]
+                        items_cnt = len(items)
+                        tries_meta.append({"scheme":scheme, "key":key_type, "status":status, "resultCode":result_code, "resultMsg":result_msg, "items_count":items_cnt})
+                        # 성공 기준: 0000 또는 아이템 파싱 OK
+                        if result_code in (None, "0000") or items_cnt is not None:
+                            return j, {"tries": tries_meta}
+                    except Exception as pe:
+                        tries_meta.append({"scheme":scheme, "key":key_type, "status":status, "parse_error":str(pe)})
+                else:
+                    tries_meta.append({"scheme":scheme, "key":key_type, "status":status, "error":"HTTP non-200"})
+            except Exception as e:
+                tries_meta.append({"scheme":scheme, "key":key_type, "error":str(e)})
+    return None, {"tries": tries_meta}
+
+def _tourapi_location_based(lon: float, lat: float, content_type_id: int, radius_m: int = 20000, rows: int = 30) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     params = {
-        "serviceKey": TOURAPI_KEY,
         "mapX": lon, "mapY": lat,
-        "radius": min(int(radius_m), 20000),  # API 제약(20km)
+        "radius": min(int(radius_m), 20000),
         "listYN": "Y", "arrange": "E",
         "numOfRows": rows, "pageNo": 1,
         "MobileOS": "ETC", "MobileApp": "CoastalDrive",
         "_type": "json", "contentTypeId": content_type_id,
     }
-    try:
-        r = requests.get(f"{BASE_TOUR}/locationBasedList1", params=params, timeout=10)
-        return r.json(), r.status_code
-    except Exception as e:
-        return {"error": str(e)}, 500
-
-def _tourapi_location_based(lon: float, lat: float, content_type_id: int, radius_m: int = 20000, rows: int = 30) -> List[Dict[str, Any]]:
-    data, status = _tourapi_location_based_cached(lon, lat, int(content_type_id), int(radius_m), int(rows))
-    if status != 200: return []
-    try:
-        items = data.get("response", {}).get("body", {}).get("items", {}).get("item", []) or []
-        return items if isinstance(items, list) else [items]
-    except Exception:
-        return []
-
-@lru_cache(maxsize=4096)
-def _tourapi_detail_intro_cached(content_id: str, content_type_id: int) -> Tuple[Dict[str, Any], int]:
-    params = {
-        "serviceKey": TOURAPI_KEY, "contentId": content_id, "contentTypeId": content_type_id,
-        "_type": "json", "MobileOS": "ETC", "MobileApp": "CoastalDrive",
-    }
-    try:
-        r = requests.get(f"{BASE_TOUR}/detailIntro1", params=params, timeout=10)
-        return r.json(), r.status_code
-    except Exception as e:
-        return {"error": str(e)}, 500
+    j, meta = _tourapi_fetch_json("locationBasedList1", params, timeout=10)
+    items: List[Dict[str, Any]] = []
+    if j:
+        try:
+            items = j.get("response", {}).get("body", {}).get("items", {}).get("item", []) or []
+            if isinstance(items, dict):
+                items = [items]
+        except Exception:
+            items = []
+    return items, meta
 
 def _tourapi_detail_intro(content_id: str, content_type_id: int) -> Dict[str, Any]:
-    data, status = _tourapi_detail_intro_cached(content_id, int(content_type_id))
-    if status != 200: return {}
+    params = {"contentId": content_id, "contentTypeId": content_type_id, "_type": "json",
+              "MobileOS": "ETC", "MobileApp": "CoastalDrive"}
+    j, _ = _tourapi_fetch_json("detailIntro1", params, timeout=8)
+    if not j: return {}
     try:
-        items = data.get("response", {}).get("body", {}).get("items", {}).get("item", []) or []
-        return items[0] if items else {}
+        items = j.get("response", {}).get("body", {}).get("items", {}).get("item", []) or []
+        return items[0] if isinstance(items, list) and items else (items if isinstance(items, dict) else {})
     except Exception:
         return {}
 
-@lru_cache(maxsize=4096)
-def _tourapi_detail_common_cached(content_id: str) -> Tuple[Dict[str, Any], int]:
-    params = {
-        "serviceKey": TOURAPI_KEY, "contentId": content_id,
-        "defaultYN": "Y", "overviewYN": "Y",
-        "addrinfoYN": "Y", "mapinfoYN": "Y",
-        "firstImageYN": "Y", "_type": "json",
-        "MobileOS": "ETC", "MobileApp": "CoastalDrive",
-    }
-    try:
-        r = requests.get(f"{BASE_TOUR}/detailCommon1", params=params, timeout=10)
-        return r.json(), r.status_code
-    except Exception as e:
-        return {"error": str(e)}, 500
-
 def _tourapi_detail_common(content_id: str) -> Dict[str, Any]:
-    data, status = _tourapi_detail_common_cached(content_id)
-    if status != 200: return {}
+    params = {"contentId": content_id, "defaultYN": "Y", "overviewYN": "Y",
+              "addrinfoYN": "Y", "mapinfoYN": "Y", "firstImageYN": "Y",
+              "_type": "json", "MobileOS": "ETC", "MobileApp": "CoastalDrive"}
+    j, _ = _tourapi_fetch_json("detailCommon1", params, timeout=8)
+    if not j: return {}
     try:
-        items = data.get("response", {}).get("body", {}).get("items", {}).get("item", []) or []
-        return items[0] if items else {}
+        items = j.get("response", {}).get("body", {}).get("items", {}).get("item", []) or []
+        return items[0] if isinstance(items, list) and items else (items if isinstance(items, dict) else {})
     except Exception:
         return {}
 
@@ -268,7 +309,6 @@ def _normalize_detail(item: Dict[str, Any], intro: Dict[str, Any], common: Dict[
     dist_km = ""
     if mapx is not None and mapy is not None:
         dist_km = f"{haversine(src_lat, src_lon, mapy, mapx):.2f}"
-
     res = {
         "contentid": str(item.get("contentid") or ""),
         "contenttypeid": int(ctype),
@@ -279,7 +319,7 @@ def _normalize_detail(item: Dict[str, Any], intro: Dict[str, Any], common: Dict[
         "firstimage": item.get("firstimage") or common.get("firstimage") or "",
         "tel": item.get("tel") or common.get("tel") or "",
         "homepage": item.get("homepage") or common.get("homepage") or "",
-        "category": category,               # 'tour' or 'food'
+        "category": category,
         "distance_km": dist_km,
         "openhour": "", "restday": "", "parking_info": "",
     }
@@ -310,14 +350,12 @@ def _sample_indices_by_distance(coords: List[List[float]], interval_km: float, m
     return sorted(set(idxs))
 
 def search_tour_items_along_route(geojson: Dict[str, Any], corridor_km: float = 30.0, limit_each: int = 60) -> Dict[str, List[Dict[str, Any]]]:
-    """경로 주변 30km: 반경 20km 호출을 촘촘 샘플링으로 합집합 구성"""
     try:
-        coords = geojson["features"][0]["geometry"]["coordinates"]  # [ [lon,lat], ... ]
+        coords = geojson["features"][0]["geometry"]["coordinates"]
     except Exception:
         return {"tour": [], "food": [], "all": []}
 
-    radius_m = 20000  # TourAPI 최대 반경
-    # corridor가 30km라면, 반경 20km + 샘플간격 10~12km로 커버
+    radius_m = 20000
     interval_km = 12.0 if corridor_km >= 25.0 else max(8.0, corridor_km * 0.4)
     idxs = _sample_indices_by_distance(coords, interval_km, max_samples=100)
 
@@ -328,7 +366,8 @@ def search_tour_items_along_route(geojson: Dict[str, Any], corridor_km: float = 
     # 관광지(12)
     for i in idxs:
         lon, lat = coords[i]
-        for it in _tourapi_location_based(lon, lat, content_type_id=12, radius_m=radius_m, rows=30):
+        items, _ = _tourapi_location_based(lon, lat, content_type_id=12, radius_m=radius_m, rows=30)
+        for it in items:
             cid = str(it.get("contentid") or "")
             if not cid or cid in seen: continue
             seen.add(cid)
@@ -343,7 +382,8 @@ def search_tour_items_along_route(geojson: Dict[str, Any], corridor_km: float = 
     # 맛집(39)
     for i in idxs:
         lon, lat = coords[i]
-        for it in _tourapi_location_based(lon, lat, content_type_id=39, radius_m=radius_m, rows=30):
+        items, _ = _tourapi_location_based(lon, lat, content_type_id=39, radius_m=radius_m, rows=30)
+        for it in items:
             cid = str(it.get("contentid") or "")
             if not cid or cid in seen: continue
             seen.add(cid)
@@ -360,14 +400,12 @@ def search_tour_items_along_route(geojson: Dict[str, Any], corridor_km: float = 
 # ------------------------ 라우팅 핸들러 ------------------------
 def _handle_route():
     if not ORS_API_KEY:  return jsonify({"error": "ORS_API_KEY not set"}), 500
-    if not TOURAPI_KEY:  return jsonify({"error": "TOURAPI_KEY not set"}), 500
+    if not TOURAPI_KEY_RAW:  return jsonify({"error": "TOURAPI_KEY not set"}), 500
 
     data = _coerce_json()
     start_in = data.get("start") or data.get("origin") or data.get("from")
     end_in   = data.get("end") or data.get("destination") or data.get("to")
-    max_wps  = int(data.get("max_waypoints") or 3)
-    max_wps  = max(0, min(3, max_wps))
-
+    max_wps  = int(data.get("max_waypoints") or 3);  max_wps  = max(0, min(3, max_wps))
     try: corridor_km = float(data.get("corridor_km") or 30.0)
     except Exception: corridor_km = 30.0
     corridor_km = max(5.0, min(50.0, corridor_km))
@@ -380,7 +418,6 @@ def _handle_route():
     if not start or not end:
         return jsonify({"error": "주소 변환 실패"}), 400
 
-    # 경유지 자동 선택
     way_sel = find_waypoints_along_direction(start, end, max_n=max_wps)
 
     # ORS 라우팅
@@ -389,42 +426,36 @@ def _handle_route():
     if status != 200 or "error" in route_data:
         return jsonify({"error": route_data.get("error", f"OpenRouteService 실패({status})")}), status
 
-    # 경로 요약
+    # 요약
     try:
         summary = route_data["features"][0]["properties"]["summary"]
         dist_m  = float(summary.get("distance", 0.0))
         dur_s   = float(summary.get("duration", 0.0))
-        route_summary = {
-            "distance_m": dist_m, "duration_s": dur_s,
-            "distance_text": _fmt_dist_m(dist_m), "duration_text": _fmt_dur_s(dur_s),
-        }
+        route_summary = {"distance_m":dist_m, "duration_s":dur_s,
+                         "distance_text": _fmt_dist_m(dist_m), "duration_text": _fmt_dur_s(dur_s)}
     except Exception:
-        route_summary = {"distance_m": 0.0, "duration_s": 0.0, "distance_text": "", "duration_text": ""}
+        route_summary = {"distance_m":0.0, "duration_s":0.0, "distance_text":"", "duration_text":""}
 
-    # 경로 주변 TourAPI 수집
+    # 경로 주변 수집
     spots = search_tour_items_along_route(route_data, corridor_km=corridor_km, limit_each=int(data.get("limit_each") or 60))
     counts = {"tour": len(spots["tour"]), "food": len(spots["food"]), "all": len(spots["all"])}
 
     # 경유지 응답
     wp_objs = []
     for i, (name, lat, lon, t) in enumerate(way_sel, start=1):
-        wp_objs.append({
-            "order": i, "name": name, "lat": lat, "lon": lon, "t": t,
-            "address": reverse_geocode_google(lat, lon) or ""
-        })
+        wp_objs.append({"order": i, "name": name, "lat": lat, "lon": lon, "t": t, "address": reverse_geocode_google(lat, lon) or ""})
 
     resp: Dict[str, Any] = {
         "route": route_data,
-        "route_summary": route_summary,     # ← 거리/시간 텍스트까지 포함
+        "route_summary": route_summary,
         "waypoints_used": wp_objs,
-        "spots": spots["all"],              # ← 프런트 팝업용 핵심 필드
+        "spots": spots["all"],
         "spots_grouped": {"tour": spots["tour"], "food": spots["food"]},
-        "spot_counts": counts,              # ← 라인 팝업 요약에 사용
+        "spot_counts": counts,
         "corridor_km": corridor_km,
     }
     if wp_objs:
         resp["waypoint"] = {k: wp_objs[0][k] for k in ("name","lat","lon","address")}
-
     return jsonify(resp), 200
 
 @app.route("/route", methods=["POST", "GET"])
@@ -436,7 +467,35 @@ def route():
 def api_route():
     return _handle_route()
 
-# 상세페이지(간단 HTML)
+# ------------------------ 진단(디버그) 엔드포인트 ------------------------
+@app.route("/debug/tourapi_near")
+def debug_tourapi_near():
+    """
+    예: /debug/tourapi_near?lat=37.5665&lon=126.9780&ctype=12
+       ctype=12(관광지) 또는 39(맛집)
+    여러 방식(https/http, key raw/decoded/encoded) 시도 결과와 항목 샘플 반환
+    """
+    try:
+        lat = float(request.args.get("lat", "37.5665"))
+        lon = float(request.args.get("lon", "126.9780"))
+        ctype = int(request.args.get("ctype", "12"))
+    except Exception:
+        return jsonify({"error": "lat/lon/ctype 파라미터 오류"}), 400
+
+    items, meta = _tourapi_location_based(lon, lat, content_type_id=ctype, radius_m=20000, rows=10)
+    sample = []
+    for it in items[:5]:
+        sample.append({
+            "contentid": it.get("contentid"),
+            "title": it.get("title"),
+            "addr1": it.get("addr1"),
+            "mapx": it.get("mapx"),
+            "mapy": it.get("mapy"),
+            "firstimage": it.get("firstimage"),
+        })
+    return jsonify({"ok": True, "lat": lat, "lon": lon, "ctype": ctype, "tries": meta.get("tries", []), "count": len(items), "sample": sample})
+
+# ------------------------ 상세 페이지(간단 HTML) ------------------------
 @app.route("/tour_detail/<contentid>")
 def tour_detail(contentid: str):
     common = _tourapi_detail_common(contentid) or {}
