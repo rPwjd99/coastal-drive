@@ -14,7 +14,7 @@
       --wp:#ff6f00; --start:#6a1b9a; --end:#c62828;
     }
     *{box-sizing:border-box}
-    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,'Noto Sans KR',sans-serif;}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,'Noto Sans KR',sans-serif}
     #controls{padding:10px;background:var(--bg);border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
     #controls input{width:280px;padding:8px 10px;border:1px solid #ccc;border-radius:6px}
     #controls button{padding:8px 14px;border:0;border-radius:6px;background:var(--ink);color:#fff;cursor:pointer}
@@ -27,8 +27,8 @@
     .legend .wp i{background:var(--wp)}
     .legend .se i{background:linear-gradient(90deg,var(--start),var(--end))}
     #loading{position:fixed;inset:0;background:rgba(255,255,255,.6);display:none;align-items:center;justify-content:center;font-weight:600;color:#333;z-index:9999}
-    /* 팝업이 레이어 위로 오도록 z-index 보정 */
-    .ol-overlaycontainer, .ol-overlaycontainer-stopevent{ z-index: 1000 !important; }
+    /* 팝업이 레이어 위로 오도록 보정 */
+    .ol-overlaycontainer, .ol-overlaycontainer-stopevent { z-index: 1000 !important; }
     .ol-popup{position:absolute;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.3);padding:10px 12px;border-radius:8px;border:1px solid #ccc;min-width:240px}
     .ol-popup:after,.ol-popup:before{top:100%;border:solid transparent;content:"";height:0;width:0;position:absolute;pointer-events:none}
     .ol-popup:after{border-top-color:#fff;border-width:10px;left:48px;margin-left:-10px}
@@ -67,7 +67,7 @@
   <div id="loading">경로 계산 중...</div>
 
   <script>
-    const API_BASE = ""; // 같은 도메인이면 빈 문자열, 분리 배포 시 백엔드 URL 넣기.
+    const API_BASE = ""; // 같은 도메인이면 빈 문자열, 분리 배포면 백엔드 주소
 
     // ============ 지도 ============
     const map = new ol.Map({
@@ -91,7 +91,7 @@
     const wpStyle    = new ol.style.Style({ image: new ol.style.RegularShape({ points: 5, radius: 9, fill: new ol.style.Fill({ color:'#ff6f00' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
     const startStyle = new ol.style.Style({ image: new ol.style.RegularShape({ points: 4, radius: 7, angle: Math.PI/4, fill: new ol.style.Fill({ color:'#6a1b9a' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
 
-    // 도착지: 깃발(Flag) 아이콘 (SVG data URI)
+    // 도착지: 깃발(Flag) 아이콘
     const flagSVG = encodeURI(
       `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="32" viewBox="0 0 28 32">
         <path d="M6 30V2h1c4 0 8-1 12 2 3 2 5 2 8 1v14c-3 1-5 1-8-1-4-3-8-2-12-2V30z" fill="#c62828"/>
@@ -131,7 +131,6 @@
       for(const s of items){
         const lon = parseFloat(s.mapx), lat = parseFloat(s.mapy);
         if(!isFinite(lon)||!isFinite(lat)) continue;
-        // category가 누락된 데이터가 오더라도 contenttypeid로 추론 (서버는 이미 category를 넣어줌)
         const cat = s.category || (String(s.contenttypeid)==="39" ? "food" : "tour");
         const feat = new ol.Feature({ geometry: new ol.geom.Point(ol.proj.fromLonLat([lon,lat])), ...s, category: cat });
         (cat==='food' ? foodLayer : tourLayer).getSource().addFeature(feat);
@@ -149,8 +148,7 @@
           const f = new ol.Feature({
             geometry: new ol.geom.Point(ol.proj.fromLonLat([lon,lat])),
             title: `경유지${order++}: ${escapeHtml(wp.name||'')}`,
-            addr1: wp.address||'',
-            category: 'waypoint'
+            category:'waypoint'
           });
           f.setStyle(wpStyle);
           wpLayer.getSource().addFeature(f);
@@ -171,11 +169,11 @@
       }
     }
 
-    // 팝업
-    const popupEl = document.createElement('div');
-    popupEl.className = 'ol-popup';
-    const overlay = new ol.Overlay({ element: popupEl, autoPan: { animation: { duration: 250 } } });
-    map.addOverlay(overlay);
+    // ====== 팝업(hover) ======
+    const hoverEl = document.createElement('div');
+    hoverEl.className = 'ol-popup';
+    const hoverOverlay = new ol.Overlay({ element: hoverEl, autoPan: false });
+    map.addOverlay(hoverOverlay);
 
     function makePopupHTML(p){
       const catMap = {food:'맛집', tour:'관광지', waypoint:'경유지', start:'출발지', end:'도착지'};
@@ -186,20 +184,20 @@
       const hours= escapeHtml(p.openhour || '');
       const rest = escapeHtml(p.restday || '');
       const park = escapeHtml(p.parking_info || '');
+      const dist = (p.distance_km && !isNaN(parseFloat(p.distance_km))) ? `경로 기준 거리: ${parseFloat(p.distance_km).toFixed(2)} km` : '';
       const img  = (p.firstimage && typeof p.firstimage==='string') ? p.firstimage : '';
-      const detailLink = p.contentid ? `<div class="popup-row"><a href="/tour_detail/${p.contentid}" target="_blank" rel="noopener">자세히 보기</a></div>` : '';
-      const hpLink = p.homepage ? `<div class="popup-row"><a href="${escapeHtml(p.homepage)}" target="_blank" rel="noopener">홈페이지</a></div>` : '';
-      const dist = isFinite(parseFloat(p.distance_km)) ? `<div class="popup-row">경로 기준 거리: ${parseFloat(p.distance_km).toFixed(2)} km</div>` : '';
+      const detail = p.contentid ? `<div class="popup-row"><a href="/tour_detail/${p.contentid}" target="_blank" rel="noopener">자세히 보기</a></div>` : '';
+      const hp = p.homepage ? `<div class="popup-row"><a href="${escapeHtml(p.homepage)}" target="_blank" rel="noopener">홈페이지</a></div>` : '';
 
-      const lines=[];
+      const lines = [];
       if(addr) lines.push(`<div class="popup-row">${addr}</div>`);
+      if(dist) lines.push(`<div class="popup-row">${dist}</div>`);
       if(tel)  lines.push(`<div class="popup-row">전화: ${tel}</div>`);
       if(hours)lines.push(`<div class="popup-row">운영시간: ${hours}</div>`);
       if(rest) lines.push(`<div class="popup-row">휴무: ${rest}</div>`);
       if(park) lines.push(`<div class="popup-row">주차: ${park}</div>`);
-      if(dist) lines.push(dist);
-      if(hpLink) lines.push(hpLink);
-      if(detailLink) lines.push(detailLink);
+      if(hp)   lines.push(hp);
+      if(detail) lines.push(detail);
 
       return `
         <div class="popup-title">${cat?`[${cat}] `:''}${title}</div>
@@ -208,25 +206,44 @@
       `;
     }
 
-    // 포인트 우선 탐지 + hitTolerance 확대 → 팝업 안정 표시
-    map.on('singleclick', (evt)=>{
-      let feature=null;
-      map.forEachFeatureAtPixel(evt.pixel, f=>{
+    // 커서 갖다대면(hover) 포인트만 팝업
+    let lastHoverId = null;
+    map.on('pointermove', (evt)=>{
+      let feature = null;
+      map.forEachFeatureAtPixel(evt.pixel, (f)=>{
         const g = f.getGeometry && f.getGeometry();
-        if (g && g.getType()==='Point'){ feature=f; return true; }
+        if (g && g.getType()==='Point'){ feature = f; return true; }
         return false;
       }, {hitTolerance: 12});
-      if(!feature){ overlay.setPosition(undefined); return; }
-      const props = feature.getProperties();
-      const coord = feature.getGeometry().getCoordinates();
-      popupEl.innerHTML = makePopupHTML(props);
-      overlay.setPosition(coord);
+
+      if(feature){
+        const props = feature.getProperties();
+        const id = props.contentid || props.title || Math.random();
+        if(id !== lastHoverId){
+          hoverEl.innerHTML = makePopupHTML(props);
+          lastHoverId = id;
+        }
+        hoverOverlay.setPosition(feature.getGeometry().getCoordinates());
+        map.getTargetElement().style.cursor = 'pointer';
+      }else{
+        hoverOverlay.setPosition(undefined);
+        lastHoverId = null;
+        map.getTargetElement().style.cursor = '';
+      }
     });
 
-    // 포인터 커서 (시각 피드백)
-    map.on('pointermove', (evt)=>{
-      let hit = map.hasFeatureAtPixel(evt.pixel, {hitTolerance: 10});
-      map.getTargetElement().style.cursor = hit ? 'pointer' : '';
+    // 클릭 시 상세 페이지 열기(선택)
+    map.on('singleclick', (evt)=>{
+      let feature = null;
+      map.forEachFeatureAtPixel(evt.pixel, (f)=>{
+        const g = f.getGeometry && f.getGeometry();
+        if (g && g.getType()==='Point'){ feature = f; return true; }
+        return false;
+      }, {hitTolerance: 12});
+      if(feature){
+        const cid = feature.get('contentid');
+        if(cid) window.open(`/tour_detail/${cid}`, '_blank');
+      }
     });
 
     // 토글
@@ -234,7 +251,7 @@
     document.getElementById('showFood').addEventListener('change',e=>foodLayer.setVisible(e.target.checked));
     document.getElementById('showWP').addEventListener('change',e=>wpLayer.setVisible(e.target.checked));
 
-    // 입력에서 Enter로 실행
+    // 입력에서 Enter 실행
     ['start','end'].forEach(id=>{
       document.getElementById(id).addEventListener('keydown',e=>{
         if(e.key==='Enter') document.getElementById('btnRoute').click();
