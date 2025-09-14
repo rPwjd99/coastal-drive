@@ -27,9 +27,9 @@
     .legend .wp i{background:var(--wp)}
     .legend .se i{background:linear-gradient(90deg,var(--start),var(--end))}
     #loading{position:fixed;inset:0;background:rgba(255,255,255,.6);display:none;align-items:center;justify-content:center;font-weight:600;color:#333;z-index:9999}
-    /* 팝업이 다른 캔버스보다 위에 오도록 */
+    /* 팝업이 레이어 위에 보이도록 */
     .ol-overlaycontainer, .ol-overlaycontainer-stopevent{ z-index: 1000 !important; }
-    .ol-popup{position:absolute;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.3);padding:10px 12px;border-radius:8px;border:1px solid #ccc;min-width:240px}
+    .ol-popup{position:absolute;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.3);padding:10px 12px;border-radius:8px;border:1px solid #ccc;min-width:240px;pointer-events:auto}
     .ol-popup:after,.ol-popup:before{top:100%;border:solid transparent;content:"";height:0;width:0;position:absolute;pointer-events:none}
     .ol-popup:after{border-top-color:#fff;border-width:10px;left:48px;margin-left:-10px}
     .ol-popup:before{border-top-color:#ccc;border-width:11px;left:48px;margin-left:-11px}
@@ -70,7 +70,7 @@
   <div id="loading">경로 계산 중...</div>
 
   <script>
-    // 동일 도메인이면 빈 문자열 유지, 분리 배포 시 Render 백엔드 주소로 교체
+    // 같은 도메인이면 빈 문자열 유지, 분리 배포 시 Render 백엔드 주소로 교체
     const API_BASE = "";
 
     // ============ 지도 ============
@@ -82,8 +82,8 @@
 
     // 레이어
     let routeLayer = null;
-    const tourLayer = new ol.layer.Vector({ source: new ol.source.Vector(), zIndex: 30 });
-    const foodLayer = new ol.layer.Vector({ source: new ol.source.Vector(), zIndex: 40 });
+    const tourLayer = new ol.layer.Vector({ source: new ol.source.Vector(), zIndex: 30, declutter: true });
+    const foodLayer = new ol.layer.Vector({ source: new ol.source.Vector(), zIndex: 40, declutter: true });
     const wpLayer   = new ol.layer.Vector({ source: new ol.source.Vector(), zIndex: 50 });
     const seLayer   = new ol.layer.Vector({ source: new ol.source.Vector(), zIndex: 60 });
     map.addLayer(tourLayer); map.addLayer(foodLayer); map.addLayer(wpLayer); map.addLayer(seLayer);
@@ -95,7 +95,7 @@
     const wpStyle    = new ol.style.Style({ image: new ol.style.RegularShape({ points: 5, radius: 9, fill: new ol.style.Fill({ color:'#ff6f00' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
     const startStyle = new ol.style.Style({ image: new ol.style.RegularShape({ points: 4, radius: 7, angle: Math.PI/4, fill: new ol.style.Fill({ color:'#6a1b9a' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
 
-    // 도착지: 깃발 아이콘 (SVG data URI)
+    // 도착지 플래그 (SVG data URI)
     const flagSVG = encodeURI(
       `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="32" viewBox="0 0 28 32">
         <path d="M6 30V2h1c4 0 8-1 12 2 3 2 5 2 8 1v14c-3 1-5 1-8-1-4-3-8-2-12-2V30z" fill="#c62828"/>
@@ -103,7 +103,7 @@
       </svg>`
     );
     const endStyle   = new ol.style.Style({
-      image: new ol.style.Icon({ src: "data:image/svg+xml;utf8," + flagSVG, scale: 1 })
+      image: new ol.style.Icon({ src: "data:image/svg+xml;utf8," + flagSVG, scale: 1, crossOrigin: "anonymous" })
     });
 
     tourLayer.setStyle(tourStyle);
@@ -211,12 +211,12 @@
 
     map.on('singleclick', (evt)=>{
       let targetFeature = null;
-      // 상층(포인트) 우선, 충분한 히트 톨러런스
+      // 상층 포인트 우선 탐지, 충분한 히트 톨러런스
       map.forEachFeatureAtPixel(evt.pixel, (f)=>{ 
         const g = f.getGeometry();
         if (g && g.getType()==='Point') { targetFeature = f; return true; }
         return false;
-      }, {hitTolerance: 10});
+      }, {hitTolerance: 12});
       if(!targetFeature){ clickOverlay.setPosition(undefined); return; }
       const props = targetFeature.getProperties();
       const geom = targetFeature.getGeometry();
@@ -298,13 +298,13 @@
         // 스팟(관광지/맛집) 표시
         addSpots(Array.isArray(data.spots) ? data.spots : []);
 
-        // 경유지 + 출발/도착(도착지는 깃발)
+        // 경유지 + 출발/도착(도착지는 플래그)
         const startLL = coords.length ? coords[0] : null;
         const endLL   = coords.length ? coords[coords.length-1] : null;
         addWaypoints(data.waypoints_used || [], startLL ? [startLL[0], startLL[1]] : null, endLL ? [endLL[0], endLL[1]] : null);
 
         // 경로 라인 + 라인 호버 팝업 카운트
-        const counts = { tour: (data.spots_grouped?.tour||[]).length, food: (data.spots_grouped?.food||[]).length };
+        const counts = data.counts || { tour: (data.spots_grouped?.tour||[]).length, food: (data.spots_grouped?.food||[]).length };
         drawRoute(coords, summary, counts);
 
       }catch(err){
