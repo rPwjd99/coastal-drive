@@ -2,10 +2,10 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Coastal Drive</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
   <style>
     :root{
@@ -14,7 +14,7 @@
       --wp:#ff6f00; --start:#6a1b9a; --end:#c62828;
     }
     *{box-sizing:border-box}
-    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,'Noto Sans KR',sans-serif;}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,'Noto Sans KR',sans-serif}
     #controls{padding:10px;background:var(--bg);border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
     #controls input{width:280px;padding:8px 10px;border:1px solid #ccc;border-radius:6px}
     #controls button{padding:8px 14px;border:0;border-radius:6px;background:var(--ink);color:#fff;cursor:pointer}
@@ -27,7 +27,8 @@
     .legend .wp i{background:var(--wp)}
     .legend .se i{background:linear-gradient(90deg,var(--start),var(--end))}
     #loading{position:fixed;inset:0;background:rgba(255,255,255,.6);display:none;align-items:center;justify-content:center;font-weight:600;color:#333;z-index:9999}
-    .ol-overlaycontainer,.ol-overlaycontainer-stopevent{z-index:1000 !important}
+    /* 팝업이 다른 캔버스보다 위에 오도록 */
+    .ol-overlaycontainer, .ol-overlaycontainer-stopevent{ z-index: 1000 !important; }
     .ol-popup{position:absolute;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.3);padding:10px 12px;border-radius:8px;border:1px solid #ccc;min-width:240px}
     .ol-popup:after,.ol-popup:before{top:100%;border:solid transparent;content:"";height:0;width:0;position:absolute;pointer-events:none}
     .ol-popup:after{border-top-color:#fff;border-width:10px;left:48px;margin-left:-10px}
@@ -40,8 +41,8 @@
 </head>
 <body>
   <div id="controls">
-    <input id="start" placeholder="출발지 (예: 세종시청)">
-    <input id="end" placeholder="도착지 (예: 속초시청)">
+    <input id="start" placeholder="출발지 (예: 세종시청)" />
+    <input id="end" placeholder="도착지 (예: 속초시청)" />
     <button id="btnRoute" type="button">경로 계산</button>
     <label>경유 최대
       <select id="maxwps">
@@ -52,11 +53,11 @@
       </select>
     </label>
     <label>코리도(km)
-      <input id="corridor" type="number" value="30" min="5" max="50" style="width:80px">
+      <input id="corridor" type="number" value="30" min="5" max="50" style="width:80px" />
     </label>
-    <label><input type="checkbox" id="showTour" checked> 관광지</label>
-    <label><input type="checkbox" id="showFood" checked> 맛집</label>
-    <label><input type="checkbox" id="showWP" checked> 경유지</label>
+    <label><input type="checkbox" id="showTour" checked /> 관광지</label>
+    <label><input type="checkbox" id="showFood" checked /> 맛집</label>
+    <label><input type="checkbox" id="showWP" checked /> 경유지</label>
     <div class="legend">
       <span class="tour"><i></i>관광지</span>
       <span class="food"><i></i>맛집</span>
@@ -69,10 +70,7 @@
   <div id="loading">경로 계산 중...</div>
 
   <script>
-    // ==============================
-    // API 베이스: 같은 도메인이면 빈 문자열 유지.
-    // 분리 배포 시 예) const API_BASE = "https://coastal-drive.onrender.com";
-    // ==============================
+    // 동일 도메인이면 빈 문자열 유지, 분리 배포 시 Render 백엔드 주소로 교체
     const API_BASE = "";
 
     // ============ 지도 ============
@@ -96,7 +94,17 @@
     const foodStyle  = new ol.style.Style({ image: new ol.style.Circle({ radius: 6, fill: new ol.style.Fill({ color: '#388e3c' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
     const wpStyle    = new ol.style.Style({ image: new ol.style.RegularShape({ points: 5, radius: 9, fill: new ol.style.Fill({ color:'#ff6f00' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
     const startStyle = new ol.style.Style({ image: new ol.style.RegularShape({ points: 4, radius: 7, angle: Math.PI/4, fill: new ol.style.Fill({ color:'#6a1b9a' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
-    const endStyle   = new ol.style.Style({ image: new ol.style.RegularShape({ points: 3, radius: 8, rotation: Math.PI, fill: new ol.style.Fill({ color:'#c62828' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
+
+    // 도착지: 깃발 아이콘 (SVG data URI)
+    const flagSVG = encodeURI(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="32" viewBox="0 0 28 32">
+        <path d="M6 30V2h1c4 0 8-1 12 2 3 2 5 2 8 1v14c-3 1-5 1-8-1-4-3-8-2-12-2V30z" fill="#c62828"/>
+        <circle cx="6" cy="30" r="2" fill="#555"/>
+      </svg>`
+    );
+    const endStyle   = new ol.style.Style({
+      image: new ol.style.Icon({ src: "data:image/svg+xml;utf8," + flagSVG, scale: 1 })
+    });
 
     tourLayer.setStyle(tourStyle);
     foodLayer.setStyle(foodStyle);
@@ -170,7 +178,8 @@
       }
     }
 
-    // 클릭 팝업(관광지/맛집/경유지)
+    // ========== 팝업 ==========
+    // 클릭 팝업(관광지/맛집/경유지/출발·도착)
     const clickPopupEl = document.createElement('div');
     clickPopupEl.className = 'ol-popup';
     const clickOverlay = new ol.Overlay({ element: clickPopupEl, autoPan: { animation: { duration: 250 } } });
@@ -201,12 +210,16 @@
     }
 
     map.on('singleclick', (evt)=>{
-      let feature=null;
-      map.forEachFeatureAtPixel(evt.pixel, f=>{ feature=f; return true; }, {hitTolerance: 6});
-      if(!feature){ clickOverlay.setPosition(undefined); return; }
-      const props = feature.getProperties();
-      const geom = feature.getGeometry();
-      if(geom.getType() !== 'Point'){ clickOverlay.setPosition(undefined); return; }
+      let targetFeature = null;
+      // 상층(포인트) 우선, 충분한 히트 톨러런스
+      map.forEachFeatureAtPixel(evt.pixel, (f)=>{ 
+        const g = f.getGeometry();
+        if (g && g.getType()==='Point') { targetFeature = f; return true; }
+        return false;
+      }, {hitTolerance: 10});
+      if(!targetFeature){ clickOverlay.setPosition(undefined); return; }
+      const props = targetFeature.getProperties();
+      const geom = targetFeature.getGeometry();
       clickPopupEl.innerHTML = makeSpotPopupHTML(props);
       clickOverlay.setPosition(geom.getCoordinates());
     });
@@ -229,15 +242,13 @@
     }
 
     map.on('pointermove',(evt)=>{
-      if (map.hasFeatureAtPixel(evt.pixel, {hitTolerance: 8}) === false){
-        hoverOverlay.setPosition(undefined);
-        map.getTargetElement().style.cursor='';
-        return;
-      }
-      let feat=null;
-      map.forEachFeatureAtPixel(evt.pixel, f=>{ feat=f; return true; }, {hitTolerance: 8});
-      if(feat && feat.get('category')==='route'){
-        hoverPopupEl.innerHTML = makeRoutePopupHTML(feat.getProperties());
+      let routeFeat = null;
+      map.forEachFeatureAtPixel(evt.pixel, (f)=>{
+        if (f.get('category')==='route') { routeFeat = f; return true; }
+        return false;
+      }, {hitTolerance: 10});
+      if(routeFeat){
+        hoverPopupEl.innerHTML = makeRoutePopupHTML(routeFeat.getProperties());
         hoverOverlay.setPosition(evt.coordinate);
         map.getTargetElement().style.cursor='pointer';
       }else{
@@ -251,7 +262,7 @@
     document.getElementById('showFood').addEventListener('change',e=>foodLayer.setVisible(e.target.checked));
     document.getElementById('showWP').addEventListener('change',e=>wpLayer.setVisible(e.target.checked));
 
-    // 입력 Enter 실행
+    // Enter 실행
     ['start','end','corridor'].forEach(id=>{
       document.getElementById(id).addEventListener('keydown',e=>{
         if(e.key==='Enter') document.getElementById('btnRoute').click();
@@ -278,22 +289,21 @@
         const coords = feat.geometry.coordinates;   // [lon,lat] 배열
         const summary = (feat.properties && feat.properties.summary) ? feat.properties.summary : null;
 
-        // 요약 표시 (거리/시간)
         if(summary){
           const dist = fmtDist(summary.distance || NaN);
           const dur  = fmtDur(summary.duration || NaN);
           document.getElementById('summary').textContent = (dist||dur) ? `거리 ${dist} · 예상 ${dur}` : '';
         }
 
-        // 스팟 표시 (30km 기본)
+        // 스팟(관광지/맛집) 표시
         addSpots(Array.isArray(data.spots) ? data.spots : []);
 
-        // 경유지 + 출발/도착
+        // 경유지 + 출발/도착(도착지는 깃발)
         const startLL = coords.length ? coords[0] : null;
         const endLL   = coords.length ? coords[coords.length-1] : null;
         addWaypoints(data.waypoints_used || [], startLL ? [startLL[0], startLL[1]] : null, endLL ? [endLL[0], endLL[1]] : null);
 
-        // 경로 라인 + 라인 호버 팝업용 카운트
+        // 경로 라인 + 라인 호버 팝업 카운트
         const counts = { tour: (data.spots_grouped?.tour||[]).length, food: (data.spots_grouped?.food||[]).length };
         drawRoute(coords, summary, counts);
 
