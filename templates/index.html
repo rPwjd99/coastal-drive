@@ -18,6 +18,7 @@
     #controls button{padding:8px 14px;border:0;border-radius:6px;background:#0078ff;color:#fff;cursor:pointer}
     #summary{margin-left:auto;color:#333;font-size:14px}
     #map{width:100%;height:calc(100vh - 56px)}
+    /* 팝업이 지도 레이어 위로 올라오도록 */
     .ol-overlaycontainer, .ol-overlaycontainer-stopevent { z-index: 1000 !important; }
     .ol-popup{position:absolute;background:#fff;border:1px solid #ccc;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,.25);padding:10px 12px;min-width:240px}
     .ol-popup:after,.ol-popup:before{top:100%;border:solid transparent;content:"";height:0;width:0;position:absolute;pointer-events:none}
@@ -63,7 +64,7 @@
     const wpStyle    = new ol.style.Style({ image: new ol.style.RegularShape({ points: 5, radius: 9, fill: new ol.style.Fill({ color:'#ff6f00' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
     const startStyle = new ol.style.Style({ image: new ol.style.RegularShape({ points: 4, radius: 7, angle: Math.PI/4, fill: new ol.style.Fill({ color:'#6a1b9a' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
 
-    // 도착지 깃발
+    // 도착지 깃발 아이콘
     const endStyle = new ol.style.Style({
       image: new ol.style.Icon({ src: "data:image/svg+xml;utf8," + encodeURI(
         `<svg xmlns='http://www.w3.org/2000/svg' width='28' height='32' viewBox='0 0 28 32'>
@@ -75,12 +76,14 @@
 
     tourLayer.setStyle(tourStyle); foodLayer.setStyle(foodStyle); wpLayer.setStyle(wpStyle);
 
-    // ===== 팝업 =====
+    // ===== 팝업(중복 선언 금지!) =====
+    // ▶ 여기서 한 번만 만든 엘리먼트/오버레이를 계속 재사용합니다.
     const hoverEl = document.createElement('div');
     hoverEl.className = 'ol-popup';
     const hoverOverlay = new ol.Overlay({ element: hoverEl, autoPan: false });
     map.addOverlay(hoverOverlay);
 
+    // ===== 헬퍼 =====
     function escapeHtml(t){return (t||"").toString().replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
     function fmtDist(m){ if(!isFinite(m)) return ""; return m>=1000? (m/1000).toFixed(1)+' km': Math.round(m)+' m'; }
     function fmtDur(s){ if(!isFinite(s)) return ""; const h=Math.floor(s/3600), m=Math.round((s%3600)/60); return (h?`${h}시간 `:"")+`${m}분`; }
@@ -110,6 +113,7 @@
         ${rows.join('')}
       `;
     }
+
     function makeRoutePopupHTML(meta){
       const rows=[];
       if(meta.distance_text || meta.duration_text){
@@ -167,41 +171,45 @@
     }
 
     // ===== 호버: 포인트 우선 → 라인 보조 =====
-    const hoverEl = document.querySelector('.ol-popup');
-    const hoverOverlay = map.getOverlays().item(0); // 위에서 추가한 overlay
     let lastKey=null;
     map.on('pointermove', (evt)=>{
-      // 1) 포인트 먼저
+      // 1) 포인트 먼저 히트 테스트
       let feature=null;
       map.forEachFeatureAtPixel(evt.pixel, (f)=>{
         const g=f.getGeometry&&f.getGeometry();
         if(g && g.getType()==='Point'){ feature=f; return true; }
         return false;
       }, {hitTolerance:12});
+
       if(feature && feature.get('isSpot')){
         const props=feature.getProperties(); const key=props.contentid||props.title;
         if(key!==lastKey){ hoverEl.innerHTML = makeSpotPopupHTML(props); lastKey=key; }
         hoverOverlay.setPosition(feature.getGeometry().getCoordinates());
-        map.getTargetElement().style.cursor='pointer'; return;
+        map.getTargetElement().style.cursor='pointer';
+        return;
       }
-      // 2) 라인(경로)
+
+      // 2) 라인(경로) 히트 테스트
       let lineFeat=null;
       map.forEachFeatureAtPixel(evt.pixel, (f)=>{
         const g=f.getGeometry&&f.getGeometry();
         if(g && g.getType()==='LineString'){ lineFeat=f; return true; }
         return false;
       }, {hitTolerance:10});
+
       if(lineFeat && lineFeat.get('kind')==='route'){
         const meta=lineFeat.get('route_meta')||{}; const key='route';
         if(key!==lastKey){ hoverEl.innerHTML = makeRoutePopupHTML(meta); lastKey=key; }
         hoverOverlay.setPosition(evt.coordinate);
         map.getTargetElement().style.cursor='pointer';
       }else{
-        hoverOverlay.setPosition(undefined); lastKey=null; map.getTargetElement().style.cursor='';
+        hoverOverlay.setPosition(undefined);
+        lastKey=null;
+        map.getTargetElement().style.cursor='';
       }
     });
 
-    // 클릭 시 상세
+    // 클릭 시 스팟 상세 페이지
     map.on('singleclick', (evt)=>{
       let feature=null;
       map.forEachFeatureAtPixel(evt.pixel, (f)=>{
@@ -263,7 +271,7 @@
     document.getElementById('btnRoute').addEventListener('click', calcRoute);
     ['start','end'].forEach(id=>document.getElementById(id).addEventListener('keydown',e=>{ if(e.key==='Enter') calcRoute(); }));
 
-    // ===== 경로 전체 진단: 후보 수집이 잘 되는지 확인 =====
+    // 경로 전체 진단
     document.getElementById('btnDiag').addEventListener('click', async ()=>{
       if(!Array.isArray(lastRouteCoords) || lastRouteCoords.length<2){
         alert('먼저 경로를 계산하세요.'); return;
