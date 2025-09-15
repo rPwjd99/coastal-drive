@@ -39,6 +39,7 @@
     <button id="btnRoute" type="button">경로 계산</button>
     <button id="btnPing" type="button" style="background:#444;">🔎 TourAPI 키 테스트</button>
     <button id="btnAround" type="button" style="background:#666;">🧪 이 경로에서 재검사</button>
+    <button id="btnDummy" type="button" style="background:#009688;">🧪 가짜 스팟 추가(테스트)</button>
     <div id="summary"></div>
   </div>
   <div id="map"></div>
@@ -135,7 +136,10 @@
     function setLoading(on){ document.getElementById('loading').style.display = on ? 'flex' : 'none'; }
     function showDiag(obj, title="진단"){ const el=document.getElementById('diag'); el.style.display='block'; el.innerHTML = `<b>${title}</b><pre>${escapeHtml(JSON.stringify(obj, null, 2))}</pre>`; }
 
+    let routeCoordsLonLat = null;
+
     function drawRouteAndSetMeta(coordsLonLat, meta){
+      routeCoordsLonLat = coordsLonLat.slice();
       const coords3857 = coordsLonLat.map(([lon,lat])=>ol.proj.fromLonLat([lon,lat]));
       if(routeLayer) map.removeLayer(routeLayer);
       routeFeature = new ol.Feature({ geometry: new ol.geom.LineString(coords3857), kind:"route", route_meta: meta });
@@ -274,7 +278,6 @@
         (data.spots || []).forEach(addSpotFeature);
         addWaypointsAndSE(data.waypoints_used || [], startLL ? [startLL[0], startLL[1]] : null, endLL ? [endLL[0], endLL[1]] : null);
 
-        // spots가 0이면 즉석 진단 정보 노출
         if(((data.spot_counts?.all) ?? 0) === 0){
           showDiag({message:"TourAPI 수집 결과 0건", tourapi_debug:data.tourapi_debug || {}}, "진단: TourAPI 수집 0건");
         }
@@ -311,6 +314,16 @@
       }catch(e){
         showDiag({error:String(e)}, "진단 실패");
       }
+    });
+
+    // ====== 가짜 스팟 추가(프런트 팝업 테스트) ======
+    document.getElementById('btnDummy').addEventListener('click', ()=>{
+      const center = map.getView().getCenter() || ol.proj.fromLonLat([127.5,36.5]);
+      const c1 = ol.proj.toLonLat(center);
+      const s1 = {contentid:"dummy1", contenttypeid:12, category:"tour", title:"(테스트) 해변 포인트", addr1:"테스트 주소 1", mapx:c1[0], mapy:c1[1], firstimage:"", tel:"", openhour:"09:00~18:00", restday:"연중무휴", parking_info:"가능", distance_km:"0.2"};
+      const s2 = {contentid:"dummy2", contenttypeid:39, category:"food", title:"(테스트) 맛집 포인트", addr1:"테스트 주소 2", mapx:c1[0]+0.02, mapy:c1[1]+0.01, firstimage:"", tel:"", openhour:"10:00~21:00", restday:"월요일", parking_info:"가능", distance_km:"1.1"};
+      [s1,s2].forEach(addSpotFeature);
+      alert("가짜 스팟 2개를 지도에 추가했습니다. 마우스를 올려 팝업이 뜨는지 확인하세요.");
     });
 
     document.getElementById('btnRoute').addEventListener('click', calcRoute);
