@@ -1,4 +1,3 @@
-<!-- index.html -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -21,7 +20,6 @@
     .legend .tour i{background:var(--tour)}
     .legend .food i{background:var(--food)}
     .legend .route i{width:16px;height:3px;border-radius:2px;background:var(--route)}
-
     .ol-popup{position:absolute;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.3);padding:10px 12px;border-radius:8px;border:1px solid #ccc;min-width:240px;z-index:1000}
     .ol-popup:after,.ol-popup:before{top:100%;border:solid transparent;content:"";height:0;width:0;position:absolute;pointer-events:none}
     .ol-popup:after{border-top-color:#fff;border-width:10px;left:48px;margin-left:-10px}
@@ -71,17 +69,15 @@
       const coords3857 = coordsLonLat.map(([lon,lat])=>ol.proj.fromLonLat([lon,lat]));
       if(routeLayer) map.removeLayer(routeLayer);
       routeLayer = new ol.layer.Vector({
-        source: new ol.source.Vector({
-          features: [ new ol.Feature({ geometry: new ol.geom.LineString(coords3857) }) ]
-        }), style: routeStyle, zIndex: 10
+        source: new ol.source.Vector({ features: [ new ol.Feature({ geometry: new ol.geom.LineString(coords3857) }) ] }),
+        style: routeStyle, zIndex: 10
       });
       map.addLayer(routeLayer);
       map.getView().fit(new ol.geom.LineString(coords3857), { padding:[50,50,50,50], maxZoom: 12 });
     }
 
     function addSpots(spots){
-      tourLayer.getSource().clear();
-      foodLayer.getSource().clear();
+      tourLayer.getSource().clear(); foodLayer.getSource().clear();
       if(!Array.isArray(spots)) return;
       for(const s of spots){
         const lon = parseFloat(s.mapx), lat = parseFloat(s.mapy);
@@ -121,7 +117,7 @@
       map.forEachFeatureAtPixel(evt.pixel, f=>{ feature=f; return true; }, {hitTolerance: 8});
       if(!feature){ overlay.setPosition(undefined); return; }
       const props = feature.getProperties();
-      if(!props.title){ overlay.setPosition(undefined); return; }
+      if(!props.title && !props.addr1){ overlay.setPosition(undefined); return; }
       popupEl.innerHTML = popupHTML(props);
       overlay.setPosition(feature.getGeometry().getCoordinates());
       popupEl.style.display = 'block';
@@ -144,17 +140,18 @@
         const coords = feat.geometry.coordinates; // [lon,lat]*
         drawRoute(coords);
 
-        // 요약 표시
-        const dist = (data.summary && data.summary.distance) ? data.summary.distance : (feat.properties?.summary?.distance || 0);
-        const dur  = (data.summary && data.summary.duration) ? data.summary.duration : (feat.properties?.summary?.duration || 0);
+        // 요약
+        const dist = (data.summary?.distance) ?? (feat.properties?.summary?.distance ?? 0);
+        const dur  = (data.summary?.duration) ?? (feat.properties?.summary?.duration ?? 0);
         const tourN = (data.spots_grouped?.tour || []).length;
         const foodN = (data.spots_grouped?.food || []).length;
-        document.getElementById('summary').textContent = `거리 ${fmtDist(dist)} · 예상 ${fmtDur(dur)} · 관광지 ${tourN} · 맛집 ${foodN} (총 ${tourN+foodN})`;
+        document.getElementById('summary').textContent =
+          `거리 ${fmtDist(dist)} · 예상 ${fmtDur(dur)} · 관광지 ${tourN} · 맛집 ${foodN} (총 ${tourN+foodN})`;
 
         // 마커
         addSpots(Array.isArray(data.spots) ? data.spots : []);
 
-        // 진단(필요시 콘솔확인)
+        // 콘솔에서 TourAPI 상태 확인
         if(data.tourapi_probe) console.log('TourAPI probe:', data.tourapi_probe);
 
       }catch(err){
