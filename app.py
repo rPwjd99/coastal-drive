@@ -1,5 +1,5 @@
 # app.py
-# Render 실행 권장:
+# Render 권장 실행:
 #   gunicorn -w 1 -k gthread --threads 8 --timeout 120 --keep-alive 30 -b 0.0.0.0:$PORT app:app
 
 import os
@@ -15,7 +15,7 @@ import requests
 from flask import Flask, request, jsonify, send_from_directory, redirect, Response
 from flask_cors import CORS
 
-# .env (선택)
+# .env 사용(선택)
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -64,7 +64,7 @@ def healthz():
 # ------------------------ 공통 유틸 ------------------------
 def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6371.0
-    dlat = math.radians(lat2 - lat1); dlon = math.radians(lat2 - lon1)
+    dlat = math.radians(lat2 - lat1); dlon = math.radians(lon2 - lon1)
     a = math.sin(dlat/2.0)**2 + math.cos(math.radians(lat1))*math.cos(math.radians(lat2))*math.sin(dlon/2.0)**2
     return 2.0 * R * math.asin(math.sqrt(a))
 
@@ -187,7 +187,7 @@ def get_ors_route_multi(points: List[Tuple[float, float]]) -> Tuple[Dict[str, An
     except Exception as e:
         return {"error": str(e)}, 500
 
-# ------------------------ TourAPI (코리도 30km + 키 디코딩 우선) ------------------------
+# ------------------------ TourAPI (키 디코딩 우선 + http/https 폴백) ------------------------
 BASE_TOURS = [
     "https://apis.data.go.kr/B551011/KorService1",
     "http://apis.data.go.kr/B551011/KorService1",  # https 실패 시 폴백
@@ -204,9 +204,9 @@ def _tourapi_key_variants_ordered() -> List[Tuple[str, str]]:
     def add(lbl,val):
         if val in seen: return
         seen.add(val); variants.append((lbl,val))
-    add("decoded", dec)
+    add("decoded", dec)       # 가장 먼저
     add("raw", TOURAPI_KEY_RAW)
-    add("encoded", enc)
+    add("encoded", enc)       # 최후 수단
     return variants
 
 def _tourapi_request(path: str, params: Dict[str, Any]) -> Tuple[Dict[str, Any], int, str, str, List[Dict[str, Any]]]:
@@ -241,7 +241,7 @@ def _tourapi_request(path: str, params: Dict[str, Any]) -> Tuple[Dict[str, Any],
 def _tourapi_location_based(lon: float, lat: float, content_type_id: int, radius_m: int = 20000, rows: int = 30) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     params = {
         "mapX": lon, "mapY": lat,
-        "radius": min(int(radius_m), 20000),  # API 제한
+        "radius": min(int(radius_m), 20000),  # API 최대치
         "listYN": "Y", "arrange": "E",
         "numOfRows": rows, "pageNo": 1,
         "MobileOS": "ETC", "MobileApp": "CoastalDrive",
@@ -416,7 +416,7 @@ def _handle_route():
     if not start or not end:
         return jsonify({"error": "주소 변환 실패"}), 400
 
-    # 경유지 자동 선택 (beach_coords가 없으면 생략)
+    # 경유지 자동 선택 (beach_coords가 있으면 사용)
     way_sel = find_waypoints_along_direction(start, end, max_n=max_wps) if beach_coords else []
 
     # ORS 라우팅
@@ -551,6 +551,6 @@ def debug_tourapi_around():
     return jsonify({"ok": True, "point": {"mapX": mapX, "mapY": mapY}, "result": out})
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "10000"))  # Render는 PORT 자동 주입
+    port = int(os.environ.get("PORT", "10000"))  # Render가 PORT 주입
     log.info(f"Starting on 0.0.0.0:{port}")
     app.run(host="0.0.0.0", port=port)
