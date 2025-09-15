@@ -142,9 +142,10 @@
       routeCoordsLonLat = coordsLonLat.slice();
       const coords3857 = coordsLonLat.map(([lon,lat])=>ol.proj.fromLonLat([lon,lat]));
       if(routeLayer) map.removeLayer(routeLayer);
-      routeFeature = new ol.Feature({ geometry: new ol.geom.LineString(coords3857), kind:"route", route_meta: meta });
+      const feat = new ol.Feature({ geometry: new ol.geom.LineString(coords3857), kind:"route", route_meta: meta });
+      routeFeature = feat;
       routeLayer = new ol.layer.Vector({
-        source: new ol.source.Vector({ features: [ routeFeature ] }),
+        source: new ol.source.Vector({ features: [ feat ] }),
         style: routeStyle, zIndex: 10
       });
       map.addLayer(routeLayer);
@@ -245,6 +246,8 @@
       }
     });
 
+    function setLoading(on){ document.getElementById('loading').style.display = on ? 'flex' : 'none'; }
+
     // ====== 경로 계산 ======
     async function calcRoute(){
       const start = document.getElementById('start').value.trim();
@@ -272,11 +275,14 @@
           corridor_km: data.corridor_km || 30
         };
         drawRouteAndSetMeta(coords, meta);
-        setSummary(data.route_summary || feat.properties?.summary || {}, data.spot_counts || {tour:(data.spots_grouped?.tour||[]).length, food:(data.spots_grouped?.food||[]).length, all:(data.spots||[]).length});
+        setSummary(data.route_summary || feat.properties?.summary || {},
+                   data.spot_counts || {tour:(data.spots_grouped?.tour||[]).length, food:(data.spots_grouped?.food||[]).length, all:(data.spots||[]).length});
 
         clearSpots();
         (data.spots || []).forEach(addSpotFeature);
-        addWaypointsAndSE(data.waypoints_used || [], startLL ? [startLL[0], startLL[1]] : null, endLL ? [endLL[0], endLL[1]] : null);
+        addWaypointsAndSE(data.waypoints_used || [],
+                          startLL ? [startLL[0], startLL[1]] : null,
+                          endLL   ? [endLL[0],   endLL[1]]   : null);
 
         if(((data.spot_counts?.all) ?? 0) === 0){
           showDiag({message:"TourAPI 수집 결과 0건", tourapi_debug:data.tourapi_debug || {}}, "진단: TourAPI 수집 0건");
