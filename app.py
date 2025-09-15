@@ -2,7 +2,7 @@
 # 실행 예:
 #   Windows: set PORT=10000 && python app.py
 #   macOS/Linux: export PORT=10000 && python app.py
-#   Render: gunicorn -w 1 -k gthread --threads 8 --timeout 120 --keep-alive 30 -b 0.0.0.0:$PORT app:app
+#   Render(권장): gunicorn -w 1 -k gthread --threads 8 --timeout 120 --keep-alive 30 -b 0.0.0.0:$PORT app:app
 
 import os
 import math
@@ -63,7 +63,7 @@ def favicon():
 def healthz():
     return jsonify({"ok": True})
 
-# ------------------------ 유틸 ------------------------
+# ------------------------ 공통 유틸 ------------------------
 def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6371.0
     dlat = math.radians(lat2 - lat1); dlon = math.radians(lat2 - lon1)
@@ -114,7 +114,7 @@ def reverse_geocode_google(lat: float, lon: float) -> str:
     except Exception:
         return ""
 
-# ------------------------ 경유지 선택(해변) ------------------------
+# ------------------------ 경유지(해변) 자동 선택 ------------------------
 def _ll_to_xy_km(lat: float, lon: float, lat0: float, lon0: float) -> Tuple[float, float]:
     x = (lon - lon0) * math.cos(math.radians(lat0)) * 111.32
     y = (lat - lat0) * 110.57
@@ -189,12 +189,12 @@ def get_ors_route_multi(points: List[Tuple[float, float]]) -> Tuple[Dict[str, An
     except Exception as e:
         return {"error": str(e)}, 500
 
-# ------------------------ TourAPI (코리도 30km 수집 + 키 호환) ------------------------
+# ------------------------ TourAPI (코리도 30km + 키 자동호환) ------------------------
 BASE_TOUR = "https://apis.data.go.kr/B551011/KorService1"
 
 def _tourapi_key_variants() -> List[Tuple[str, str]]:
     """입력된 키를 raw/decoded/encoded 세 가지 버전으로 시도"""
-    raw = TOURAPI_KEY_RAW.strip()
+    raw = (TOURAPI_KEY_RAW or "").strip()
     variants: List[Tuple[str,str]] = []
     seen = set()
 
@@ -204,18 +204,14 @@ def _tourapi_key_variants() -> List[Tuple[str, str]]:
         seen.add(val); variants.append((lbl, val))
 
     add("raw", raw)
-    # 이미 %가 들어있는 경우: 디코딩 버전도 시도
     try:
         dec = urllib.parse.unquote(raw)
-        if dec != raw:
-            add("decoded", dec)
+        if dec != raw: add("decoded", dec)
     except Exception:
         pass
-    # 인코딩 버전(이미 인코딩이면 동일할 수 있음)
     try:
         enc = urllib.parse.quote(raw, safe="")
-        if enc != raw:
-            add("encoded", enc)
+        if enc != raw: add("encoded", enc)
     except Exception:
         pass
     return variants or [("empty", "")]
@@ -224,21 +220,20 @@ def _tourapi_request(path: str, params: Dict[str, Any]) -> Tuple[Dict[str, Any],
     """키 여러 버전으로 순차 시도. (data, status, variant_label, result_code)"""
     last_data, last_status, used_label, rcode = {}, 500, "", ""
     for label, key in _tourapi_key_variants():
-        p = dict(params)
-        p["serviceKey"] = key
+        p = dict(params); p["serviceKey"] = key
         try:
             r = requests.get(f"{BASE_TOUR}/{path}", params=p, timeout=10)
-            data = r.json() if r.headers.get("content-type","").lower().startswith("application/json") else {}
-            # 표준 헤더 파싱
+            ctype = (r.headers.get("content-type") or "").lower()
+            data = r.json() if "application/json" in ctype else {}
             header = (data.get("response", {}) or {}).get("header", {}) or {}
             rcode = str(header.get("resultCode") or "")
             if r.status_code == 200 and (rcode == "0000" or "items" in (data.get("response", {}).get("body", {}) or {})):
                 return data, r.status_code, label, rcode or "0000"
-            # 실패시 다음 키로
+            log.warning("TourAPI fail [%s]: HTTP %s, resultCode=%s", label, r.status_code, rcode)
             last_data, last_status, used_label = data, r.status_code, label
         except Exception as e:
+            log.warning("TourAPI exception [%s]: %s", label, e)
             last_data, last_status, used_label = {"error": str(e)}, 500, label
-    # 전부 실패
     return last_data, last_status, used_label, rcode
 
 def _tourapi_location_based(lon: float, lat: float, content_type_id: int, radius_m: int = 20000, rows: int = 30) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
@@ -256,9 +251,7 @@ def _tourapi_location_based(lon: float, lat: float, content_type_id: int, radius
         return [], meta
     try:
         items = (data.get("response", {}).get("body", {}).get("items", {}).get("item", []) or [])
-        if isinstance(items, dict):
-            items = [items]
-        return items, meta
+        return (items if isinstance(items, list) else [items]), meta
     except Exception:
         return [], meta
 
@@ -276,7 +269,6 @@ def _tourapi_detail_intro(content_id: str, content_type_id: int) -> Dict[str, An
     if status != 200: return {}
     try:
         items = (data.get("response", {}).get("body", {}).get("items", {}).get("item", []) or [])
-        if isinstance(items, dict): items = [items]
         return items[0] if items else {}
     except Exception:
         return {}
@@ -298,7 +290,6 @@ def _tourapi_detail_common(content_id: str) -> Dict[str, Any]:
     if status != 200: return {}
     try:
         items = (data.get("response", {}).get("body", {}).get("items", {}).get("item", []) or [])
-        if isinstance(items, dict): items = [items]
         return items[0] if items else {}
     except Exception:
         return {}
@@ -351,7 +342,7 @@ def _sample_indices_by_distance(coords: List[List[float]], interval_km: float, m
     return sorted(set(idxs))
 
 def search_tour_items_along_route(geojson: Dict[str, Any], corridor_km: float = 30.0, limit_each: int = 60) -> Tuple[Dict[str, List[Dict[str, Any]]], Dict[str, Any]]:
-    """경로 주변 30km: TourAPI 반경 20km 다중 호출로 합집합 구성. meta에 키형태/에러 기록."""
+    """경로 주변 30km: 반경 20km × 촘촘 샘플링으로 합집합 구성. debug_meta에 호출 결과 기록."""
     try:
         coords = geojson["features"][0]["geometry"]["coordinates"]
     except Exception:
@@ -404,7 +395,7 @@ def search_tour_items_along_route(geojson: Dict[str, Any], corridor_km: float = 
 
 # ------------------------ 라우팅 핸들러 ------------------------
 def _handle_route():
-    if not ORS_API_KEY:  return jsonify({"error": "ORS_API_KEY not set"}), 500
+    if not ORS_API_KEY:      return jsonify({"error": "ORS_API_KEY not set"}), 500
     if not TOURAPI_KEY_RAW:  return jsonify({"error": "TOURAPI_KEY not set"}), 500
 
     data = _coerce_json()
@@ -461,11 +452,11 @@ def _handle_route():
         "route": route_data,
         "route_summary": route_summary,
         "waypoints_used": wp_objs,
-        "spots": spots["all"],              # 팝업에 필요
+        "spots": spots["all"],              # 팝업용
         "spots_grouped": {"tour": spots["tour"], "food": spots["food"]},
         "spot_counts": counts,
         "corridor_km": corridor_km,
-        "tourapi_debug": debug_meta,         # ← 프론트에서 문제시 바로 보여줄 수 있게
+        "tourapi_debug": debug_meta,        # ← 원인 파악용
     }
     if wp_objs:
         resp["waypoint"] = {k: wp_objs[0][k] for k in ("name","lat","lon","address")}
@@ -524,7 +515,7 @@ h1{{margin:0 0 8px}} .row{{margin:6px 0}} img{{max-width:640px;height:auto;borde
 </html>"""
     return Response(html, mimetype="text/html")
 
-# ------------------------ 디버그/진단 엔드포인트 ------------------------
+# ------------------------ 디버그/진단 ------------------------
 @app.route("/debug/env")
 def debug_env():
     return jsonify({
@@ -536,8 +527,7 @@ def debug_env():
 
 @app.route("/debug/tourapi/ping")
 def debug_tourapi_ping():
-    """서울 시청 좌표 기준으로 TourAPI 호출 테스트"""
-    mapX, mapY = 126.9780, 37.5665
+    mapX, mapY = 126.9780, 37.5665  # 서울시청
     out = {}
     for ctype, label in [(12,"tour"), (39,"food")]:
         items, meta = _tourapi_location_based(mapX, mapY, content_type_id=ctype, radius_m=5000, rows=10)
@@ -546,7 +536,6 @@ def debug_tourapi_ping():
 
 @app.route("/debug/tourapi/around")
 def debug_tourapi_around():
-    """임의 좌표에서 TourAPI 호출 테스트: /debug/tourapi/around?mapX=..&mapY=.."""
     try:
         mapX = float(request.args.get("mapX", ""))
         mapY = float(request.args.get("mapY", ""))
@@ -559,6 +548,7 @@ def debug_tourapi_around():
     return jsonify({"ok": True, "point": {"mapX": mapX, "mapY": mapY}, "result": out})
 
 if __name__ == "__main__":
+    # Render에서는 PORT를 직접 주입하므로, 로컬이 아니면 PORT 설정을 추가하지 마세요.
     port = int(os.environ.get("PORT", "10000"))
     log.info(f"Starting on 0.0.0.0:{port}")
     app.run(host="0.0.0.0", port=port)
