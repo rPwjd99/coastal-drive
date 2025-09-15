@@ -1,8 +1,18 @@
+# Web app
 Flask==3.0.3
-flask-cors==5.0.1
+Werkzeug==3.0.3
+Jinja2==3.1.4
+itsdangerous==2.2.0
+click==8.1.7
+
+# HTTP
 requests==2.32.3
-python-dotenv==1.1.1
+
+# ENV
+python-dotenv==1.0.1
+
+# CORS (도메인 분리 배포 시에만 필요, 같은 도메인이면 없어도 됨)
+flask-cors==5.0.1
+
+# Prod server (Render)
 gunicorn==21.2.0
-
-
-
