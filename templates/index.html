@@ -1,4 +1,3 @@
-<!-- index.html -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -27,9 +26,7 @@
     .legend .wp i{background:var(--wp)}
     .legend .se i{background:linear-gradient(90deg,var(--start),var(--end))}
     .summary{font-size:13px;color:#333;margin-left:6px;min-height:1em}
-    /* Overlay loading */
     #loading{position:fixed;inset:0;background:rgba(255,255,255,.6);display:none;align-items:center;justify-content:center;font-weight:600;color:#333;z-index:9999}
-    /* Popup (feature click) */
     .ol-popup{position:absolute;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.3);padding:10px 12px;border-radius:8px;border:1px solid #ccc;min-width:240px;z-index:1000}
     .ol-popup:after,.ol-popup:before{top:100%;border:solid transparent;content:"";height:0;width:0;position:absolute;pointer-events:none}
     .ol-popup:after{border-top-color:#fff;border-width:10px;left:48px;margin-left:-10px}
@@ -37,7 +34,6 @@
     .popup-title{font-weight:600;margin-bottom:6px}
     .popup-row{font-size:13px;color:#333;margin:3px 0}
     .popup-img{width:100%;max-height:160px;object-fit:cover;border-radius:6px;margin:6px 0;display:none}
-    /* Hover overlay for route */
     .hover-card{position:absolute;background:#fff;border:1px solid #ccc;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,.25);padding:8px 10px;font-size:13px;z-index:1100}
     .error{color:#c62828}
   </style>
@@ -70,7 +66,7 @@
   <div id="loading">경로 계산 중...</div>
 
   <script>
-    const API_BASE = ""; // 같은 도메인에서 서빙이면 빈 문자열 유지
+    const API_BASE = ""; // 같은 도메인 배포면 빈 문자열 유지
 
     // ===== 유틸 =====
     function escapeHtml(t){return (t||"").toString().replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
@@ -80,9 +76,9 @@
 
     async function safeFetchJSON(url, options){
       const res = await fetch(url, options);
-      const text = await res.text();   // 먼저 생텍스트로
+      const text = await res.text();
       let data = null;
-      try { data = JSON.parse(text); } catch(e) { /* JSON 아님(HTML 등) */ }
+      try { data = JSON.parse(text); } catch(e) {}
       if(!res.ok){
         const msg = (data && (data.error||data.message)) ? (data.error||data.message) : (text || `HTTP ${res.status}`);
         throw new Error(`[${res.status}] ${msg.substring(0,500)}`);
@@ -107,11 +103,11 @@
 
     // 스타일
     const routeStyle = new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#0066ff', width: 4 }) });
-    const tourStyle  = new ol.style.Style({ image: new ol.style.Circle({ radius: 6, fill: new ol.style.Fill({ color: '#1976d2' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
-    const foodStyle  = new ol.style.Style({ image: new ol.style.Circle({ radius: 6, fill: new ol.style.Fill({ color: '#388e3c' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
-    const wpStyle    = new ol.style.Style({ image: new ol.style.RegularShape({ points: 5, radius: 9, fill: new ol.style.Fill({ color:'#ff6f00' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
-    const startStyle = new ol.style.Style({ image: new ol.style.RegularShape({ points: 4, radius: 7, angle: Math.PI/4, fill: new ol.style.Fill({ color:'#6a1b9a' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
-    const endStyle   = new ol.style.Style({ image: new ol.style.RegularShape({ points: 3, radius: 8, rotation: Math.PI, fill: new ol.style.Fill({ color:'#c62828' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
+    const tourStyle  = new ol.style.Style({ image: new ol.style.Circle({ radius: 7, fill: new ol.style.Fill({ color: '#1976d2' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
+    const foodStyle  = new ol.style.Style({ image: new ol.style.Circle({ radius: 7, fill: new ol.style.Fill({ color: '#388e3c' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
+    const wpStyle    = new ol.style.Style({ image: new ol.style.RegularShape({ points: 5, radius: 10, fill: new ol.style.Fill({ color:'#ff6f00' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
+    const startStyle = new ol.style.Style({ image: new ol.style.RegularShape({ points: 4, radius: 8, angle: Math.PI/4, fill: new ol.style.Fill({ color:'#6a1b9a' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
+    const endStyle   = new ol.style.Style({ image: new ol.style.RegularShape({ points: 3, radius: 9, rotation: Math.PI, fill: new ol.style.Fill({ color:'#c62828' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
     tourLayer.setStyle(tourStyle); foodLayer.setStyle(foodStyle); wpLayer.setStyle(wpStyle);
 
     function drawRoute(coordsLonLat){
@@ -137,6 +133,8 @@
         const feat = new ol.Feature({ geometry: new ol.geom.Point(ol.proj.fromLonLat([lon,lat])), ...s });
         (s.category==='food' ? foodLayer : tourLayer).getSource().addFeature(feat);
       }
+      // 콘솔에서 확인용
+      console.log("[addSpots] 관광/맛집 추가:", items.length);
     }
 
     function addWaypoints(wps, startCoord, endCoord){
@@ -170,7 +168,7 @@
       }
     }
 
-    // ===== 팝업(마커 클릭) =====
+    // ===== 팝업(마커 클릭 전용: Point 우선) =====
     const popupEl = document.createElement('div');
     popupEl.className = 'ol-popup';
     const overlay = new ol.Overlay({ element: popupEl, autoPan: { animation: { duration: 250 } } });
@@ -180,12 +178,12 @@
       const catMap = {food:'맛집', tour:'관광지', waypoint:'경유지', start:'출발지', end:'도착지'};
       const cat = catMap[p.category] || '';
       const title = escapeHtml(p.title || '정보');
-      const addr = escapeHtml(p.addr1 || '');
-      const tel  = escapeHtml(p.tel || '');
-      const hours= escapeHtml(p.openhour || '');
-      const rest = escapeHtml(p.restday || '');
-      const park = escapeHtml(p.parking_info || '');
-      const img  = (p.firstimage && typeof p.firstimage==='string') ? p.firstimage : '';
+      const addr  = escapeHtml(p.addr1 || '');
+      const tel   = escapeHtml(p.tel || '');
+      const hours = escapeHtml(p.openhour || '');
+      const rest  = escapeHtml(p.restday || '');
+      const park  = escapeHtml(p.parking_info || '');
+      const img   = (p.firstimage && typeof p.firstimage==='string') ? p.firstimage : '';
       const lines=[];
       if(addr) lines.push(`<div class="popup-row">${addr}</div>`);
       if(tel)  lines.push(`<div class="popup-row">전화: ${tel}</div>`);
@@ -200,18 +198,36 @@
       `;
     }
 
+    // 클릭 시, 같은 픽셀의 모든 피처를 모아 **Point 타입만** 우선 선택
     map.on('singleclick', (evt)=>{
-      let feature=null;
-      map.forEachFeatureAtPixel(evt.pixel, f=>{ feature=f; return true; });
-      if(!feature){ overlay.setPosition(undefined); return; }
-      const props = feature.getProperties();
-      const geom = feature.getGeometry();
-      if(!geom || typeof geom.getCoordinates!=='function'){ overlay.setPosition(undefined); return; }
+      overlay.setPosition(undefined);
+      const hits = [];
+      map.forEachFeatureAtPixel(
+        evt.pixel,
+        (feature, layer)=>{ hits.push({feature, layer}); },
+        { hitTolerance: 8 }
+      );
+      const pointHit = hits.find(h => {
+        const g = h.feature.getGeometry && h.feature.getGeometry();
+        return g && g.getType && g.getType() === 'Point';
+      });
+      if(!pointHit) return; // 포인트가 없으면 팝업 없음 (라인 클릭은 Hover 카드로 충분)
+      const props = pointHit.feature.getProperties();
+      const coord = pointHit.feature.getGeometry().getCoordinates();
       popupEl.innerHTML = makePopupHTML(props);
-      overlay.setPosition(geom.getCoordinates());
+      overlay.setPosition(coord);
     });
 
-    // ===== 경로 Hover 카드 =====
+    // 포인터 모양: 포인트 위에서만 pointer
+    map.on('pointermove', (evt)=>{
+      const hit = map.hasFeatureAtPixel(
+        evt.pixel,
+        { layerFilter: l => (l===tourLayer || l===foodLayer || l===wpLayer || l===seLayer), hitTolerance: 6 }
+      );
+      map.getTargetElement().style.cursor = hit ? 'pointer' : '';
+    });
+
+    // ===== 경로 Hover 카드 (거리·시간·개수) =====
     const hoverCard = document.createElement('div');
     hoverCard.className = 'hover-card';
     const hoverOverlay = new ol.Overlay({ element: hoverCard, offset: [12,12] });
@@ -221,9 +237,9 @@
 
     map.on('pointermove', (evt)=>{
       if(!routeLayer || !lastSummary){ hoverOverlay.setPosition(undefined); return; }
-      let hit = false;
-      map.forEachFeatureAtPixel(evt.pixel, (f,l)=>{ if(l===routeLayer) { hit=true; return true; } }, {hitTolerance: 10});
-      if(hit){
+      let onRoute = false;
+      map.forEachFeatureAtPixel(evt.pixel, (f,l)=>{ if(l===routeLayer){ onRoute = true; return true; } }, {hitTolerance: 10});
+      if(onRoute){
         hoverCard.innerHTML = `
           <div><b>경로 요약</b></div>
           <div>거리 ${fmtDist(lastSummary.distance||NaN)} · 예상 ${fmtDur(lastSummary.duration||NaN)}</div>
@@ -264,7 +280,6 @@
         const coords = feat.geometry.coordinates;   // [lon,lat] 배열
         drawRoute(coords);
 
-        // 요약 표시 (거리/시간 + 개수)
         const summary = (feat.properties && feat.properties.summary) ? feat.properties.summary : null;
         lastSummary = summary || null;
         lastCounts = data.counts || {tour:0,food:0,all:0};
@@ -273,12 +288,12 @@
           const dur  = fmtDur(summary.duration || NaN);
           document.getElementById('summary').textContent =
             `거리 ${dist} · 예상 ${dur} · 관광지 ${lastCounts.tour} · 맛집 ${lastCounts.food} (총 ${lastCounts.all})`;
+        }else{
+          document.getElementById('summary').textContent = `관광지 ${lastCounts.tour} · 맛집 ${lastCounts.food} (총 ${lastCounts.all})`;
         }
 
-        // 스팟
         addSpots(Array.isArray(data.spots) ? data.spots : []);
 
-        // 경유지 + 출발/도착 마커 (라인의 첫/끝 좌표 사용)
         const startLL = coords.length ? coords[0] : null;
         const endLL   = coords.length ? coords[coords.length-1] : null;
         addWaypoints(data.waypoints_used || [], startLL ? [startLL[0], startLL[1]] : null, endLL ? [endLL[0], endLL[1]] : null);
@@ -286,11 +301,6 @@
       }catch(err){
         console.error(err);
         document.getElementById('summary').innerHTML = `<span class="error">요청 실패: ${escapeHtml(err.message||String(err))}</span>`;
-        // 헬스 체크도 안내
-        try{
-          const h = await safeFetchJSON(`${API_BASE}/healthz`, {method:'GET'});
-          console.log("healthz:", h);
-        }catch(e){ console.warn("healthz fail", e); }
       }finally{
         setLoading(false);
       }
