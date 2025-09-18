@@ -71,7 +71,7 @@
   <div id="loading">경로 계산 중...</div>
 
   <script>
-    const API_BASE = ""; // 같은 도메인에서 서빙 시 빈 문자열
+    const API_BASE = ""; // 같은 도메인 서빙이면 빈 문자열
 
     // ===== 지도 & 레이어 =====
     const map = new ol.Map({
@@ -98,7 +98,6 @@
     foodLayer.setStyle(foodStyle);
     wpLayer.setStyle(wpStyle);
 
-    // ===== 유틸 =====
     function escapeHtml(t){return (t||"").toString().replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
     function fmtDist(m){ if(!isFinite(m)) return ""; if(m>=1000) return (m/1000).toFixed(1)+" km"; return Math.round(m)+" m"; }
     function fmtDur(s){ if(!isFinite(s)) return ""; const h=Math.floor(s/3600), m=Math.round((s%3600)/60); return (h?`${h}시간 `:"")+`${m}분`; }
@@ -150,23 +149,11 @@
       `;
     }
 
-    function mergeSpotsFromResponse(data){
-      if (Array.isArray(data.spots)) return data.spots;
-      if (data.spots_grouped && (Array.isArray(data.spots_grouped.tour) || Array.isArray(data.spots_grouped.food))){
-        const t = Array.isArray(data.spots_grouped.tour) ? data.spots_grouped.tour : [];
-        const f = Array.isArray(data.spots_grouped.food) ? data.spots_grouped.food : [];
-        t.forEach(x=>{ if(!x.category) x.category='tour'; });
-        f.forEach(x=>{ if(!x.category) x.category='food'; });
-        return [...t, ...f];
-      }
-      return [];
-    }
-
     function addSpots(items){
       tourLayer.getSource().clear();
       foodLayer.getSource().clear();
       let cntT=0, cntF=0;
-      for(const s of items){
+      for(const s of (items||[])){
         const lon = parseFloat(s.mapx), lat = parseFloat(s.mapy);
         if(!isFinite(lon)||!isFinite(lat)) continue;
         const feat = new ol.Feature({ geometry: new ol.geom.Point(ol.proj.fromLonLat([lon,lat])), ...s });
@@ -220,7 +207,7 @@
         if (f && !f.get('isRoute') && (f.get('title') || f.get('category') || f.get('contentid'))) {
           feature = f; return true;
         }
-      }, { hitTolerance: 8 });
+      }, { hitTolerance: 10 });
       if (!feature) { spotOverlay.setPosition(undefined); return; }
       const props = feature.getProperties();
       const coord = feature.getGeometry().getCoordinates();
@@ -228,12 +215,12 @@
       spotOverlay.setPosition(coord);
     });
 
-    // 경로 라인 호버 요약 팝업
+    // 라인 호버 요약 팝업
     map.on('pointermove', (evt)=>{
       let routeFeat = null;
       map.forEachFeatureAtPixel(evt.pixel, f => {
         if (f && f.get('isRoute')) { routeFeat = f; return true; }
-      }, { hitTolerance: 10 });
+      }, { hitTolerance: 12 });
       if (!routeFeat) { routeOverlay.setPosition(undefined); return; }
       const summary = routeFeat.get('summary') || null;
       const counts  = routeFeat.get('counts')  || {tour:0,food:0,total:0};
@@ -241,7 +228,7 @@
       routeOverlay.setPosition(evt.coordinate);
     });
 
-    // 레이어 토글
+    // 토글
     document.getElementById('showTour').addEventListener('change',e=>tourLayer.setVisible(e.target.checked));
     document.getElementById('showFood').addEventListener('change',e=>foodLayer.setVisible(e.target.checked));
     document.getElementById('showWP').addEventListener('change',e=>wpLayer.setVisible(e.target.checked));
@@ -261,7 +248,7 @@
       map.getView().fit(new ol.geom.LineString(coords3857), { padding:[50,50,50,50], maxZoom: 12 });
     }
 
-    // 입력 Enter 동작
+    // 입력 Enter 실행
     ['start','end'].forEach(id=>{
       document.getElementById(id).addEventListener('keydown',e=>{
         if(e.key==='Enter') document.getElementById('btnRoute').click();
@@ -273,35 +260,33 @@
       const end   = document.getElementById('end').value.trim();
       const max_waypoints = document.getElementById('maxwps').value;
       if(!start || !end){ alert('출발지와 도착지를 모두 입력하세요.'); return; }
-      document.getElementById('summary').textContent='';
       setLoading(true);
+      document.getElementById('summary').textContent='';
       try{
         const res = await fetch(`${API_BASE}/route`,{
           method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ start, end, max_waypoints })
+          body: JSON.stringify({ start, end, max_waypoints, corridor_km: 60 })
         });
-        // 네트워크 이슈/502 등 HTML 응답 방지
-        if(!res.ok){
-          const txt = await res.text().catch(()=> '');
-          throw new Error(`HTTP ${res.status} ${res.statusText} ${txt.slice(0,120)}`);
-        }
-        const data = await res.json();
-
-        if(!data.route) throw new Error(data.error || '경로 실패');
+        // JSON 파싱 안전 처리
+        const text = await res.text();
+        let data;
+        try { data = JSON.parse(text); } catch(parseErr){ throw new Error('서버 응답이 JSON이 아닙니다'); }
+        if(!res.ok || !data.route) throw new Error(data.error || '경로 요청 실패');
 
         const feat = data.route.features[0];
         const coords = feat.geometry.coordinates;   // [lon,lat]
         const summary = (feat.properties && feat.properties.summary) ? feat.properties.summary : null;
 
-        // 스팟 병합 → 마커
-        const spots = mergeSpotsFromResponse(data);
+        // 스팟
+        const spots = (Array.isArray(data.spots) && data.spots.length) ? data.spots
+                      : (data.spots_grouped ? [...(data.spots_grouped.tour||[]), ...(data.spots_grouped.food||[])] : []);
         const counts = addSpots(spots);
 
-        // 경유지/출발/도착
+        // 경유지 + 출발/도착
         const startLL = coords[0], endLL = coords[coords.length-1];
         addWaypoints(data.waypoints_used || [], startLL ? [startLL[0], startLL[1]] : null, endLL ? [endLL[0], endLL[1]] : null);
 
-        // 경로 라인
+        // 경로 라인(요약용 카운트 포함)
         drawRoute(coords, summary, counts);
 
         // 상단 요약
@@ -311,10 +296,6 @@
         const txt2 = `관광지 ${counts.tour} · 맛집 ${counts.food} (총 ${counts.total})`;
         document.getElementById('summary').textContent = [txt1, txt2].filter(Boolean).join(' · ');
 
-        // 디버그 필요시 콘솔 확인
-        if (data.tourapi_debug && data.tourapi_debug.summary){
-          console.log('[tourapi_debug]', data.tourapi_debug.summary, data.tourapi_debug.calls?.slice(0,5));
-        }
       }catch(err){
         console.error(err);
         alert('경로 요청 실패: ' + (err.message || err));
