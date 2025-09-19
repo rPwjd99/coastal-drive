@@ -10,15 +10,14 @@
     body { margin: 0; font-family: system-ui,-apple-system,Roboto,'Noto Sans KR',sans-serif; }
     #map { width: 100%; height: 90vh; }
     #controls {
-      padding: 10px;
-      background: #f7f7f7;
-      border-bottom: 1px solid #ccc;
+      padding: 10px; background: #f7f7f7; border-bottom: 1px solid #ccc;
       display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
     }
     input { width: 300px; padding: 6px; }
     button { padding: 6px 14px; background: #0078ff; color: #fff; border: none; cursor: pointer; border-radius: 6px; }
     .popup { background: white; padding: 10px; border: 1px solid gray; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.3); min-width: 220px; }
     #summary { margin-left: auto; font-size: 13px; color: #333; }
+    #warn { width: 100%; color: #d00; font-size: 13px; }
   </style>
 </head>
 <body>
@@ -27,6 +26,7 @@
     <input id="end" placeholder="도착지 (예: 속초시청)">
     <button id="go">경로 계산</button>
     <div id="summary"></div>
+    <div id="warn"></div>
   </div>
   <div id="map"></div>
 
@@ -40,13 +40,11 @@
     let routeLayer = null;
     let spotLayer  = null;
 
-    // 클릭 팝업 오버레이 (예전 방식 유지)
     const popupElement = document.createElement("div");
     popupElement.className = "popup";
     const overlay = new ol.Overlay({ element: popupElement, autoPan: true, offset: [0, -10] });
     map.addOverlay(overlay);
 
-    // 지도 클릭 핸들러는 한 번만 등록(중복 방지)
     map.on("click", function (evt) {
       const feature = map.forEachFeatureAtPixel(evt.pixel, f => f);
       if (feature && feature.get("desc")) {
@@ -60,6 +58,7 @@
 
     async function calculateRoute() {
       overlay.setPosition(undefined);
+      document.getElementById('warn').textContent = '';
 
       const start = document.getElementById("start").value.trim();
       const end   = document.getElementById("end").value.trim();
@@ -74,11 +73,10 @@
         const result = await response.json();
         if (!response.ok || !result.route) throw new Error(result.error || "서버 오류 발생");
 
-        // ====== 경로(파란 선) : 20250730 버전 그대로 ======
+        // ====== 경로(파란 선) : 7월 버전 ======
         const coords = result.route.features[0].geometry.coordinates.map(
           ([lon, lat]) => ol.proj.fromLonLat([lon, lat])
         );
-
         if (routeLayer) map.removeLayer(routeLayer);
         routeLayer = new ol.layer.Vector({
           source: new ol.source.Vector({
@@ -88,25 +86,24 @@
         });
         map.addLayer(routeLayer);
         map.getView().fit(new ol.geom.LineString(coords), { padding: [50, 50, 50, 50], maxZoom: 12 });
-        // ================================================
 
-        // 요약(거리/시간) 있으면 표시
+        // 요약(거리/시간)
         try {
           const sum = result.route.features[0].properties && result.route.features[0].properties.summary;
-          const dist = sum && sum.distance; // meters
-          const dur  = sum && sum.duration; // seconds
+          const dist = sum && sum.distance; // m
+          const dur  = sum && sum.duration; // s
           const parts = [];
           if (dist) parts.push(`거리 ${ (dist>=1000 ? (dist/1000).toFixed(1)+' km' : Math.round(dist)+' m') }`);
           if (dur)  parts.push(`예상 ${ (Math.floor(dur/3600)?Math.floor(dur/3600)+'시간 ':'')+Math.round((dur%3600)/60)+'분' }`);
           document.getElementById('summary').textContent = parts.join(' · ');
         } catch(e){}
 
-        // 경유지 안내
+        // 경유지 알림
         if (result.waypoint && result.waypoint.name) {
           alert(`✅ 경유 해안지점: ${result.waypoint.name}\n📍 ${result.waypoint.address || ''}`);
         }
 
-        // ====== 마커 & 팝업 ======
+        // ====== 관광/맛집 마커 & 팝업 ======
         const spots = (result.spots || []); // 관광 + 맛집(혼합)
         if (spotLayer) map.removeLayer(spotLayer);
 
@@ -116,7 +113,7 @@
           const coord = ol.proj.fromLonLat([x, y]);
           const f = new ol.Feature({ geometry: new ol.geom.Point(coord) });
 
-          const image = spot.firstimage ? `<img src="${spot.firstimage}" width="160" style="max-height:140px;object-fit:cover;border-radius:4px;margin:6px 0"><br>` : "";
+          const image = spot.firstimage ? `<img src="${spot.firstimage}" width="180" style="max-height:140px;object-fit:cover;border-radius:4px;margin:6px 0"><br>` : "";
           const link  = spot.contentid ? `<a href="/tour_detail/${spot.contentid}" target="_blank">세부정보 보기</a>` : "";
           const cat   = spot.category === 'food' ? '🍽 맛집' : '📍 관광지';
           const addr  = spot.addr1 || "주소 없음";
@@ -132,7 +129,6 @@
             ${link}
           `);
 
-          // 카테고리 색상
           const color = (spot.category === 'food') ? "#FF3333" : "#0066FF";
           f.setStyle(new ol.style.Style({
             image: new ol.style.Circle({
@@ -149,7 +145,12 @@
 
         console.log(`[addSpots] 총 ${features.length}개`);
         if (features.length === 0) {
-          console.log("경로 주변에서 항목을 찾지 못했습니다. (서버에서 KorService2→1 폴백 및 재시도 적용)");
+          const warn = document.getElementById('warn');
+          if (result.tourapi_error) {
+            warn.textContent = "⚠ " + result.tourapi_error + " (데이터 수집 실패)";
+          } else {
+            warn.textContent = "⚠ 경로 주변에서 항목을 찾지 못했습니다. (서버에서 KorService2→1 폴백 및 재시도 적용)";
+          }
         }
 
       } catch (err) {
