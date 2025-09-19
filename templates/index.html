@@ -7,13 +7,13 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
   <style>
-    html, body { margin: 0; padding: 0; height: 100%; font-family: system-ui, sans-serif; }
+    html, body { margin: 0; padding: 0; height: 100%; font-family: system-ui, -apple-system, Segoe UI, Roboto, 'Noto Sans KR', sans-serif; }
     #controls { padding: 10px; background: #f7f7f7; border-bottom: 1px solid #ddd; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
     #controls input { width: 300px; max-width:40vw; padding: 6px 8px; }
     #controls button { padding: 7px 14px; background:#0078ff; color:#fff; border:0; cursor:pointer; border-radius:4px; }
     #meta { margin-left:auto; font-size:14px; color:#333; }
     #map { width: 100%; height: calc(100% - 56px); }
-    .popup { background: #fff; padding: 10px; border: 1px solid #ccc; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.25); min-width: 220px; max-width: 300px; }
+    .popup { background: #fff; padding: 10px; border: 1px solid #ccc; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.25); min-width: 220px; max-width: 320px; }
     .popup img { width:100%; height:auto; border-radius:4px; margin:6px 0; display:block; }
     .badge { background:#eef4ff; padding:6px 10px; border-radius:20px; border:1px solid #cfe0ff; }
   </style>
@@ -45,6 +45,15 @@
     const popup = new ol.Overlay({ element: popEl, autoPan: true, offset: [0, -10] });
     map.addOverlay(popup);
 
+    function styleLine() {
+      return new ol.style.Style({ stroke: new ol.style.Stroke({ color: "#0066ff", width: 4 }) });
+    }
+    function styleCircle(color) {
+      return new ol.style.Style({
+        image: new ol.style.Circle({ radius: 6, fill: new ol.style.Fill({ color }), stroke: new ol.style.Stroke({ color:"#000", width:1 }) })
+      });
+    }
+
     // 클릭 → 팝업
     map.on("click", (evt) => {
       let found = false;
@@ -66,15 +75,6 @@
       if (!found) popup.setPosition(undefined);
     });
 
-    function styleLine() {
-      return new ol.style.Style({ stroke: new ol.style.Stroke({ color: "#0066ff", width: 4 }) });
-    }
-    function styleCircle(color) {
-      return new ol.style.Style({
-        image: new ol.style.Circle({ radius: 6, fill: new ol.style.Fill({ color }), stroke: new ol.style.Stroke({ color:"#000", width:1 }) })
-      });
-    }
-
     async function calcRoute() {
       routeLayer.getSource().clear();
       markerLayer.getSource().clear();
@@ -94,7 +94,7 @@
         const data = await res.json();
         if (!res.ok || data.error) throw new Error(data.error || "서버 오류");
 
-        // ✅ 경로(파란선) — 예전에 성공했던 방식 그대로
+        // ✅ 경로(파란선) — 예전 성공 방식 그대로
         const features = new ol.format.GeoJSON().readFeatures(data.route, {
           featureProjection: "EPSG:3857"
         });
@@ -104,7 +104,7 @@
           map.getView().fit(features[0].getGeometry(), { padding: [50,50,50,50], maxZoom: 12 });
         }
 
-        // 경유지 (초록)
+        // 경유지(초록)
         if (data.waypoint) {
           const wp = data.waypoint;
           const ft = new ol.Feature({
@@ -123,7 +123,7 @@
           document.getElementById("meta").innerHTML = `<span class="badge">총 ${km}km · 예상 ${m}분</span>`;
         }
 
-        // 관광지(파랑), 맛집(빨강)
+        // 관광지(파랑), 맛집(빨강) 마커
         let added = 0;
         (data.spots || []).forEach(s => {
           const ft = new ol.Feature({
