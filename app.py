@@ -1,312 +1,362 @@
-from flask import Flask, request, jsonify, render_template
-import os, logging
-import requests
+import os, json, math, ssl, logging, time
 from urllib.parse import unquote
+import requests
+from flask import Flask, request, render_template, jsonify
+from flask_cors import CORS
 from dotenv import load_dotenv
-from beaches_coordinates import beach_coords  # { "남애해수욕장": (lon, lat), ... }
-from math import radians, cos, sin, asin, sqrt
+from requests.adapters import HTTPAdapter
+from urllib3.util.ssl_ import create_urllib3_context
 
 load_dotenv()
-app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("coastal-drive")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 환경변수 & 로거
-# ─────────────────────────────────────────────────────────────────────────────
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
-ORS_API_KEY    = os.getenv("ORS_API_KEY", "")
-# Render에 인코딩 값이 들어있는 경우가 많아 unquote로 'Decoding(원문)'으로 자동 복원
-TOURAPI_KEY    = unquote(os.getenv("TOURAPI_KEY", "").strip()) or "e1tU33wjMx2nynKjH8yDBm/S4YNne6B8mpCOWtzMH9TSONF71XG/xAwPqyv1fANpgeOvbPY+Le+gM6cYCnWV8w=="
+app = Flask(__name__, template_folder="templates", static_folder="static")
+CORS(app)
 
-logger = logging.getLogger("coastal-drive")
-logging.basicConfig(level=logging.INFO, format="%(levelname)s:coastal-drive:%(message)s")
+# ---------- ENV ----------
+ORS_KEY = os.getenv("ORS_API_KEY", "").strip()
+GOOGLE_KEY = os.getenv("GOOGLE_API_KEY", "").strip()  # (옵션) Places 폴백 시 사용
+RAW_TOUR_KEY = os.getenv("TOURAPI_KEY", os.getenv("TOUR_API_KEY", "")).strip()
+# TourAPI는 'Decoding' 키(=원문) 사용 권장. 들어온게 % 문자가 있으면 디코드
+TOUR_KEY = unquote(RAW_TOUR_KEY) if "%" in RAW_TOUR_KEY else RAW_TOUR_KEY
 
-# TourAPI 엔드포인트: https 우선, 2 → 1 폴백
+# ---------- TLS 1.2 강제 어댑터 ----------
+# 일부 환경에서 apis.data.go.kr TLS 협상이 깨지는 문제 대응
+CIPHERS = (
+    "ECDHE+AESGCM:ECDHE+CHACHA20:ECDH+AESGCM:"
+    "AES256+EECDH:AES256+EDH:AES128+EECDH:AES128+EDH:!aNULL:!MD5:!3DES"
+)
+
+class TLS12Adapter(HTTPAdapter):
+    def init_poolmanager(self, *args, **kwargs):
+        ctx = create_urllib3_context(ciphers=CIPHERS, ssl_version=ssl.PROTOCOL_TLSv1_2)
+        kwargs["ssl_context"] = ctx
+        return super().init_poolmanager(*args, **kwargs)
+
+    def proxy_manager_for(self, *args, **kwargs):
+        ctx = create_urllib3_context(ciphers=CIPHERS, ssl_version=ssl.PROTOCOL_TLSv1_2)
+        kwargs["ssl_context"] = ctx
+        return super().proxy_manager_for(*args, **kwargs)
+
+sess = requests.Session()
+sess.mount("https://", TLS12Adapter())
+sess.headers.update({"User-Agent": "SeaRoute/1.0 (+https://render.com)"})
+
+# ---------- 상수 ----------
+ORS_URL = "https://api.openrouteservice.org/v2/directions/driving-car"
 TOUR_BASES = [
     "https://apis.data.go.kr/B551011/KorService2",
     "https://apis.data.go.kr/B551011/KorService1",
+    "http://apis.data.go.kr/B551011/KorService2",  # TLS 실패 시 HTTP 폴백
+    "http://apis.data.go.kr/B551011/KorService1",
 ]
+OSM_OVERPASS = "https://overpass-api.de/api/interpreter"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 유틸
-# ─────────────────────────────────────────────────────────────────────────────
-def haversine(lat1, lon1, lat2, lon2):
-    R = 6371.0
-    dlat = radians(lat2 - lat1)
-    dlon = radians(lon2 - lon1)
-    a = sin(dlat/2)**2 + cos(radians(lat1))*cos(radians(lat2))*sin(dlon/2)**2
-    return 2 * R * asin(sqrt(a))
+DEFAULT_VIAS = ["남애해수욕장", "낙산해수욕장", "하조대해수욕장"]
 
-def geocode_google(address):
-    url = "https://maps.googleapis.com/maps/api/geocode/json"
-    params = {"address": address, "key": GOOGLE_API_KEY, "language": "ko", "region": "kr"}
-    r = requests.get(url, params=params, timeout=10)
-    try:
-        loc = r.json()["results"][0]["geometry"]["location"]
-        return float(loc["lat"]), float(loc["lng"])
-    except Exception:
-        return None
+# ---------- 유틸 ----------
+def haversine_km(lon1, lat1, lon2, lat2):
+    R = 6371.0088
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (math.sin(dlat/2)**2 +
+         math.cos(math.radians(lat1))*math.cos(math.radians(lat2))*math.sin(dlon/2)**2)
+    return 2 * R * math.asin(math.sqrt(a))
 
-def reverse_geocode_google(lat, lon):
-    url = "https://maps.googleapis.com/maps/api/geocode/json"
-    params = {"latlng": f"{lat},{lon}", "key": GOOGLE_API_KEY, "language": "ko"}
-    r = requests.get(url, params=params, timeout=10)
-    try:
-        return r.json()["results"][0]["formatted_address"]
-    except Exception:
-        return "주소 불러오기 실패"
+def douglas_peucker(points, tolerance_km=1.0):
+    # points: [(lon,lat), ...]
+    if len(points) < 3:
+        return points
+    # 재귀형 단순 버전
+    def perp_dist(p, a, b):
+        # 거리 근사(직선거리 대비)
+        (x, y), (x1,y1), (x2,y2) = p, a, b
+        if (x1, y1) == (x2, y2):
+            return haversine_km(x, y, x1, y1)
+        # 직선 거리 근사(위경도 직접)
+        # 여기선 간단히 해버사인 max로 근사
+        d = max(haversine_km(x,y,x1,y1), haversine_km(x,y,x2,y2)) / 2
+        return d
+    def rdp(pts):
+        if len(pts) <= 2:
+            return pts
+        a, b = pts[0], pts[-1]
+        idx, dmax = 0, -1
+        for i in range(1, len(pts)-1):
+            d = perp_dist(pts[i], a, b)
+            if d > dmax:
+                idx, dmax = i, d
+        if dmax >= tolerance_km:
+            left = rdp(pts[:idx+1])
+            right = rdp(pts[idx:])
+            return left[:-1] + right
+        else:
+            return [a, b]
+    return rdp(points)
 
-def _tour_call(path, params, timeout=8):
-    """KorService2 → 1 폴백, JSON만 반환"""
-    base_params = {
-        "serviceKey": TOURAPI_KEY,
+def sample_along(points, every_km=7.5):
+    if not points:
+        return []
+    out = [points[0]]
+    acc = 0.0
+    for i in range(1, len(points)):
+        prev = out[-1]
+        cur = points[i]
+        d = haversine_km(prev[0], prev[1], cur[0], cur[1])
+        acc += d
+        if acc >= every_km:
+            out.append(cur)
+            acc = 0.0
+    if out[-1] != points[-1]:
+        out.append(points[-1])
+    return out
+
+# ---------- TourAPI 호출 ----------
+def call_tour_location(mapx, mapy, radius):
+    if not TOUR_KEY:
+        return None, "NO_KEY"
+    params = {
+        "serviceKey": TOUR_KEY,  # Decoding 키 전달 -> requests가 안전 인코딩
         "MobileOS": "ETC",
         "MobileApp": "SeaRoute",
         "_type": "json",
+        "mapX": f"{mapx:.6f}",
+        "mapY": f"{mapy:.6f}",
+        "radius": int(radius),
+        "listYN": "Y",
+        "arrange": "E",  # 거리순
+        "numOfRows": 60,
+        "pageNo": 1,
     }
-    q = {**base_params, **params}
     last_err = None
     for base in TOUR_BASES:
+        url = f"{base}/locationBasedList1"
         try:
-            r = requests.get(f"{base}/{path}", params=q, timeout=timeout)
-            try:
-                return r.json()
-            except Exception as e:
-                last_err = f"non-json {r.status_code}: {str(e)[:80]}"
+            r = sess.get(url, params=params, timeout=6)
+            r.raise_for_status()
+            data = r.json()
+            return data, None
+        except requests.exceptions.SSLError as e:
+            log.warning("[TourAPI] SSL error on %s: %s", base, repr(e))
+            last_err = e
+            continue
+        except ValueError as e:
+            log.warning("[TourAPI] non-JSON: %s (%s)", base, repr(e))
+            last_err = e
+            continue
         except Exception as e:
-            last_err = str(e)
-    logger.warning("[TourAPI] non-JSON or request error: %s", last_err)
-    return {"_error": last_err}
+            log.warning("[TourAPI] error: %s (%s)", base, repr(e))
+            last_err = e
+            continue
 
-def _as_list(x):
-    if not x:
+    # 마지막 카드: 인증서 검증 해제 + HTTP 베이스 재시도(짧게)
+    for base in [b.replace("https://", "http://") for b in TOUR_BASES]:
+        url = f"{base}/locationBasedList1"
+        try:
+            r = sess.get(url, params=params, timeout=5, verify=False)
+            data = r.json()
+            return data, None
+        except Exception as e:
+            last_err = e
+            continue
+
+    return None, f"TourAPI-failed: {last_err}"
+
+def parse_tour_items(raw):
+    if not raw:
         return []
-    return x if isinstance(x, list) else [x]
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 경유지(세종→속초: 남애 포함 3개 고정, 그 외엔 자동)
-# ─────────────────────────────────────────────────────────────────────────────
-def _norm(s): 
-    return str(s).replace(" ", "").lower()
-
-def _find_beach_by_keywords(keywords):
-    """beaches_coordinates.py의 키에서 부분 일치로 찾는다."""
-    keys = list(beach_coords.keys())
-    for kw in keywords:
-        nkw = _norm(kw)
-        for name in keys:
-            if nkw in _norm(name):
-                lon, lat = beach_coords[name]
-                try:
-                    return (name, float(lat), float(lon))  # (name, lat, lon)
-                except Exception:
-                    continue
-    return None
-
-def _is_near(lat, lon, lat0, lon0, km):
-    return haversine(lat, lon, lat0, lon0) <= km
-
-def _force_waypoints_if_sejong_to_sokcho(start, end):
-    """세종(대략 36.5,127.3±30km) → 속초(대략 38.2,128.6±30km)면 남애 포함 3개 경유 고정."""
-    s_ok = _is_near(start[0], start[1], 36.48, 127.29, 30)
-    e_ok = _is_near(end[0],   end[1],   38.21, 128.59, 30)
-    if not (s_ok and e_ok):
-        return None
-
-    picks = []
-    target_sets = [
-        ["남애", "남애해수욕장", "남애해변"],
-        ["낙산", "낙산해수욕장"],
-        ["하조대", "하조대해수욕장", "주문진", "경포", "속초해수욕장"],
-    ]
-    for kws in target_sets:
-        found = _find_beach_by_keywords(kws)
-        if found:
-            picks.append(found)
-
-    # 혹시 3개가 안 잡히면 자동 보완은 하지 않고, 잡힌 것만 사용
-    if not picks:
-        return None
-
-    # 스타트→엔드 방향 순으로 정렬
-    s_lat, s_lon = start
-    e_lat, e_lon = end
-    vx, vy = (e_lon - s_lon), (e_lat - s_lat)
-    def t_param(lat, lon):
-        wx, wy = (lon - s_lon), (lat - s_lat)
-        denom = vx*vx + vy*vy
-        return (wx*vx + wy*vy) / denom if denom else 0.0
-
-    picks.sort(key=lambda w: t_param(w[1], w[2]))
-    return picks[:3]
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ORS 경로
-# ─────────────────────────────────────────────────────────────────────────────
-def _ors_route(start, waypoints, end):
-    if not ORS_API_KEY:
-        return {"error": "ORS_API_KEY 미설정"}, 500
-    url = "https://api.openrouteservice.org/v2/directions/driving-car/geojson"
-    headers = {"Authorization": ORS_API_KEY, "Content-Type": "application/json"}
-    coords = [[start[1], start[0]]] + [[w[2], w[1]] for w in waypoints] + [[end[1], end[0]]]
-    r = requests.post(url, headers=headers, json={"coordinates": coords}, timeout=20)
     try:
-        return r.json(), r.status_code
-    except Exception as e:
-        return {"error": str(e)}, 500
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 경로 주변 TourAPI 수집 (반경/샘플 자동 조정)
-# ─────────────────────────────────────────────────────────────────────────────
-def _sample_points(coords, max_calls=24):
-    n = len(coords)
-    if n == 0:
+        items = raw["response"]["body"]["items"]["item"]
+        if isinstance(items, dict):  # 단건인 경우
+            items = [items]
+    except Exception:
         return []
-    step = max(1, n // max_calls)
-    pts = [coords[i] for i in range(0, n, step)]
-    if pts[-1] != coords[-1]:
-        pts.append(coords[-1])
-    return pts
-
-def _classify(ctype):
-    c = str(ctype or "").strip()
-    if c == "39":
-        return "food"
-    if c in {"12","14","25","28"}:
-        return "attraction"
-    if c == "32":
-        return "lodging"
-    if c == "38":
-        return "shopping"
-    return "other"
-
-def search_pois_along_route(geojson):
-    coords = geojson["features"][0]["geometry"]["coordinates"]
-    samples = _sample_points(coords, max_calls=24)
-    logger.info("[TourAPI] samples=%d", len(samples))
-
-    seen, out = set(), []
-    # 반경을 늘려가며 시도
-    radii = [5000, 10000, 20000]  # TourAPI radius 최대 20000m
-    for lon, lat in samples:
-        for radius in radii:
-            j = _tour_call("locationBasedList1", {
-                "mapX": lon, "mapY": lat, "radius": radius,
-                "listYN": "Y", "arrange": "E",
-                "numOfRows": 20, "pageNo": 1
+    out = []
+    for it in items or []:
+        try:
+            out.append({
+                "id": it.get("contentid"),
+                "title": it.get("title"),
+                "mapx": float(it.get("mapx")),
+                "mapy": float(it.get("mapy")),
+                "addr1": it.get("addr1"),
+                "tel": it.get("tel"),
+                "firstimage": it.get("firstimage") or it.get("firstimage2"),
+                "cat3": it.get("cat3"),
             })
-            if "_error" in j:
-                continue
-            items = _as_list(j.get("response", {}).get("body", {}).get("items", {}).get("item"))
-            got_new = False
-            for it in items:
-                cid = str(it.get("contentid", "")).strip()
-                if not cid or cid in seen:
-                    continue
-                # 좌표/이미지/주소
-                try:
-                    mx = float(it.get("mapx"))
-                    my = float(it.get("mapy"))
-                except Exception:
-                    continue
-                seen.add(cid)
-                out.append({
-                    "contentid": cid,
-                    "contenttypeid": it.get("contenttypeid"),
-                    "category": _classify(it.get("contenttypeid")),
-                    "title": it.get("title"),
-                    "addr1": it.get("addr1"),
-                    "mapx": mx,
-                    "mapy": my,
-                    "firstimage": it.get("firstimage"),
-                    "homepage": it.get("homepage") or "",
-                })
-                got_new = True
-            if got_new:
-                break  # 이 샘플 지점에서 항목이 나왔다면 반경 더 늘리지 않음
-
-    logger.info("[TourAPI] collected total=%d", len(out))
+        except Exception:
+            continue
     return out
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Flask 라우트
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------- OSM Overpass 폴백 ----------
+OVERPASS_QUERY_TMPL = """
+[out:json][timeout:25];
+(
+  node(around:{radius},{lat},{lon})["tourism"];
+  node(around:{radius},{lat},{lon})["viewpoint"="yes"];
+  node(around:{radius},{lat},{lon})["amenity"="museum"];
+  way(around:{radius},{lat},{lon})["tourism"];
+  rel(around:{radius},{lat},{lon})["tourism"];
+);
+out center 20;
+"""
+
+def overpass_nearby(lon, lat, radius=3000):
+    q = OVERPASS_QUERY_TMPL.format(lon=lon, lat=lat, radius=radius)
+    try:
+        r = sess.post(OSM_OVERPASS, data={"data": q}, timeout=20)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        log.warning("[Overpass] error: %s", e)
+        return []
+    out = []
+    for el in data.get("elements", []):
+        tags = el.get("tags", {})
+        name = tags.get("name") or tags.get("name:ko") or tags.get("name:en")
+        if not name:
+            continue
+        if el.get("type") == "node":
+            lon_, lat_ = el["lon"], el["lat"]
+        else:
+            center = el.get("center")
+            if not center:
+                continue
+            lon_, lat_ = center["lon"], center["lat"]
+        out.append({
+            "id": f"osm:{el['type']}:{el['id']}",
+            "title": name,
+            "mapx": lon_,
+            "mapy": lat_,
+            "addr1": tags.get("addr:full"),
+            "tel": None,
+            "firstimage": None,
+            "cat3": tags.get("tourism") or tags.get("amenity") or tags.get("leisure"),
+            "source": "osm",
+        })
+    return out
+
+# ---------- 코어: 경로, 샘플, POI ----------
+def ors_route(coordinates):
+    headers = {"Authorization": ORS_KEY, "Content-Type": "application/json"}
+    body = {"coordinates": coordinates, "instructions": False}
+    r = sess.post(ORS_URL, headers=headers, json=body, timeout=30)
+    r.raise_for_status()
+    data = r.json()
+    coords = data["features"][0]["geometry"]["coordinates"]  # [ [lon,lat], ... ]
+    return coords
+
+def collect_pois_along(route_coords, max_calls=12):
+    # 경로 간략화 & 샘플링
+    simplified = douglas_peucker(route_coords, tolerance_km=2.0)
+    samples = sample_along(simplified, every_km=10.0)
+    # 호출 수 제한
+    if len(samples) > max_calls:
+        step = math.ceil(len(samples) / max_calls)
+        samples = samples[::step] + ([samples[-1]] if samples[-1] != samples[::step][-1] else [])
+    log.info("[TourAPI] samples=%d", len(samples))
+
+    all_pois = []
+    tried_tour = False
+    for radius in (4000, 8000, 15000):
+        batch = []
+        for (lon, lat) in samples:
+            # TourAPI 우선
+            raw, err = call_tour_location(lon, lat, radius)
+            tried_tour = True
+            if raw:
+                items = parse_tour_items(raw)
+                batch.extend(items)
+            else:
+                log.warning("[TourAPI] fail at (%.6f,%.6f,r=%d): %s", lon, lat, radius, err)
+        if batch:
+            all_pois = batch
+            break
+
+    # TourAPI가 전부 실패한 경우 -> OSM 폴백
+    if not all_pois:
+        osm_batch = []
+        for (lon, lat) in samples:
+            osm_batch.extend(overpass_nearby(lon, lat, radius=2500))
+        all_pois = osm_batch
+
+    # 고유화(제목+좌표 근접)
+    uniq = []
+    seen = set()
+    for p in all_pois:
+        key = (p.get("title"), round(p["mapx"], 4), round(p["mapy"], 4))
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(p)
+
+    # 경로거리 기준 정렬 + 상위 N개만
+    def min_dist(p):
+        # 경로 좌표와 최소 거리(km)
+        dmin = 1e9
+        for (lon, lat) in route_coords[::max(1, len(route_coords)//120)]:
+            d = haversine_km(p["mapx"], p["mapy"], lon, lat)
+            if d < dmin: dmin = d
+        return dmin
+    for p in uniq:
+        p["dist_km"] = round(min_dist(p), 2)
+    uniq.sort(key=lambda x: x["dist_km"])
+    return uniq[:120]
+
+# ---------- 기본 경유지 좌표(보정) ----------
+# (lon, lat) — 대략치지만 ORS 경로에는 충분히 정확
+BEACHES = {
+    "남애해수욕장": (128.8338, 37.9573),
+    "낙산해수욕장": (128.6286, 38.1218),
+    "하조대해수욕장": (128.7475, 38.0196),
+}
+# 세종청사 근처, 속초 해수욕장 근처
+DEFAULT_START = (127.2893, 36.4797)
+DEFAULT_END = (128.6007, 38.2040)
+
+# ---------- 라우트 ----------
 @app.route("/")
-def index():
+def home():
     return render_template("index.html")
 
 @app.route("/route", methods=["POST"])
 def route():
     try:
-        data = request.get_json(force=True)
-        start = geocode_google(data.get("start"))
-        end   = geocode_google(data.get("end"))
-        if not start or not end:
-            return jsonify({"error": "❌ 주소 변환 실패"}), 400
+        payload = request.get_json(force=True) or {}
+    except Exception:
+        payload = {}
 
-        # 세종→속초일 때만 ‘남애 포함 3경유’ 고정 우선
-        waypoints = _force_waypoints_if_sejong_to_sokcho(start, end) or []
-        # 그래도 비었으면(혹은 일부만 잡혀도) 현재 picks 그대로 사용 (경로 로직 자체는 그대로)
+    start = payload.get("start") or DEFAULT_START  # (lon, lat)
+    end = payload.get("end") or DEFAULT_END
+    via_names = payload.get("viaNames") or DEFAULT_VIAS
 
-        route_data, status = _ors_route(start, waypoints, end)
-        if status != 200 or "features" not in route_data:
-            return jsonify({"error": route_data.get("error", "❌ 경로 계산 실패")}), status
+    # 이름 -> 좌표 변환
+    vias = []
+    for name in via_names:
+        if name in BEACHES:
+            vias.append(BEACHES[name])
+    # 좌표계(ORS: [[lon, lat], ...]) 구성
+    coordinates = [list(start)] + [list(v) for v in vias] + [list(end)]
 
-        # ORS 요약 (거리/시간)
-        try:
-            summary = route_data["features"][0]["properties"]["summary"]
-            distance_km = round(float(summary.get("distance", 0))/1000.0, 1)
-            duration_min = int(round(float(summary.get("duration", 0))/60.0))
-        except Exception:
-            distance_km, duration_min = None, None
+    if not ORS_KEY:
+        return jsonify({"ok": False, "error": "ORS_API_KEY missing"}), 500
 
-        # 경유지 주소 역지오코딩
-        wp_objs = []
-        for name, lat, lon in waypoints:
-            wp_objs.append({
-                "name": name,
-                "lat": lat,
-                "lon": lon,
-                "address": reverse_geocode_google(lat, lon)
-            })
+    # 1) 경로
+    coords = ors_route(coordinates)
 
-        # POI 수집
-        pois = search_pois_along_route(route_data)
+    # 2) 경로 주변 POI
+    pois = collect_pois_along(coords, max_calls=12)
+    log.info("[TourAPI] collected total=%d", len(pois))
 
-        payload = {
-            "route": route_data,
-            "waypoints": wp_objs,        # 경유 0~3
-            "summary": {"distance_km": distance_km, "duration_min": duration_min},
-            "spots": pois or []
-        }
-        # 과거 호환 키(경유 1개만 쓰던 프론트 대비)
-        if len(wp_objs) >= 1: payload["waypoint"]  = wp_objs[0]
-        if len(wp_objs) >= 2: payload["waypoint2"] = wp_objs[1]
-        if len(wp_objs) >= 3: payload["waypoint3"] = wp_objs[2]
-
-        if not pois:
-            # 프론트가 안내문을 띄우도록 힌트 메시지 제공(경로/반경은 서버에서 이미 자동 조정됨)
-            payload["notice"] = "경로 주변에서 항목을 찾지 못했습니다. (서버가 반경/샘플 수를 자동 조정합니다)"
-        return jsonify(payload)
-    except Exception as e:
-        return jsonify({"error": f"❌ 서버 오류: {str(e)}"}), 500
-
-@app.route("/tour_detail/<contentid>")
-def tour_detail(contentid):
-    j = _tour_call("detailCommon1", {
-        "contentId": contentid,
-        "overviewYN": "Y",
-        "defaultYN": "Y",
-        "firstImageYN": "Y",
-        "addrinfoYN": "Y",
-        "mapinfoYN": "Y",
-    }, timeout=10)
-    if "_error" in j:
-        return f"<h2>TourAPI 오류</h2><pre>{j['_error']}</pre>", 500
-    items = _as_list(j.get("response", {}).get("body", {}).get("items", {}).get("item"))
-    if not items:
-        return f"<h2>❌ 관광지 정보가 없습니다.</h2><p>contentid: {contentid}</p>", 404
-    return render_template("tour_detail.html", item=items[0])
+    return jsonify({
+        "ok": True,
+        "route": coords,  # [ [lon,lat], ... ]
+        "pois": pois,
+        "viaUsed": via_names
+    })
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    # Render의 기본 커맨드 python app.py 기준
+    port = int(os.getenv("PORT", "10000"))
+    app.run(host="0.0.0.0", port=port, debug=False)
