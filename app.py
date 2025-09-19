@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify, render_template
-import os, logging
+import os, logging, time
 import requests
 from dotenv import load_dotenv
 from math import radians, cos, sin, asin, sqrt
@@ -14,13 +14,13 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s:coastal-drive:%(me
 
 # === ENV ===
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
-ORS_API_KEY     = os.getenv("ORS_API_KEY", "").strip()
+ORS_API_KEY    = os.getenv("ORS_API_KEY", "").strip()
 
-# TourAPI: Encoding 값이 들어와도 자동 unquote
+# TourAPI 키: Encoding 값이 들어와도 자동 복구
 _raw_tour_key = os.getenv("TOURAPI_KEY", "").strip()
-TOURAPI_KEY = unquote(_raw_tour_key) if "%" in _raw_tour_key else _raw_tour_key
+TOURAPI_KEY   = unquote(_raw_tour_key) if "%" in _raw_tour_key else _raw_tour_key
 
-# 기본은 KorService2, 자동 폴백 KorService1
+# 기본은 KorService2, 안 되면 1로 폴백
 TOURAPI_BASE_ENV = os.getenv("TOURAPI_BASE", "").strip()
 TOURAPI_BASES = [
     TOURAPI_BASE_ENV if TOURAPI_BASE_ENV else "https://apis.data.go.kr/B551011/KorService2",
@@ -29,20 +29,17 @@ TOURAPI_BASES = [
 
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371.0
-    dlat = radians(lat2 - lat1)
-    dlon = radians(lon2 - lon1)
-    a = sin(dlat / 2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2)**2
+    dlat = radians(lat2 - lat1); dlon = radians(lon2 - lon1)
+    a = sin(dlat/2)**2 + cos(radians(lat1))*cos(radians(lat2))*sin(dlon/2)**2
     return 2 * R * asin(sqrt(a))
 
-# ---------------- Google Geocode ----------------
+# ---------------- Google Geocode (기존 유지) ----------------
 def geocode_google(address):
     try:
         url = "https://maps.googleapis.com/maps/api/geocode/json"
-        params = {"address": address, "key": GOOGLE_API_KEY}
-        res = requests.get(url, params=params, timeout=8)
+        res = requests.get(url, params={"address": address, "key": GOOGLE_API_KEY}, timeout=8)
         res.raise_for_status()
-        j = res.json()
-        loc = j["results"][0]["geometry"]["location"]
+        loc = res.json()["results"][0]["geometry"]["location"]
         return loc["lat"], loc["lng"]
     except Exception:
         return None
@@ -50,14 +47,12 @@ def geocode_google(address):
 def reverse_geocode_google(lat, lon):
     try:
         url = "https://maps.googleapis.com/maps/api/geocode/json"
-        params = {"latlng": f"{lat},{lon}", "key": GOOGLE_API_KEY}
-        res = requests.get(url, params=params, timeout=8)
-        j = res.json()
-        return j["results"][0]["formatted_address"]
+        res = requests.get(url, params={"latlng": f"{lat},{lon}", "key": GOOGLE_API_KEY}, timeout=8)
+        return res.json()["results"][0]["formatted_address"]
     except Exception:
         return "주소 불러오기 실패"
 
-# ---------------- Waypoint (기존 유지) ----------------
+# ---------------- 경유지 선정 (기존 유지) ----------------
 def is_in_coastal_bounds(lat, lon):
     return (
         (35 <= lat <= 38 and 128 <= lon <= 131) or
@@ -91,9 +86,8 @@ def get_ors_route(start, waypoint, end):
     except Exception as e:
         return {"error": str(e)}, 500
 
-# ---------------- TourAPI 공통 호출(HTTPS + 2→1 폴백) ----------------
+# ---------------- TourAPI 호출 (HTTPS + 2→1 폴백 + 로그 강화) ----------------
 def call_tourapi(path, params, timeout=8):
-    # 모든 호출에 Decoding(원문) 키 사용 (requests가 자동 인코딩)
     base_params = {
         "serviceKey": TOURAPI_KEY,
         "MobileOS": "ETC",
@@ -102,34 +96,33 @@ def call_tourapi(path, params, timeout=8):
     }
     merged = {**base_params, **params}
 
-    last_err = None
+    last_txt = None
+    last_status = None
     for base in TOURAPI_BASES:
         url = f"{base}/{path}"
         try:
             r = requests.get(url, params=merged, timeout=timeout)
+            last_status = r.status_code
             txt = r.text.strip()
-            # JSON 시도
             try:
                 j = r.json()
-                # 정상/오류 구분을 위해 코드/메시지 보조 로그
-                code = j.get("response",{}).get("header",{}).get("resultCode") \
-                    or j.get("response",{}).get("body",{}).get("resultCode")
-                msg  = j.get("response",{}).get("header",{}).get("resultMsg") \
-                    or j.get("response",{}).get("body",{}).get("resultMsg")
+                # 헤더 코드 로그 (문제 파악용)
+                hdr = j.get("response", {}).get("header", {})
+                code = hdr.get("resultCode")
                 if code and code != "0000":
-                    log.warning(f"[TourAPI] error code={code} msg={msg} base={base} path={path}")
+                    log.warning(f"[TourAPI] resultCode={code} msg={hdr.get('resultMsg')} url={url}")
                 return j
             except Exception:
-                # JSON 아니면 XML/HTML 오류 → 다음 base로 폴백
-                log.warning(f"[TourAPI] non-JSON from {base}/{path}: {txt[:120]}...")
-                last_err = txt
+                log.warning(f"[TourAPI] non-JSON {last_status} url={url} body={txt[:160]}...")
+                last_txt = txt
         except Exception as e:
-            last_err = str(e)
-            log.warning(f"[TourAPI] request error base={base} path={path}: {e}")
-    # 둘 다 실패
-    return {"_error": last_err}
+            log.warning(f"[TourAPI] request error url={url} err={e}")
+            last_txt = str(e)
+        # 살짝 쉬고 다음 베이스로
+        time.sleep(0.1)
+    return {"_error": f"status={last_status}, body={str(last_txt)[:200]}"}
 
-# ---------------- 경로 주변 검색 (반경/샘플링 자동 조정) ----------------
+# ---------------- 경로 주변 수집 (반경/샘플 자동 조정 + 속도 제한) ----------------
 def query_location_based(lon, lat, radius, content_type_id=None):
     params = {
         "mapX": lon, "mapY": lat, "radius": radius,
@@ -138,29 +131,33 @@ def query_location_based(lon, lat, radius, content_type_id=None):
     }
     if content_type_id:
         params["contentTypeId"] = str(content_type_id)
+
     j = call_tourapi("locationBasedList1", params)
+    # 요청 간 약간 대기(게이트웨이 보호)
+    time.sleep(0.12)
+
     if "_error" in j:
         return [], j["_error"]
 
     try:
-        items = j["response"]["body"]["items"]["item"]
+        body = j["response"]["body"]
+        items = body.get("items", {}).get("item", [])
         return items, None
     except Exception:
         return [], "empty"
 
 def search_along_route(geojson):
     coords = geojson["features"][0]["geometry"]["coordinates"]
-    # 경로가 길어도 호출 건수 아끼면서 커버: 12~15 포인트 정도
-    step = max(1, len(coords)//12)
+    step = max(1, len(coords)//12)  # 샘플 ~12개
     samples = coords[::step]
     log.info(f"[TourAPI] samples={len(samples)}")
 
     results_tour, results_food = [], []
     seen = set()
 
-    for radius in (5000, 10000, 20000):  # TourAPI 허용 범위 안에서만 확대
+    for radius in (5000, 10000, 20000):
         for lon, lat in samples:
-            # 관광(기본)
+            # 관광지(일반: contentTypeId 생략 → 여러 타입 섞여도 수집)
             items, err = query_location_based(lon, lat, radius)
             if items:
                 for it in items:
@@ -177,8 +174,9 @@ def search_along_route(geojson):
                         "firstimage": it.get("firstimage"),
                         "distance": round(haversine(lat, lon, float(it.get("mapy", lat)), float(it.get("mapx", lon))), 2)
                     })
+
             # 맛집(39)
-            items39, err = query_location_based(lon, lat, radius, content_type_id=39)
+            items39, err39 = query_location_based(lon, lat, radius, content_type_id=39)
             if items39:
                 for it in items39:
                     cid = it.get("contentid")
@@ -195,7 +193,7 @@ def search_along_route(geojson):
                         "distance": round(haversine(lat, lon, float(it.get("mapy", lat)), float(it.get("mapx", lon))), 2)
                     })
 
-        # 충분히 모였으면 조기 종료
+        # 충분히 모였으면 종료
         if len(results_tour) + len(results_food) >= 20:
             break
 
@@ -212,11 +210,12 @@ def route():
     try:
         data = request.get_json() or {}
         start = geocode_google(data.get("start", ""))
-        end   = geocode_google(data.get("end",   ""))
+        end   = geocode_google(data.get("end", ""))
 
         if not start or not end:
             return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
+        # ✅ 경로/경유지 선택: 기존 성공 로직 그대로
         waypoint = find_best_beach_waypoint(start, end)
         if not waypoint:
             return jsonify({"error": "❌ 경유지 탐색 실패"}), 500
@@ -225,11 +224,11 @@ def route():
         if "error" in route_data:
             return jsonify({"error": route_data["error"]}), status
 
-        # 경로 시간/거리 (프론트에서 ETA 표시용)
+        # 총 거리/시간(프론트 배지용)
         try:
             summary = route_data["features"][0]["properties"]["summary"]
             eta_sec = summary.get("duration", 0)
-            dist_km = round((summary.get("distance", 0) / 1000.0), 1)
+            dist_km = round(summary.get("distance", 0) / 1000.0, 1)
         except Exception:
             eta_sec, dist_km = 0, 0
 
@@ -275,7 +274,7 @@ def tour_detail(contentid):
 
     return render_template("tour_detail.html", item=item)
 
-# 진단용: 키/승인/기간/엔드포인트 확인
+# 빠른 진단용
 @app.route("/debug/tour")
 def debug_tour():
     x = float(request.args.get("x", "127.0"))
@@ -284,7 +283,7 @@ def debug_tour():
         "mapX": x, "mapY": y, "radius": 5000, "listYN": "Y", "arrange": "E", "numOfRows": 3, "pageNo": 1
     })
     if "_error" in j:
-        return jsonify({"ok": False, "error": j["_error"], "hint": "TOURAPI_KEY Decoding(원문) 사용 여부/승인/기간 확인"}), 200
+        return jsonify({"ok": False, "error": j["_error"], "hint": "TOURAPI_KEY는 Decoding(원문) 값이어야 함"}), 200
     try:
         items = j["response"]["body"]["items"]["item"]
         header = j["response"]["header"]
