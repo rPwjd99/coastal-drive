@@ -2,26 +2,38 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>{{ item.title or "상세정보" }}</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ item.title or "관광지 상세" }}</title>
   <style>
-    body { font-family: system-ui, sans-serif; margin: 20px; line-height: 1.6; }
-    img { max-width: 100%; height: auto; border-radius: 6px; }
-    .addr { color:#555; }
+    body{font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", sans-serif; margin:24px; color:#111827;}
+    .wrap{max-width:920px; margin:0 auto;}
+    .hero{display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap;}
+    img{max-width:360px; height:auto; border-radius:10px; box-shadow:0 2px 8px rgba(0,0,0,.15)}
+    h1{margin:0 0 6px 0;}
+    .meta{color:#475569; margin-bottom:12px;}
+    .block{background:#fafafa; border:1px solid #e5e7eb; padding:14px; border-radius:10px; margin-top:16px;}
+    a.btn{display:inline-block; margin-top:10px; background:#2563eb; color:#fff; padding:8px 12px; border-radius:8px; text-decoration:none;}
   </style>
 </head>
 <body>
-  <h1>{{ item.title }}</h1>
-  {% if item.firstimage %}
-    <img src="{{ item.firstimage }}" alt="{{ item.title }}">
-  {% endif %}
-  {% if item.addr1 %}
-    <p class="addr">📍 {{ item.addr1 }}</p>
-  {% endif %}
-  {% if item.overview %}
-    <h3>소개</h3>
-    <div>{{ item.overview|safe }}</div>
-  {% endif %}
-  <p style="margin-top:20px;"><a href="javascript:window.close()">닫기</a></p>
+  <div class="wrap">
+    <div class="hero">
+      {% if item.firstimage %}
+      <img src="{{ item.firstimage }}" alt="{{ item.title }}">
+      {% endif %}
+      <div>
+        <h1>{{ item.title }}</h1>
+        <div class="meta">
+          {% if item.addr1 %}📍 {{ item.addr1 }}<br>{% endif %}
+          {% if item.tel %}📞 {{ item.tel }}<br>{% endif %}
+          {% if item.homepage %}🔗 {{ item.homepage | safe }}{% endif %}
+        </div>
+        {% if item.overview %}
+        <div class="block">
+          {{ item.overview | safe }}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
 </body>
 </html>
