@@ -1,55 +1,47 @@
-# app.py
-import os
-import math
-import logging
-from typing import Any, Dict, List, Optional, Tuple
-
-import requests
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 from dotenv import load_dotenv
+import os, math, logging, requests
 
 load_dotenv()
 
-app = Flask(__name__, static_folder="static", template_folder="templates")
+app = Flask(__name__, template_folder="templates", static_folder="static")
 CORS(app)
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("coastal-drive")
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-ORS_API_KEY = os.getenv("ORS_API_KEY")
-# TourAPI는 'Decoding' 키(슬래시/플러스 포함 원문)를 ENV에 저장해 두세요.
-TOURAPI_KEY = os.getenv("TOURAPI_KEY")
-# 기본은 KorService2, 실패 시 자동으로 KorService1로 폴백
-TOURAPI_BASE = (os.getenv("TOURAPI_BASE") or "https://apis.data.go.kr/B551011/KorService2").rstrip("/")
+ORS_API_KEY     = os.getenv("ORS_API_KEY")
+TOURAPI_KEY     = os.getenv("TOURAPI_KEY")  # 공공데이터포털 'Decoding' 키 그대로
+# 기본 KorService2, 실패 시 KorService1 폴백
+TOUR_BASES = [
+    "https://apis.data.go.kr/B551011/KorService2",
+    "https://apis.data.go.kr/B551011/KorService1",
+]
 
-# 해변 후보(기존 파일)
+# 해안 경유지 후보
 try:
-    from beaches_coordinates import beach_coords  # {"해변명": (lon, lat)}
+    from beaches_coordinates import beach_coords  # {이름: (lon, lat)}
 except Exception:
     beach_coords = {}
 
-# -------------------------
-# 공통 유틸
-# -------------------------
-def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+# -------------------- 유틸 --------------------
+def haversine(lat1, lon1, lat2, lon2):
     R = 6371.0
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat/2.0)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2.0)**2
-    return 2.0 * R * math.asin(math.sqrt(a))
+    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1))*math.cos(math.radians(lat2))*math.sin(dlon/2)**2
+    return 2*R*math.asin(math.sqrt(a))
 
-def _to_float(x: Any) -> Optional[float]:
+def _to_float(x):
     try:
         return float(x)
     except Exception:
         return None
 
-# -------------------------
-# Google 지오코딩
-# -------------------------
-def geocode_google(address: str) -> Optional[Tuple[float, float]]:
+# -------------------- 지오코딩 --------------------
+def geocode_google(address):
     if not GOOGLE_API_KEY or not address:
         return None
     try:
@@ -65,7 +57,7 @@ def geocode_google(address: str) -> Optional[Tuple[float, float]]:
         log.warning("geocode_google failed: %s", e)
         return None
 
-def reverse_geocode_google(lat: float, lon: float) -> str:
+def reverse_geocode_google(lat, lon):
     if not GOOGLE_API_KEY:
         return ""
     try:
@@ -74,13 +66,12 @@ def reverse_geocode_google(lat: float, lon: float) -> str:
             params={"latlng": f"{lat},{lon}", "key": GOOGLE_API_KEY},
             timeout=10,
         )
-        return r.json()["results"][0]["formatted_address"]
+        j = r.json()
+        return j["results"][0]["formatted_address"]
     except Exception:
         return ""
 
-# -------------------------
-# 경유지 선택 (기존 성공 로직 유지)
-# -------------------------
+# -------------------- 경유지 --------------------
 def is_in_coastal_bounds(lat, lon):
     return (
         (35 <= lat <= 38 and 128 <= lon <= 131) or
@@ -88,9 +79,9 @@ def is_in_coastal_bounds(lat, lon):
         (34 <= lat <= 38 and 124 <= lon <= 126)
     )
 
-def find_best_beach_waypoint(start: Tuple[float, float], end: Tuple[float, float]) -> Optional[Tuple[str, float, float]]:
+def find_best_beach_waypoint(start, end):
     start_lat, start_lon = start
-    end_lat, end_lon = end
+    end_lat, end_lon     = end
     lat_candidates, lon_candidates = [], []
     for name, (lon, lat) in beach_coords.items():
         if not is_in_coastal_bounds(lat, lon):
@@ -105,10 +96,8 @@ def find_best_beach_waypoint(start: Tuple[float, float], end: Tuple[float, float
         return (best_lat if best_lat[3] <= best_lon[3] else best_lon)[:3]
     return (best_lat or best_lon)[:3] if (best_lat or best_lon) else None
 
-# -------------------------
-# ORS 라우팅 (기존 유지: start → waypoint → end)
-# -------------------------
-def get_ors_route(start: Tuple[float,float], waypoint: Tuple[str,float,float], end: Tuple[float,float]):
+# -------------------- ORS 경로 --------------------
+def get_ors_route(start, waypoint, end):
     if not ORS_API_KEY:
         return {"error": "ORS_API_KEY is missing"}, 500
     url = "https://api.openrouteservice.org/v2/directions/driving-car/geojson"
@@ -121,72 +110,82 @@ def get_ors_route(start: Tuple[float,float], waypoint: Tuple[str,float,float], e
         ]
     }
     try:
-        res = requests.post(url, headers=headers, json=body, timeout=30)
-        return res.json(), res.status_code
+        r = requests.post(url, headers=headers, json=body, timeout=30)
+        return r.json(), r.status_code
     except Exception as e:
         return {"error": str(e)}, 500
 
-# -------------------------
-# TourAPI 호출 보강
-# -------------------------
-def _clean_base(b: str) -> str:
-    return (b or "").strip().rstrip("/")
-
-def _try_loc_once(base_url: str, lon: float, lat: float, content_type_id: Optional[int], radius_m: int, num_rows: int):
+# -------------------- TourAPI --------------------
+def _tour_location_once(base_url, lon, lat, content_type_id=None, radius_m=20000, num_rows=20):
     if not TOURAPI_KEY:
-        return []
-    url = f"{_clean_base(base_url)}/locationBasedList1"
+        return [], ("9999", "TOURAPI_KEY missing")
+    url = base_url.rstrip("/") + "/locationBasedList1"
     params = {
         "serviceKey": TOURAPI_KEY,
         "mapX": lon,
         "mapY": lat,
-        "radius": max(1000, min(20000, int(radius_m))),  # TourAPI 제한
+        "radius": max(1000, min(20000, int(radius_m))),
         "listYN": "Y",
         "arrange": "E",
-        "numOfRows": max(5, min(50, num_rows)),
+        "numOfRows": max(1, min(50, int(num_rows))),
         "pageNo": 1,
         "MobileOS": "ETC",
         "MobileApp": "CoastalDrive",
         "_type": "json",
     }
     if content_type_id:
-        params["contentTypeId"] = content_type_id
+        params["contentTypeId"] = int(content_type_id)
 
     try:
-        r = requests.get(url, params=params, timeout=8)
-        try:
-            j = r.json()
-        except Exception:
-            txt = (r.text or "")[:140].replace("\n", " ")
-            log.warning("[TourAPI] non-JSON(%s): %s ...", r.status_code, txt)
-            return []
-        items = j.get("response", {}).get("body", {}).get("items", {}).get("item", []) or []
-        if isinstance(items, dict):
-            items = [items]
-        return items
-    except Exception as e:
-        log.warning("[TourAPI] request failed: %s", e)
-        return []
+        r = requests.get(url, params=params, headers={"Accept": "application/json"}, timeout=10)
+        j = r.json()
+    except Exception:
+        # XML 오류 등 텍스트 일부 로깅
+        txt = (r.text if 'r' in locals() else '')[:200].replace("\n", " ")
+        log.warning("[TourAPI] non-JSON or request error: %s ...", txt)
+        return [], ("9000", "non-JSON")
 
-def _loc_with_fallback(lon: float, lat: float, content_type_id: Optional[int], radius_m: int, num_rows: int):
+    header = j.get("response", {}).get("header", {})
+    code   = header.get("resultCode", "")
+    msg    = header.get("resultMsg", "")
+    if code and code != "0000":
+        log.warning("[TourAPI] resultCode=%s, resultMsg=%s", code, msg)
+    items = j.get("response", {}).get("body", {}).get("items", {}).get("item", []) or []
+    if isinstance(items, dict):
+        items = [items]
+    return items, (code or "0000", msg or "OK")
+
+def _tour_location(lon, lat, content_type_id=None, radius_m=20000, num_rows=20):
     # 1) KorService2
-    items = _try_loc_once(TOURAPI_BASE or "https://apis.data.go.kr/B551011/KorService2", lon, lat, content_type_id, radius_m, num_rows)
-    if items:
-        return items
+    items, stat = _tour_location_once(TOUR_BASES[0], lon, lat, content_type_id, radius_m, num_rows)
+    if items: return items
     # 2) KorService1
-    items = _try_loc_once("https://apis.data.go.kr/B551011/KorService1", lon, lat, content_type_id, radius_m, num_rows)
-    if items:
-        return items
-    # 3) 느슨 재조회(contentType 미지정)
-    items = _try_loc_once("https://apis.data.go.kr/B551011/KorService1", lon, lat, None, radius_m, num_rows)
+    items, _   = _tour_location_once(TOUR_BASES[1], lon, lat, content_type_id, radius_m, num_rows)
+    if items: return items
+    # 3) contentType 미지정 느슨 재조회
+    items, _   = _tour_location_once(TOUR_BASES[1], lon, lat, None, radius_m, num_rows)
     return items
 
-def _normalize(raw: Dict[str,Any], category: str, anchor_lat: float, anchor_lon: float):
-    lon = _to_float(raw.get("mapx"))
-    lat = _to_float(raw.get("mapy"))
-    if lon is None or lat is None:
-        return None
-    dist_km = haversine(anchor_lat, anchor_lon, lat, lon)
+def _polyline_samples(coords, interval_km=9.0, max_samples=50):
+    if not coords: return []
+    out = []
+    last_lon, last_lat = coords[0]
+    out.append((last_lon, last_lat))
+    acc = 0.0
+    for i in range(1, len(coords)):
+        lon, lat = coords[i]
+        acc += haversine(last_lat, last_lon, lat, lon)
+        if acc >= interval_km:
+            out.append((lon, lat)); acc = 0.0
+            if len(out) >= max_samples: break
+        last_lon, last_lat = lon, lat
+    if out[-1] != (coords[-1][0], coords[-1][1]):
+        out.append((coords[-1][0], coords[-1][1]))
+    return out
+
+def _normalize_item(raw, anchor_lat, anchor_lon, category):
+    lon = _to_float(raw.get("mapx")); lat = _to_float(raw.get("mapy"))
+    if lon is None or lat is None: return None
     return {
         "contentid": str(raw.get("contentid") or ""),
         "title": raw.get("title") or "",
@@ -197,74 +196,46 @@ def _normalize(raw: Dict[str,Any], category: str, anchor_lat: float, anchor_lon:
         "tel": raw.get("tel") or "",
         "homepage": raw.get("homepage") or "",
         "readcount": raw.get("readcount") or "",
+        "distance": round(haversine(anchor_lat, anchor_lon, lat, lon), 2),
         "category": category,
-        "distance": round(dist_km, 2),
     }
 
-def _polyline_samples(coords: List[List[float]], interval_km: float = 9.0, max_samples: int = 50) -> List[Tuple[float,float]]:
-    if not coords:
-        return []
-    samples = []
-    last_lon, last_lat = coords[0]
-    samples.append((last_lon, last_lat))
-    acc = 0.0
-    for i in range(1, len(coords)):
-        lon, lat = coords[i]
-        acc += haversine(last_lat, last_lon, lat, lon)
-        if acc >= interval_km:
-            samples.append((lon, lat))
-            acc = 0.0
-            if len(samples) >= max_samples:
-                break
-        last_lon, last_lat = lon, lat
-    if samples[-1] != (coords[-1][0], coords[-1][1]):
-        samples.append((coords[-1][0], coords[-1][1]))
-    return samples
-
-def search_along_route(geojson: Dict[str,Any]) -> Dict[str, List[Dict[str,Any]]]:
+def search_along_route(geojson):
     try:
         coords = geojson["features"][0]["geometry"]["coordinates"]
     except Exception:
-        return {"tour": [], "food": [], "all": []}
+        return {"spots": [], "restaurants": []}
 
-    # 반경 20km(최대치) × 조밀 샘플링
-    radius_m = 20000
     samples = _polyline_samples(coords, interval_km=9.0, max_samples=50)
-    log.info("[TourAPI] samples=%d radius=%dm", len(samples), radius_m)
+    log.info("[TourAPI] samples=%d", len(samples))
 
     seen = set()
     tours, foods = [], []
 
-    # 관광(12)
+    # 관광지(12)
     for lon, lat in samples:
-        items = _loc_with_fallback(lon, lat, content_type_id=12, radius_m=radius_m, num_rows=20)
-        for raw in items:
+        for raw in _tour_location(lon, lat, content_type_id=12, radius_m=20000, num_rows=30):
             cid = str(raw.get("contentid") or "")
-            if not cid or cid in seen: 
-                continue
+            if not cid or cid in seen: continue
             seen.add(cid)
-            norm = _normalize(raw, "tour", lat, lon)
-            if norm: tours.append(norm)
-        if len(tours) >= 60: break  # 과도 수집 방지
+            it = _normalize_item(raw, lat, lon, "tour")
+            if it: tours.append(it)
+        if len(tours) >= 80: break
 
-    # 맛집(39)
+    # 음식(39)
     for lon, lat in samples:
-        items = _loc_with_fallback(lon, lat, content_type_id=39, radius_m=radius_m, num_rows=20)
-        for raw in items:
+        for raw in _tour_location(lon, lat, content_type_id=39, radius_m=20000, num_rows=30):
             cid = str(raw.get("contentid") or "")
-            if not cid or cid in seen: 
-                continue
+            if not cid or cid in seen: continue
             seen.add(cid)
-            norm = _normalize(raw, "food", lat, lon)
-            if norm: foods.append(norm)
-        if len(foods) >= 60: break
+            it = _normalize_item(raw, lat, lon, "food")
+            if it: foods.append(it)
+        if len(foods) >= 80: break
 
     log.info("[TourAPI] collected tour=%d food=%d total=%d", len(tours), len(foods), len(tours)+len(foods))
-    return {"tour": tours, "food": foods, "all": tours + foods}
+    return {"spots": tours + foods, "restaurants": foods}
 
-# -------------------------
-# 라우트
-# -------------------------
+# -------------------- 라우트 --------------------
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -273,13 +244,13 @@ def index():
 def route():
     try:
         data = request.get_json(force=True, silent=True) or {}
-        start_in = data.get("start")
-        end_in = data.get("end")
-        if not start_in or not end_in:
+        start_s = (data.get("start") or "").strip()
+        end_s   = (data.get("end") or "").strip()
+        if not start_s or not end_s:
             return jsonify({"error": "출발지/도착지를 입력하세요."}), 400
 
-        start = geocode_google(start_in) if isinstance(start_in, str) else tuple(start_in)
-        end   = geocode_google(end_in)   if isinstance(end_in, str)   else tuple(end_in)
+        start = geocode_google(start_s)
+        end   = geocode_google(end_s)
         if not start or not end:
             return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
@@ -287,30 +258,27 @@ def route():
         if not waypoint:
             return jsonify({"error": "❌ 경유지 탐색 실패"}), 500
 
-        route_data, status = get_ors_route(start, waypoint, end)
-        if status != 200 or "error" in route_data:
-            return jsonify({"error": route_data.get("error", f"OpenRouteService 오류({status})")}), status
+        route_obj, status = get_ors_route(start, waypoint, end)
+        if status != 200 or "error" in route_obj:
+            return jsonify({"error": route_obj.get("error", f"OpenRouteService 오류({status})")}), status
 
-        # 경로 주변 관광/맛집
-        around = search_along_route(route_data)
-
-        wp_addr = reverse_geocode_google(waypoint[1], waypoint[2])
+        # 경로 주변 수집
+        around = search_along_route(route_obj)
 
         return jsonify({
-            "route": route_data,
-            "waypoint": { "name": waypoint[0], "lat": waypoint[1], "lon": waypoint[2], "address": wp_addr },
-            "spots": around["all"],
-            "restaurants": around["food"],  # 필요 시 사용
+            "route": route_obj,
+            "waypoint": { "name": waypoint[0], "lat": waypoint[1], "lon": waypoint[2],
+                          "address": reverse_geocode_google(waypoint[1], waypoint[2]) },
+            "spots": around["spots"],
+            "restaurants": around["restaurants"],
         }), 200
 
     except Exception as e:
         log.exception("route error")
         return jsonify({"error": f"❌ 서버 오류: {str(e)}"}), 500
 
-# (선택) 상세 템플릿
 @app.route("/tour_detail/<contentid>")
 def tour_detail(contentid):
-    # 상세는 KorService1이 가장 호환성이 좋음
     url = "https://apis.data.go.kr/B551011/KorService1/detailCommon1"
     params = {
         "serviceKey": TOURAPI_KEY,
@@ -322,10 +290,10 @@ def tour_detail(contentid):
         "firstImageYN": "Y",
         "addrinfoYN": "Y",
         "mapinfoYN": "Y",
-        "_type": "json"
+        "_type": "json",
     }
     try:
-        r = requests.get(url, params=params, timeout=10)
+        r = requests.get(url, params=params, headers={"Accept": "application/json"}, timeout=10)
         j = r.json()
         items = j.get("response", {}).get("body", {}).get("items", {}).get("item", [])
         item = items[0] if isinstance(items, list) and items else {}
