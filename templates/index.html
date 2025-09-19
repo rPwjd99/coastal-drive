@@ -13,10 +13,7 @@
     #controls button { padding: 7px 14px; background:#0078ff; color:#fff; border:0; cursor:pointer; border-radius:4px; }
     #meta { margin-left:auto; font-size:14px; color:#333; }
     #map { width: 100%; height: calc(100% - 56px); }
-    .popup {
-      background: #fff; padding: 10px; border: 1px solid #ccc; border-radius: 6px;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.25); min-width: 220px; max-width: 300px;
-    }
+    .popup { background: #fff; padding: 10px; border: 1px solid #ccc; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.25); min-width: 220px; max-width: 300px; }
     .popup img { width:100%; height:auto; border-radius:4px; margin:6px 0; display:block; }
     .badge { background:#eef4ff; padding:6px 10px; border-radius:20px; border:1px solid #cfe0ff; }
   </style>
@@ -37,7 +34,6 @@
       view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
     });
 
-    // 레이어
     const routeLayer  = new ol.layer.Vector({ source: new ol.source.Vector() });
     const markerLayer = new ol.layer.Vector({ source: new ol.source.Vector() });
     map.addLayer(routeLayer);
@@ -70,20 +66,12 @@
       if (!found) popup.setPosition(undefined);
     });
 
-    function addPoint(lon, lat, style) {
-      const ft = new ol.Feature({ geometry: new ol.geom.Point(ol.proj.fromLonLat([lon, lat])) });
-      ft.setStyle(style);
-      markerLayer.getSource().addFeature(ft);
-      return ft;
+    function styleLine() {
+      return new ol.style.Style({ stroke: new ol.style.Stroke({ color: "#0066ff", width: 4 }) });
     }
-
     function styleCircle(color) {
       return new ol.style.Style({
-        image: new ol.style.Circle({
-          radius: 6,
-          fill: new ol.style.Fill({ color }),
-          stroke: new ol.style.Stroke({ color: "#000", width: 1 })
-        })
+        image: new ol.style.Circle({ radius: 6, fill: new ol.style.Fill({ color }), stroke: new ol.style.Stroke({ color:"#000", width:1 }) })
       });
     }
 
@@ -95,10 +83,7 @@
 
       const start = document.getElementById("start").value.trim();
       const end   = document.getElementById("end").value.trim();
-      if (!start || !end) {
-        alert("출발지/도착지를 입력하세요.");
-        return;
-      }
+      if (!start || !end) { alert("출발지/도착지를 입력하세요."); return; }
 
       try {
         const res = await fetch("/route", {
@@ -113,9 +98,7 @@
         const features = new ol.format.GeoJSON().readFeatures(data.route, {
           featureProjection: "EPSG:3857"
         });
-        features.forEach(f => f.setStyle(new ol.style.Style({
-          stroke: new ol.style.Stroke({ color: "#0066ff", width: 4 })
-        })));
+        features.forEach(f => f.setStyle(styleLine()));
         routeLayer.getSource().addFeatures(features);
         if (features.length) {
           map.getView().fit(features[0].getGeometry(), { padding: [50,50,50,50], maxZoom: 12 });
@@ -123,16 +106,21 @@
 
         // 경유지 (초록)
         if (data.waypoint) {
-          addPoint(data.waypoint.lon, data.waypoint.lat, styleCircle("#00bb00"));
-          alert(`✅ 경유 해안지점: ${data.waypoint.name}\n📍 ${data.waypoint.address}`);
+          const wp = data.waypoint;
+          const ft = new ol.Feature({
+            geometry: new ol.geom.Point(ol.proj.fromLonLat([wp.lon, wp.lat])),
+            title: `경유지: ${wp.name}`, type: "waypoint"
+          });
+          ft.setStyle(styleCircle("#00bb00"));
+          markerLayer.getSource().addFeature(ft);
+          alert(`✅ 경유 해안지점: ${wp.name}\n📍 ${wp.address}`);
         }
 
         // 상단 배지(총거리/예상시간)
-        const meta = document.getElementById("meta");
         if (data.dist_km || data.eta_sec) {
           const km = (data.dist_km || 0).toFixed(1);
           const m  = Math.round((data.eta_sec || 0) / 60);
-          meta.innerHTML = `<span class="badge">총 ${km}km · 예상 ${m}분</span>`;
+          document.getElementById("meta").innerHTML = `<span class="badge">총 ${km}km · 예상 ${m}분</span>`;
         }
 
         // 관광지(파랑), 맛집(빨강)
@@ -146,7 +134,6 @@
           markerLayer.getSource().addFeature(ft);
           added++;
         });
-
         (data.restaurants || []).forEach(r => {
           const ft = new ol.Feature({
             geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(r.mapx), parseFloat(r.mapy)])),
