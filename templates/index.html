@@ -27,7 +27,6 @@
     .legend .se i{background:linear-gradient(90deg,var(--start),var(--end))}
     .summary{font-size:13px;color:#333;margin-left:6px}
 
-    /* 팝업 */
     .ol-popup{position:absolute;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.25);padding:10px 12px;border-radius:8px;border:1px solid #ccc;min-width:260px;z-index:1000}
     .ol-popup:after,.ol-popup:before{top:100%;border:solid transparent;content:"";height:0;width:0;position:absolute;pointer-events:none}
     .ol-popup:after{border-top-color:#fff;border-width:10px;left:48px;margin-left:-10px}
@@ -38,7 +37,6 @@
     .popup-actions a{font-size:13px;color:#1565c0;text-decoration:none;margin-right:8px}
     .route-popup{pointer-events:none;z-index:1200}
 
-    /* 로딩 */
     #loading{position:fixed;inset:0;background:rgba(255,255,255,.6);display:none;align-items:center;justify-content:center;font-weight:600;color:#333;z-index:9999}
   </style>
 </head>
@@ -70,9 +68,8 @@
   <div id="loading">경로 계산 중...</div>
 
   <script>
-    const API_BASE = ""; // 같은 도메인 서빙이면 빈 문자열
+    const API_BASE = "";
 
-    // ===== 지도/레이어 =====
     const map = new ol.Map({
       target: "map",
       layers: [ new ol.layer.Tile({ source: new ol.source.OSM() }) ],
@@ -86,7 +83,6 @@
     const seLayer   = new ol.layer.Vector({ source: new ol.source.Vector(), zIndex: 60 });
     map.addLayer(tourLayer); map.addLayer(foodLayer); map.addLayer(wpLayer); map.addLayer(seLayer);
 
-    // 스타일
     const routeStyle = new ol.style.Style({ stroke: new ol.style.Stroke({ color: '#0066ff', width: 4 }) });
     const tourStyle  = new ol.style.Style({ image: new ol.style.Circle({ radius: 6, fill: new ol.style.Fill({ color: '#1976d2' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
     const foodStyle  = new ol.style.Style({ image: new ol.style.Circle({ radius: 6, fill: new ol.style.Fill({ color: '#e53935' }), stroke: new ol.style.Stroke({ color:'#fff', width:1 }) })});
@@ -103,14 +99,12 @@
     function fmtDur(s){ if(!isFinite(s)) return ""; const h=Math.floor(s/3600), m=Math.round((s%3600)/60); return (h?`${h}시간 `:"")+`${m}분`; }
     function setLoading(on){ document.getElementById('loading').style.display = on ? 'flex' : 'none'; }
 
-    // 팝업
     const spotPopupEl = document.createElement('div');
     spotPopupEl.className = 'ol-popup';
     spotPopupEl.style.display = 'none';
     const spotOverlay = new ol.Overlay({ element: spotPopupEl, autoPan: { animation: { duration: 220 } }, stopEvent: true });
     map.addOverlay(spotOverlay);
 
-    // 경로 요약 팝업 (hover)
     const routePopupEl = document.createElement('div');
     routePopupEl.className = 'ol-popup route-popup';
     const routeOverlay = new ol.Overlay({ element: routePopupEl });
@@ -152,7 +146,6 @@
       `;
     }
 
-    // 레이어 토글
     document.getElementById('showTour').addEventListener('change',e=>tourLayer.setVisible(e.target.checked));
     document.getElementById('showFood').addEventListener('change',e=>foodLayer.setVisible(e.target.checked));
     document.getElementById('showWP').addEventListener('change',e=>wpLayer.setVisible(e.target.checked));
@@ -228,11 +221,9 @@
       if(!feature){ spotOverlay.setPosition(undefined); return; }
       const props = feature.getProperties();
       const coord = feature.getGeometry().getCoordinates();
-      if ((props.category || props.type) === 'waypoint'){
-        spotPopupEl.innerHTML = `<div class="popup-title">${escapeHtml(props.title||'경유지')}</div>${props.addr1?`<div class="popup-row">${escapeHtml(props.addr1)}</div>`:''}`;
-      } else {
-        spotPopupEl.innerHTML = makeSpotPopupHTML(props);
-      }
+      spotPopupEl.innerHTML = (props.category==='waypoint')
+        ? `<div class="popup-title">${escapeHtml(props.title||'경유지')}</div>${props.addr1?`<div class="popup-row">${escapeHtml(props.addr1)}</div>`:''}`
+        : (function(){ return makeSpotPopupHTML(props); })();
       spotPopupEl.style.display = 'block';
       spotOverlay.setPosition(coord);
     });
@@ -250,7 +241,6 @@
       routeOverlay.setPosition(evt.coordinate);
     });
 
-    // 입력 Enter 실행
     ['start','end'].forEach(id=>{
       document.getElementById(id).addEventListener('keydown',e=>{
         if(e.key==='Enter') document.getElementById('btnRoute').click();
@@ -276,22 +266,18 @@
         const coords = feat.geometry.coordinates;   // [lon,lat]
         const summary = (feat.properties && feat.properties.summary) ? feat.properties.summary : null;
 
-        // 스팟 마커
         const spotsCombined = Array.isArray(data.spots) ? data.spots
           : (data.spots_grouped ? [...(data.spots_grouped.tour||[]), ...(data.spots_grouped.food||[])] : []);
         const counts = addSpots(spotsCombined);
 
-        // 경유지/출도착 마커
         const startLL = coords[0], endLL = coords[coords.length-1];
         addWaypoints(data.waypoints_used || [], startLL ? [startLL[0], startLL[1]] : null, endLL ? [endLL[0], endLL[1]] : null);
 
-        // 경로 라인
         drawRoute(coords, summary, counts);
 
-        // 상단 요약
-        const dist = fmtDist((summary && summary.distance)||NaN);
-        const dur  = fmtDur((summary && summary.duration)||NaN);
-        const txt1 = (dist||dur) ? `거리 ${dist} · 예상 ${dur}` : '';
+        const dist = ((summary && summary.distance)||NaN);
+        const dur  = ((summary && summary.duration)||NaN);
+        const txt1 = (isFinite(dist)||isFinite(dur)) ? `거리 ${ (isFinite(dist)?(dist>=1000? (dist/1000).toFixed(1)+' km' : Math.round(dist)+' m'):'-' ) } · 예상 ${ (isFinite(dur)?(Math.floor(dur/3600)?Math.floor(dur/3600)+'시간 ':'')+Math.round((dur%3600)/60)+'분':'-') }` : '';
         const txt2 = `관광지 ${counts.tour} · 맛집 ${counts.food} (총 ${counts.total})`;
         document.getElementById('summary').textContent = [txt1, txt2].filter(Boolean).join(' · ');
       }catch(err){
