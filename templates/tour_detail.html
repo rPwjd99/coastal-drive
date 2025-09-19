@@ -1,20 +1,27 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8">
-  <title>{{ item.title }}</title>
+  <meta charset="UTF-8" />
+  <title>{{ item.title or "상세정보" }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 20px; line-height: 1.6; }
+    img { max-width: 100%; height: auto; border-radius: 6px; }
+    .addr { color:#555; }
+  </style>
 </head>
 <body>
   <h1>{{ item.title }}</h1>
-  <p><strong>주소:</strong> {{ item.addr1 or "주소 정보 없음" }}</p>
-  <p><strong>개요:</strong> {{ item.overview|safe or "소개 정보 없음" }}</p>
-
   {% if item.firstimage %}
-    <img src="{{ item.firstimage.replace('http://', 'https://') }}" width="300">
+    <img src="{{ item.firstimage }}" alt="{{ item.title }}">
   {% endif %}
-
-  {% if item.homepage %}
-    <p><a href="{{ item.homepage }}" target="_blank">홈페이지 방문</a></p>
+  {% if item.addr1 %}
+    <p class="addr">📍 {{ item.addr1 }}</p>
   {% endif %}
+  {% if item.overview %}
+    <h3>소개</h3>
+    <div>{{ item.overview|safe }}</div>
+  {% endif %}
+  <p style="margin-top:20px;"><a href="javascript:window.close()">닫기</a></p>
 </body>
 </html>
