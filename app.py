@@ -4,7 +4,7 @@ import requests
 from dotenv import load_dotenv
 from math import radians, cos, sin, asin, sqrt
 from urllib.parse import unquote
-from beaches_coordinates import beach_coords  # 기존 파일 그대로 사용
+from beaches_coordinates import beach_coords  # 기존 파일
 
 load_dotenv()
 
@@ -20,7 +20,7 @@ ORS_API_KEY    = os.getenv("ORS_API_KEY", "").strip()
 _raw_tour_key = os.getenv("TOURAPI_KEY", "").strip()
 TOURAPI_KEY   = unquote(_raw_tour_key) if "%" in _raw_tour_key else _raw_tour_key
 
-# 기본은 KorService2, 안 되면 1로 폴백
+# 기본은 KorService2, 실패 시 1로 폴백
 TOURAPI_BASE_ENV = os.getenv("TOURAPI_BASE", "").strip()
 TOURAPI_BASES = [
     TOURAPI_BASE_ENV if TOURAPI_BASE_ENV else "https://apis.data.go.kr/B551011/KorService2",
@@ -33,7 +33,7 @@ def haversine(lat1, lon1, lat2, lon2):
     a = sin(dlat/2)**2 + cos(radians(lat1))*cos(radians(lat2))*sin(dlon/2)**2
     return 2 * R * asin(sqrt(a))
 
-# ---------------- Google Geocode (기존 유지) ----------------
+# ---------- Google Geocoding (기존 유지) ----------
 def geocode_google(address):
     try:
         url = "https://maps.googleapis.com/maps/api/geocode/json"
@@ -52,7 +52,7 @@ def reverse_geocode_google(lat, lon):
     except Exception:
         return "주소 불러오기 실패"
 
-# ---------------- 경유지 선정 (기존 유지) ----------------
+# ---------- 경유지 선정 (기존 유지) ----------
 def is_in_coastal_bounds(lat, lon):
     return (
         (35 <= lat <= 38 and 128 <= lon <= 131) or
@@ -75,7 +75,7 @@ def find_best_beach_waypoint(start, end):
     best_lon = min(lon_candidates, key=lambda x: x[3]) if lon_candidates else None
     return best_lat if best_lat and (not best_lon or best_lat[3] < best_lon[3]) else best_lon
 
-# ---------------- ORS (기존 유지) ----------------
+# ---------- ORS (기존 유지) ----------
 def get_ors_route(start, waypoint, end):
     url = "https://api.openrouteservice.org/v2/directions/driving-car/geojson"
     headers = {"Authorization": ORS_API_KEY, "Content-Type": "application/json"}
@@ -86,7 +86,7 @@ def get_ors_route(start, waypoint, end):
     except Exception as e:
         return {"error": str(e)}, 500
 
-# ---------------- TourAPI 호출 (HTTPS + 2→1 폴백 + 로그 강화) ----------------
+# ---------- TourAPI 공통 호출 (HTTPS + 2→1 폴백) ----------
 def call_tourapi(path, params, timeout=8):
     base_params = {
         "serviceKey": TOURAPI_KEY,
@@ -106,7 +106,6 @@ def call_tourapi(path, params, timeout=8):
             txt = r.text.strip()
             try:
                 j = r.json()
-                # 헤더 코드 로그 (문제 파악용)
                 hdr = j.get("response", {}).get("header", {})
                 code = hdr.get("resultCode")
                 if code and code != "0000":
@@ -118,11 +117,18 @@ def call_tourapi(path, params, timeout=8):
         except Exception as e:
             log.warning(f"[TourAPI] request error url={url} err={e}")
             last_txt = str(e)
-        # 살짝 쉬고 다음 베이스로
-        time.sleep(0.1)
+        time.sleep(0.1)  # 게이트웨이 보호
     return {"_error": f"status={last_status}, body={str(last_txt)[:200]}"}
 
-# ---------------- 경로 주변 수집 (반경/샘플 자동 조정 + 속도 제한) ----------------
+def _normalize_items(items_field):
+    if not items_field:
+        return []
+    if isinstance(items_field, list):
+        return items_field
+    # 단일 객체 케이스
+    return [items_field]
+
+# ---------- 경로 주변 수집(샘플 ~12, 반경 5→10→20km, 속도 제한) ----------
 def query_location_based(lon, lat, radius, content_type_id=None):
     params = {
         "mapX": lon, "mapY": lat, "radius": radius,
@@ -133,15 +139,14 @@ def query_location_based(lon, lat, radius, content_type_id=None):
         params["contentTypeId"] = str(content_type_id)
 
     j = call_tourapi("locationBasedList1", params)
-    # 요청 간 약간 대기(게이트웨이 보호)
-    time.sleep(0.12)
+    time.sleep(0.12)  # 속도 제한
 
     if "_error" in j:
         return [], j["_error"]
 
     try:
         body = j["response"]["body"]
-        items = body.get("items", {}).get("item", [])
+        items = _normalize_items(body.get("items", {}).get("item"))
         return items, None
     except Exception:
         return [], "empty"
@@ -157,50 +162,54 @@ def search_along_route(geojson):
 
     for radius in (5000, 10000, 20000):
         for lon, lat in samples:
-            # 관광지(일반: contentTypeId 생략 → 여러 타입 섞여도 수집)
-            items, err = query_location_based(lon, lat, radius)
-            if items:
-                for it in items:
-                    cid = it.get("contentid")
-                    if not cid or cid in seen:
-                        continue
-                    seen.add(cid)
-                    results_tour.append({
-                        "contentid": cid,
-                        "title": it.get("title"),
-                        "addr1": it.get("addr1"),
-                        "mapx": it.get("mapx"),
-                        "mapy": it.get("mapy"),
-                        "firstimage": it.get("firstimage"),
-                        "distance": round(haversine(lat, lon, float(it.get("mapy", lat)), float(it.get("mapx", lon))), 2)
-                    })
+            # 관광지(일반)
+            items, _err = query_location_based(lon, lat, radius)
+            for it in items:
+                cid = it.get("contentid")
+                if not cid or cid in seen:
+                    continue
+                seen.add(cid)
+                try:
+                    mx, my = float(it.get("mapx")), float(it.get("mapy"))
+                except Exception:
+                    continue
+                results_tour.append({
+                    "contentid": cid,
+                    "title": it.get("title"),
+                    "addr1": it.get("addr1"),
+                    "mapx": mx, "mapy": my,
+                    "firstimage": it.get("firstimage"),
+                    "distance": round(haversine(lat, lon, my, mx), 2)
+                })
 
             # 맛집(39)
-            items39, err39 = query_location_based(lon, lat, radius, content_type_id=39)
-            if items39:
-                for it in items39:
-                    cid = it.get("contentid")
-                    if not cid or cid in seen:
-                        continue
-                    seen.add(cid)
-                    results_food.append({
-                        "contentid": cid,
-                        "title": it.get("title"),
-                        "addr1": it.get("addr1"),
-                        "mapx": it.get("mapx"),
-                        "mapy": it.get("mapy"),
-                        "firstimage": it.get("firstimage"),
-                        "distance": round(haversine(lat, lon, float(it.get("mapy", lat)), float(it.get("mapx", lon))), 2)
-                    })
+            items39, _err39 = query_location_based(lon, lat, radius, content_type_id=39)
+            for it in items39:
+                cid = it.get("contentid")
+                if not cid or cid in seen:
+                    continue
+                seen.add(cid)
+                try:
+                    mx, my = float(it.get("mapx")), float(it.get("mapy"))
+                except Exception:
+                    continue
+                results_food.append({
+                    "contentid": cid,
+                    "title": it.get("title"),
+                    "addr1": it.get("addr1"),
+                    "mapx": mx, "mapy": my,
+                    "firstimage": it.get("firstimage"),
+                    "distance": round(haversine(lat, lon, my, mx), 2)
+                })
 
-        # 충분히 모였으면 종료
+        # 충분히 모였으면 조기 종료
         if len(results_tour) + len(results_food) >= 20:
             break
 
     log.info(f"[TourAPI] collected tour={len(results_tour)} food={len(results_food)} total={len(results_tour)+len(results_food)}")
     return results_tour, results_food
 
-# ---------------- Flask routes ----------------
+# ---------- Flask routes ----------
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -215,7 +224,7 @@ def route():
         if not start or not end:
             return jsonify({"error": "❌ 주소 변환 실패"}), 400
 
-        # ✅ 경로/경유지 선택: 기존 성공 로직 그대로
+        # ✅ 경로/경유지: 기존 성공 로직 그대로
         waypoint = find_best_beach_waypoint(start, end)
         if not waypoint:
             return jsonify({"error": "❌ 경유지 탐색 실패"}), 500
@@ -224,7 +233,7 @@ def route():
         if "error" in route_data:
             return jsonify({"error": route_data["error"]}), status
 
-        # 총 거리/시간(프론트 배지용)
+        # 총 거리/시간
         try:
             summary = route_data["features"][0]["properties"]["summary"]
             eta_sec = summary.get("duration", 0)
@@ -268,13 +277,14 @@ def tour_detail(contentid):
         return f"<h2>TourAPI 오류</h2><pre>{j['_error']}</pre>", 500
 
     try:
-        item = j["response"]["body"]["items"]["item"][0]
+        items = _normalize_items(j["response"]["body"]["items"]["item"])
+        item = items[0]
     except Exception:
         return f"<h2>❌ 관광지 정보가 없습니다.</h2><p>contentid: {contentid}</p>", 404
 
     return render_template("tour_detail.html", item=item)
 
-# 빠른 진단용
+# 진단용 엔드포인트 (키/승인/포맷 확인)
 @app.route("/debug/tour")
 def debug_tour():
     x = float(request.args.get("x", "127.0"))
@@ -285,7 +295,7 @@ def debug_tour():
     if "_error" in j:
         return jsonify({"ok": False, "error": j["_error"], "hint": "TOURAPI_KEY는 Decoding(원문) 값이어야 함"}), 200
     try:
-        items = j["response"]["body"]["items"]["item"]
+        items = _normalize_items(j["response"]["body"]["items"]["item"])
         header = j["response"]["header"]
         return jsonify({"ok": True, "status": header, "count": len(items), "first": items[0] if items else None}), 200
     except Exception:
@@ -293,4 +303,5 @@ def debug_tour():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
+    log.info(f"Starting on 0.0.0.0:{port}")
     app.run(host="0.0.0.0", port=port)
