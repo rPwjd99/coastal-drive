@@ -11,8 +11,8 @@ requests==2.32.3
 # ENV
 python-dotenv==1.0.1
 
-# Prod server (Render) - 필요시
-gunicorn==21.2.0
-
-# (도메인 분리 배포로 CORS가 필요할 때만)
+# CORS (도메인 분리 배포 시에만 필요)
 flask-cors==5.0.1
+
+# Prod server (Render)
+gunicorn==21.2.0
