@@ -1,140 +1,145 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8">
-  <title>🌊 바다따라: 해안도로 감성 드라이브</title>
+  <meta charset="UTF-8" />
+  <title>바다따라: 해안도로 감성 드라이브 코스 추천</title>
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
   <style>
-    body { margin: 0; font-family: sans-serif; }
+    html, body { margin: 0; height: 100%; }
     #map { width: 100%; height: 90vh; }
-    #controls {
-      padding: 10px;
-      background: #f7f7f7;
-      border-bottom: 1px solid #ccc;
-    }
-    input {
-      width: 300px;
-      padding: 6px;
-      margin-right: 10px;
-    }
-    button {
-      padding: 6px 14px;
-      background: #0078ff;
-      color: white;
-      border: none;
-      cursor: pointer;
-    }
+    #form { padding: 10px; }
+    .popup { background: white; padding: 5px; border: 1px solid gray; max-width: 300px; }
+    .popup img { max-width: 100%; height: auto; }
   </style>
 </head>
 <body>
-  <div id="controls">
-    <input id="start" placeholder="출발지 (예: 세종시청)">
-    <input id="end" placeholder="도착지 (예: 속초시청)">
-    <button onclick="calculateRoute()">경로 계산</button>
+  <div id="form">
+    출발지: <input id="start" placeholder="예: 세종시청" />
+    도착지: <input id="end" placeholder="예: 속초시청" />
+    <button onclick="findRoute()">경로 탐색</button>
   </div>
   <div id="map"></div>
 
   <script>
     const map = new ol.Map({
-      target: "map",
+      target: 'map',
       layers: [new ol.layer.Tile({ source: new ol.source.OSM() })],
       view: new ol.View({ center: ol.proj.fromLonLat([127.5, 36.5]), zoom: 7 })
     });
 
-    let routeLayer = null;
-    let spotLayer = null;
-    let overlay = null;
+    const routeLayer = new ol.layer.Vector({ source: new ol.source.Vector() });
+    const markerLayer = new ol.layer.Vector({ source: new ol.source.Vector() });
+    map.addLayer(routeLayer);
+    map.addLayer(markerLayer);
 
-    async function calculateRoute() {
-      const start = document.getElementById("start").value.trim();
-      const end = document.getElementById("end").value.trim();
-      if (!start || !end) {
-        alert("출발지와 도착지를 모두 입력하세요.");
+    const popup = new ol.Overlay({
+      element: document.createElement("div"),
+      positioning: "bottom-center",
+      stopEvent: false,
+      offset: [0, -20]
+    });
+    map.addOverlay(popup);
+
+    map.on('click', function (evt) {
+      map.forEachFeatureAtPixel(evt.pixel, function (feature) {
+        const props = feature.getProperties();
+        if (props.type === 'spot' || props.type === 'restaurant') {
+          const el = popup.getElement();
+          const img = props.firstimage ? `<img src="${props.firstimage}"><br>` : '';
+          const html = `
+            <div class="popup">
+              <strong>${props.title}</strong><br>
+              ${img}
+              ${props.addr1}<br>
+              거리: ${props.distance}km<br>
+              ${props.overview || ''}<br>
+              ${props.parking || ''} ${props.usetime || ''}<br>
+              <a href="/tour_detail/${props.contentid}" target="_blank">상세보기</a>
+            </div>`;
+          el.innerHTML = html;
+          popup.setPosition(evt.coordinate);
+        }
+      });
+    });
+
+    async function findRoute() {
+      routeLayer.getSource().clear();
+      markerLayer.getSource().clear();
+      popup.setPosition(undefined);
+
+      const start = document.getElementById("start").value;
+      const end = document.getElementById("end").value;
+      const res = await fetch("/route", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ start, end })
+      });
+      const data = await res.json();
+
+      if (data.error) {
+        alert(data.error);
         return;
       }
 
-      try {
-        const response = await fetch("/route", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ start, end })
+      // 🛣 경로 표시 (readFeatures로 수정)
+      const format = new ol.format.GeoJSON();
+      const routeFeatures = format.readFeatures(data.route, {
+        dataProjection: 'EPSG:4326',
+        featureProjection: 'EPSG:3857'
+      });
+      routeLayer.getSource().addFeatures(routeFeatures);
+
+      // 📍 경유지 마커
+      const waypoint = new ol.Feature({
+        geometry: new ol.geom.Point(ol.proj.fromLonLat([data.waypoint.lon, data.waypoint.lat])),
+        title: data.waypoint.name || "경유지",
+        type: "waypoint"
+      });
+      waypoint.setStyle(new ol.style.Style({
+        image: new ol.style.Circle({
+          radius: 7,
+          fill: new ol.style.Fill({ color: 'green' }),
+          stroke: new ol.style.Stroke({ color: 'black', width: 1 })
+        })
+      }));
+      markerLayer.getSource().addFeature(waypoint);
+
+      // 📌 관광지 마커 (파란색)
+      data.spots.forEach(s => {
+        const marker = new ol.Feature({
+          geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(s.mapx), parseFloat(s.mapy)])),
+          ...s,
+          type: "spot"
         });
-
-        const result = await response.json();
-        if (!response.ok || !result.route) {
-          throw new Error(result.error || "서버 오류 발생");
-        }
-
-        const coords = result.route.features[0].geometry.coordinates.map(
-          ([lon, lat]) => ol.proj.fromLonLat([lon, lat])
-        );
-
-        if (routeLayer) map.removeLayer(routeLayer);
-        routeLayer = new ol.layer.Vector({
-          source: new ol.source.Vector({
-            features: [new ol.Feature({ geometry: new ol.geom.LineString(coords) })]
-          }),
-          style: new ol.style.Style({
-            stroke: new ol.style.Stroke({ color: "blue", width: 4 })
+        marker.setStyle(new ol.style.Style({
+          image: new ol.style.Icon({
+            color: 'blue',
+            crossOrigin: 'anonymous',
+            src: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png'
           })
+        }));
+        markerLayer.getSource().addFeature(marker);
+      });
+
+      // 🍽 맛집 마커 (빨간색)
+      data.restaurants.forEach(r => {
+        const marker = new ol.Feature({
+          geometry: new ol.geom.Point(ol.proj.fromLonLat([parseFloat(r.mapx), parseFloat(r.mapy)])),
+          ...r,
+          type: "restaurant"
         });
-        map.addLayer(routeLayer);
-        map.getView().fit(new ol.geom.LineString(coords), { padding: [50, 50, 50, 50], maxZoom: 12 });
-
-        alert(`✅ 경유 해안지점: ${result.waypoint.name}\n📍 ${result.waypoint.address}`);
-
-        const spots = result.spots || [];
-        if (spotLayer) map.removeLayer(spotLayer);
-
-        const features = spots.map(spot => {
-          const coord = ol.proj.fromLonLat([parseFloat(spot.mapx), parseFloat(spot.mapy)]);
-          const feature = new ol.Feature({ geometry: new ol.geom.Point(coord) });
-          const image = spot.firstimage ? `<img src="${spot.firstimage}" width="160"><br>` : "";
-          const homepage = spot.homepage ? `<br><a href='${spot.homepage}' target='_blank'>자세히 보기</a>` : "";
-          feature.set("desc", `
-            <b>${spot.title}</b><br>
-            ${image}
-            ${spot.addr1 || "주소 없음"}${homepage}`);
-          return feature;
-        });
-
-        spotLayer = new ol.layer.Vector({
-          source: new ol.source.Vector({ features }),
-          style: new ol.style.Style({
-            image: new ol.style.Circle({ radius: 6, fill: new ol.style.Fill({ color: "red" }), stroke: new ol.style.Stroke({ color: "white", width: 1 }) })
+        marker.setStyle(new ol.style.Style({
+          image: new ol.style.Icon({
+            color: 'red',
+            crossOrigin: 'anonymous',
+            src: 'https://maps.google.com/mapfiles/ms/icons/red-dot.png'
           })
-        });
-        map.addLayer(spotLayer);
-
-        if (!overlay) {
-          overlay = new ol.Overlay({ element: document.createElement("div"), autoPan: true, offset: [0, -10] });
-          map.addOverlay(overlay);
-        }
-
-        map.on("pointermove", function (evt) {
-          const feature = map.forEachFeatureAtPixel(evt.pixel, f => f);
-          const element = overlay.getElement();
-          if (feature && feature.get("desc")) {
-            element.innerHTML = feature.get("desc");
-            element.style.background = "white";
-            element.style.padding = "6px 10px";
-            element.style.border = "1px solid gray";
-            element.style.borderRadius = "6px";
-            element.style.boxShadow = "0 2px 5px rgba(0,0,0,0.3)";
-            overlay.setPosition(evt.coordinate);
-            element.style.display = "block";
-            document.body.appendChild(element);
-          } else {
-            if (element) element.style.display = "none";
-          }
-        });
-
-      } catch (err) {
-        alert("❌ 경로 요청 실패: " + err.message);
-        console.error(err);
-      }
+        }));
+        markerLayer.getSource().addFeature(marker);
+      });
     }
   </script>
 </body>
 </html>
+
